@@ -1809,7 +1809,7 @@ static bool p_get(int idx, os_service_view_t *out)
             out->memory = sv->s ? (int32_t)sv->s->mem : -1;
         } else {
             out->state = k->failed ? OS_SVC_FAILED : OS_SVC_STOPPED;
-            strlcpy(out->status, k->status[0] ? k->status : k->allowed ? "Not running" : "Not allowed yet",
+            strlcpy(out->status, k->status[0] ? k->status : k->allowed ? "Not running" : "Off: the app asks again",
                     sizeof(out->status));
         }
         break;

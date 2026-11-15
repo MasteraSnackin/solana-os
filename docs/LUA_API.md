@@ -1653,7 +1653,7 @@ service.stop()                        -- end itself (starts at boot no more, unt
 **What a service may use**: `timer` (4 timers, ≥ 1000 ms), `storage` (the app's own,
 shared with the app: both see each other's writes at once), `fs` and `require`, `json`,
 `sys.millis`/`time`/`battery`/`memory`, `badge`, `crypto` and `solana`, and with their
-permissions `mesh` (`send`, `peers`, `meet`, `meets`; not `channel`, `scan`, `pause`,
+permissions `mesh` (`send`, `nearby`, `meet`, `meets`; not `channel`, `scan`, `pause`,
 `bridge`), `http` and `rpc` (one call waiting at a time; `"offline"` while the badge is),
 and the reads `lamps.balance`, `items.list`, `items.all`, `profile.me`, `profile.get`.
 Everything else is `nil` in a service: `ui`, `led` (a notice can flash), `sys.keys`,
@@ -1674,10 +1674,16 @@ service can never spend: only the app on the screen can, with the owner's confir
   from either side, by removing the app, or when a quest app expires.
 - The app and its service can run at once; each gets its own callbacks. A message to
   the side that isn't there is dropped (`service.send` returns false): keep state in
-  `storage`.
+  `storage`. Mesh messages for the app reach both; a meet (`on_meet`) goes to one side
+  only, the app while it's open with the mesh, else the service (two answers would sign
+  two statements).
+- With 3 services running, `service.start` answers `"full"` without asking the owner.
 - An error in the service stops it and its message becomes the status (`Failed:
-  service.lua:12: attempt to index a nil value`); three failures in a row turn off
-  starting at boot. `print` goes to the console tagged `[<app id>:svc]`.
+  service.lua:12: attempt to index a nil value`, cut to the 48 characters Services
+  shows; the console has all of it); `on_stop` still runs after a script error, not
+  after a limit. Three failures in a row turn off starting at boot. `print` goes to the
+  console tagged `[<app id>:svc]`, charged like a C app's output (32 instructions a
+  byte).
 - An update stops the service while the files change and starts the new version if it
   was running. Below 15 % battery (not on USB) services stop (`Stopped: battery low`)
   and start at the next boot or on USB. When the badge runs low on memory the most
@@ -1689,10 +1695,10 @@ service can never spend: only the app on the screen can, with the owner's confir
 |---|---|
 | Services | 3 app services running on a badge at once (`"full"` past that). Each costs about 2 KB of the badge's SRAM; they share one 12 KB task |
 | Memory | 1 MB of Lua heap each, in PSRAM ("Out of memory: The service needs more than 1 MB."). `sys.memory()` reports it |
-| CPU | 100 000 instructions per callback ("Service took too long"), and 2 000 000 a minute in all (about 0.7 s of the badge's processor a minute, 1 %): past it the service stops with `Stopped: used too much of the processor` |
+| CPU | 100 000 instructions per callback, and a second of wall-clock time per callback for work Lua does in C (a big `string.rep`): "Service took too long". 2 000 000 instructions a minute in all (about 0.7 s of the badge's processor a minute, 1 %): past it the service stops with `Stopped: used too much of the processor` |
 | Tick | `on_tick` every 1000 ms; timers ≥ 1000 ms, 4 at a time |
 | Events | 8 waiting per service (mesh messages, app messages, network answers); mesh messages past that are dropped |
-| Messages | `service.send` ≤ 1 KB of JSON either way, 8 waiting |
+| Messages | `service.send` ≤ 1 KB of JSON either way, 8 waiting on each side |
 | Notices | one every 10 s, ≤ 80 characters |
 | Radio | a service never moves the radio. It hears the mesh only while the radio is on the mesh channel anyway (Wi-Fi off, or joined on the mesh channel, MESH.md "Which channels"); it never suspends Wi-Fi, keeps it awake or turns it on |
 | Battery | none of its own beyond the CPU above: the radio listens anyway. A service ticking once a second that does little costs too little to measure |
@@ -1700,13 +1706,27 @@ service can never spend: only the app on the screen can, with the owner's confir
 Badges below 2.3.0 have no `service`: the store refuses `background` apps to them
 (server/API.md "Background apps").
 
+A whole one: [`examples/pinger/`](examples/pinger/) answers mesh pings while its app is
+closed.
+
 **How the badge runs it** (what Solana OS implements; you don't need it to write one):
 
-- One "svc" task (12 KB stack, below the app's "lua" task in priority) runs every
-  service's callbacks one at a time, round robin, without the screen's lock (no UI). Each
-  service is a `lua_State` with its own allocator capped at 1 MB in PSRAM, an event
-  queue of 8, its timers and its share of the minute's budget. Starting one needs PSRAM
-  and 64 KB of SRAM free for malloc.
+- One "svc" task (12 KB stack, below the app's "lua" task in priority, made with the
+  first service and ended with the last) runs every service's callbacks one at a time,
+  round robin, without the screen's lock (no UI). Each service is a `lua_State` with its
+  own allocator capped at 1 MB in PSRAM, an event queue of 8, its timers and its share of
+  the minute's budget; its state, queue and the copies of its messages and answers live
+  in PSRAM too, so it costs SRAM only while a callback parses JSON. Starting one needs
+  PSRAM and 64 KB of SRAM free for malloc; below 40 KB (the app's UI keeps 32 KB) or
+  when PSRAM nears the app's 512 KB reserve, the newest one stops. Between callbacks a
+  service holds no open file (the card takes 5 at once).
+- `service.lua` always compiles on the badge (the store's compiled code is mapped for
+  the app's own launch); modules it `require`s too.
+- The app and its service share one copy of `storage`: a write on either side is seen
+  by the other's next `get`, and `data.json` always gets the newest.
+- Solana OS's own code can call a service too (`lua_host_call` in
+  `main/lua/lua_host.h`: Mailbox's `on_mail(msg)`): such a callback reaches the service,
+  and the app if it's on screen, when the script defines it.
 - `/sdcard/hh/services.json` remembers the owner's answers:
   `{"<app id>": {"allowed": true, "boot": true, "fails": 0, "ver": "1.2.0"}}`. A
   missing or broken file means nothing is allowed. Services that were running when the

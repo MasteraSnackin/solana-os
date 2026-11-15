@@ -24,6 +24,22 @@ site changes that came with them live in the parent repository.
   and closing Services five times left the largest block as it was (98 304 B); the free heap
   moved by what the console's history costs per command (~40 B).
 
+- **App services** (`main/lua/lua_svc.c`, the `background` permission, `docs/LUA_API.md`
+  "service", `docs/C_API.md` "service"): an app's `service.lua` (a C app: a second
+  instance at `on_service_start`) keeps running after the app closes, in a state of its own
+  on one "svc" task: 1 MB of PSRAM heap, 100 000 instructions and a second per callback,
+  2 000 000 a minute, a tick a second, 4 timers >= 1 s, 8 events waiting, 3 services at once.
+  Its globals leave out the screen, LEDs, Wi-Fi, Bluetooth, sockets, the radio's channel and
+  everything that spends. The owner's yes is an `os_confirm`; `/sdcard/hh/services.json`
+  keeps it; services that were running start again ~10 s after boot; stops: the owner
+  (Services, `svc stop`), the app, removal, updates (paused around the swap), quest-app
+  expiry, three failures, low battery, low memory, a software update. The app and its
+  service share `storage`. `lua_host_call()` lets built-in code call a named callback in an
+  app's service and app (Mailbox's `on_mail`). C services share the one WebAssembly runtime:
+  they pause while a C app is open. Measured on a prototype: the svc task's 12 KB stack is
+  the SRAM cost (117 060 B malloc-able at the launcher with none, 103 412 with one, 103 944
+  with three); 20 stop/start cycles left the largest block as it was.
+
 ## 2.2.0 (unreleased)
 
 - **C apps.** Store apps written in C (`docs/C_API.md`; the SDK in `sdk/c/`): the store

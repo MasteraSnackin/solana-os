@@ -991,7 +991,12 @@ int sys_is_service(void);                  // 1 in the service instance, 0 in th
 ```
 
 `service_send` from the service reaches the app's `on_service` only while the app is
-open. Limits besides the Lua table's: 1 MB in all per service (its linear memory, WAMR's
+open. **One WebAssembly runtime**: the badge runs one C program at a time, so a C
+service pauses while any C app is on screen (`Paused: a C app is open`) and starts
+again when it closes; a C app's own `service_start` answers OK and its service starts
+once the app closes (`Starts when the C app closes`). So a C app and its service never
+run at once: they meet in `storage`. Two C services don't run at once either (the
+second answers `"busy"`); a C service runs next to Lua apps and Lua services. Limits besides the Lua table's: 1 MB in all per service (its linear memory, WAMR's
 copy of an interpreted module, its instance and stacks), 250 000 interpreted
 instructions or 30 ms of native time per callback (about what Lua's 100 000 take), and
 2 000 000 interpreted instructions or 700 ms of native time a minute. The store refuses a `background` C app
