@@ -254,6 +254,13 @@ Collaborator), on 2.2.0's ESP-IDF master.
   (`sos_file_read`). The console takes them: `lua recv <id> files/<name> ...` (32 MB).
   Wiped with `/sdcard/hh` by a reset or a new owner. A background service reads them
   (`files.dir`, `list`, `size`, `read`) but doesn't write; only the app does.
+- **`profile.items` / `profile.pages`** (permission `inventory`, bit 13; Lua and C:
+  `profile_items`, `profile_pages`, `profile_item_info`, `profile_page_info`): the badge owner's
+  items (id, kind, name, the app or quest that made it; never another app's data) and the
+  Guide pages they hold (with copies), paged by the server's cursor, 10 an answer. A
+  background service may read them. The permission reads "See the items and Guide pages
+  you hold" in the store details and Apps info. Regression apps `tests/t-inv`,
+  `tests/c/t-c-inv`.
 - **`sys.tick(ms)` / `sys_tick()`**: on_tick's period, 16 to 1000 ms; an app that sets it
   is woken by a one-shot timer, so 16 ms is 16, not the scheduler's 20. A service keeps its
   1 s tick: `sys.tick` is nil there.

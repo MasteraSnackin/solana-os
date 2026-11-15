@@ -316,6 +316,23 @@ const api: Record<string, V> = {
   'items.remove': fn((a) => (want(a, 's f', 'items.remove'), later(a[1], [true, { ok: true }], 'items.remove'), [])),
   'profile.me': fn((a) => (want(a, 'f', 'profile.me'), later(a[0], [true, { name: 'Toly', x: 'toly', xName: 'toly', level: 12, lamps: 1250, pages: 30, badge: '7K2Q9M' }], 'profile.me'), [])),
   'profile.get': fn((a) => (want(a, 's f', 'profile.get'), later(a[1], [true, { name: 'Ann', level: 3 }], 'profile.get'), [])),
+  // A first page with a cursor, then the last page (the cursor is the server's opaque text).
+  'profile.items': fn((a) => {
+    want(a, a.length === 2 ? 's f' : 'f', 'profile.items');
+    const last = a.length === 2;
+    if (last && str(a[0]) !== 'WzE3OTAwMDAwMDAwMDAsIml0XzAxIl0') bug('profile.items: not the cursor it was given');
+    later(a[a.length - 1], [true, {
+      items: last ? [{ id: 'it_02', kind: 'towel', name: 'Towel', quest: 'towel-run', tradable: false }]
+        : [{ id: 'it_01', kind: 'gem', name: 'Gem', app: 'gem-forge', tradable: true }],
+      next: last ? undefined : 'WzE3OTAwMDAwMDAwMDAsIml0XzAxIl0', total: 2,
+    }], 'profile.items');
+    return [];
+  }),
+  'profile.pages': fn((a) => {
+    want(a, a.length === 2 ? 's f' : 'f', 'profile.pages');
+    later(a[a.length - 1], [true, { pages: [{ id: 'p-01', number: 1, title: 'Genesis', category: 'history', rarity: 'common', count: 2 }], owned: 1, total: 64 }], 'profile.pages');
+    return [];
+  }),
   'quest.report': fn((a) => (want(a, 's t f?', 'quest.report'), a[2] ? later(a[2], [true, {}], 'quest.report') : 0, [])),
   'quest.active': fn((a) => (want(a, 'f', 'quest.active'), later(a[0], [true, [{ id: 'q1', title: 'Virus Lab', step: 'Mutate it' }]], 'quest.active'), [])),
   'http.get': fn((a) => {

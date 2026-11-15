@@ -34,7 +34,8 @@ print("t-svc:svc forbidden: " .. (#bad == 0 and "all nil" or ("FAIL " .. table.c
 local allowed = {"timer.every", "storage.set", "fs.read", "json.encode", "crypto.sha256", "solana.encode",
   "lamps.balance", "items.list", "items.all", "mesh.send", "mesh.nearby", "mesh.meet", "mesh.meets",
   "sys.millis", "sys.memory", "badge.id", "service.send", "service.status", "service.notify", "service.stop", "require",
-  "mail.list", "mail.get", "files.dir", "files.list", "files.size", "files.read"}
+  "mail.list", "mail.get", "files.dir", "files.list", "files.size", "files.read", "profile.me", "profile.get",
+  "profile.items", "profile.pages"}
 local missing = {}
 for _, path in ipairs(allowed) do
   local v = _G

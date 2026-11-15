@@ -69,7 +69,7 @@ Update it from the site's firmware flasher (`/stock`, a USB-C cable) or, from 0.
 Settings > Software update when it's offered. An app with the `rpc` permission needs
 0.5.2: on 0.5.0 and 0.5.1 its details say so, and buying and downloads are refused with
 "Update Solana OS to 0.5.2 or later to install this app". An app with the `ble` permission
-needs 1.0.0 in the same way ("Update Solana OS to 1.0.0 or later to install this app"). An app with `mail` (or `background`) needs 2.3.0.
+needs 1.0.0 in the same way ("Update Solana OS to 1.0.0 or later to install this app"). An app with `mail` (or `background`, `files` or `inventory`) needs 2.3.0.
 
 The manifest, as the badge stores it:
 
@@ -83,7 +83,7 @@ The manifest, as the badge stores it:
   "icon": "play",                   // one of the icon names below
   "accent": "14F195",               // hex colour, no '#'
   "category": "games",              // games | tools | social | quests | demos
-  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc mail background files
+  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc mail background files inventory
   "hosts": ["api.example.com"],     // what `http` and `ws` may call (only with the `http` permission)
   "files": 2,                       // bundled files (the store fills it in)
   "filesSize": 5120,                // their bytes together
@@ -156,6 +156,7 @@ HOME always returns to the launcher. The screen below the status bar is
 | WebSocket | one at a time, 20 opens a minute per badge, ≤ 4 KB per message either way, 8 waiting to go |
 | Crypto | of a callback's 200 000 instructions: a signature check takes 40 000, an on-curve test 5 000, a program-derived address 10 000 (see `crypto` and `solana`) |
 | Background | a service (`background`, 2.3.0): 1 MB of heap, 100 000 instructions per callback and 2 000 000 a minute, a tick a second, 3 services on a badge at once (see "`service`") |
+| Inventory | `profile.items` / `profile.pages` (`inventory`, 2.3.0): up to 10 entries a call (fewer when long: an answer fits 4 KB), 30 calls a minute per badge for the two together |
 | Mail | `mail` (2.3.0): title ≤ 32 and text ≤ 200 printable ASCII, data ≤ 128 bytes of JSON, a send a second, none while 40 uploads wait in the outbox; the server's caps: 30 a day per owner, 5 a day to one person per app (see "`mail`") |
 | Numbers | 32-bit integers (they wrap at ±2^31) and 32-bit floats (about 7 digits) |
 
@@ -1089,6 +1090,64 @@ profile.get(badgeId, cb)    -- public profile of that badge's owner: {name=, x=,
   phone").
 - Never an email.
 
+#### The player's items and Guide pages (permission `inventory`, Solana OS 2.3.0)
+
+Two more reads, about the badge's own owner only: what they hold in the game. They need
+the permission `inventory` (not `profile`: the store and the badge tell the player "See
+the items and Guide pages you hold" before they install your app). There is no form for
+another badge: `profile.get` stays a public profile.
+
+```lua
+profile.items([cursor,] cb)  -- cb(true, {items = {...}, next = "..." or nil, total = 37})
+profile.pages([cursor,] cb)  -- cb(true, {pages = {...}, next = "..." or nil, owned = 12, total = 64})
+```
+
+- **Items**: every item in the owner's inventory, whatever made it (a quest, the shop, your
+  app, another app), oldest first: `{id=, kind=, name=, app=, quest=, tradable=}`. `app` is
+  the store app that made it (nil once that app is gone), `quest` the quest that gave it;
+  both nil for the shop's and an admin's. Items don't stack: three towels are three entries
+  (count them by `kind` or `name`). Never `data`: what an app keeps in its items is that
+  app's (an app with `items` reads its own with `items.list`). `total`: how many items the
+  owner holds.
+- **Pages**: the Guide pages the owner holds, by page number:
+  `{id=, number=, title=, category=, rarity=, count=}` (`count`: copies held, 1 or more).
+  `owned`: how many different pages they hold, `total`: how many the Guide has. Pages they
+  don't hold aren't listed (not even as "???").
+- **Paging**: an answer holds up to 10 entries (fewer when they're long: it always fits the
+  badge's 4 KB). `next` is a cursor for the rest: pass it back as the first argument, until
+  `next` is nil. A walk to the end never repeats an entry and never skips one the owner held
+  all along, even while the inventory changes: an item that arrives meanwhile shows up at
+  the end of the walk (or on the next one, if it came in a trade), one given away meanwhile
+  is just missing from the pages not yet read. A cursor is opaque: keep it as it is.
+- **Errors**: as for every server call (`"offline"`, `"not linked"` while the badge has no
+  owner, `"denied"` without the permission, `"busy"`), plus `"Too many inventory reads. Try
+  again in a minute"` past 30 calls a minute per badge (the two together). A cursor that isn't
+  one (`"not a cursor (pass the answer's next)"`) is an error raised at the call.
+- Names and titles are printable ASCII. Before 2.3.0 the functions don't exist; the store
+  doesn't install an app with `inventory` on older badges, but a script copied over the
+  console can check `if profile.items then`.
+
+An app that shows how many of the Guide's pages its player has:
+
+```lua
+-- app.json: "permissions": ["inventory"]
+local line = ui.label(8, 8, "Counting your pages...", {size = 20, w = 304})
+local rarest = {}
+
+local function walk(cursor)
+  profile.pages(cursor, function(ok, r)
+    if not ok then return line:text("Can't see your pages: " .. r) end
+    for _, p in ipairs(r.pages) do
+      if p.rarity == "legendary" then rarest[#rarest + 1] = p.title end
+    end
+    if r.next then return walk(r.next) end
+    line:text(("You hold %d of the Guide's %d pages"):format(r.owned, r.total))
+    if #rarest > 0 then ui.label(8, 40, "Legendary: " .. table.concat(rarest, ", "), {w = 304}) end
+  end)
+end
+walk()
+```
+
 ### `quest` (permission `quest`)
 
 For apps that quests hand out.
@@ -1718,6 +1777,7 @@ shared with the app: both see each other's writes at once), `fs` and `require`, 
 permissions `mesh` (`send`, `nearby`, `meet`, `meets`; not `channel`, `scan`, `pause`,
 `bridge`), `http` and `rpc` (one call waiting at a time; `"offline"` while the badge is),
 and the reads `lamps.balance`, `items.list`, `items.all`, `profile.me`, `profile.get`,
+`profile.items` and `profile.pages` (with `inventory`),
 `mail.list` and `mail.get` (with `mail`, which also brings `on_mail(m)`, below), and
 `files.dir`, `files.list`, `files.size` and `files.read` (with `files`).
 Everything else is `nil` in a service: `ui`, `led` (a notice can flash), `sys.keys`,
