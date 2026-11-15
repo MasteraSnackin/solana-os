@@ -8,8 +8,10 @@ site changes that came with them live in the parent repository.
 
 ## 2.3.0 (unreleased)
 
-C apps, and background services with the first two built on them (Mailbox and
-Collaborator), on 2.2.0's ESP-IDF master.
+C apps, background services with the first two built on them (Mailbox and
+Collaborator), and apps' reads of the player's inventory, on 2.2.0's ESP-IDF master. Two
+server features of the same release show on the badge unchanged: the update quest and
+`lamps.award` allowances (below).
 
 - **C apps.** Store apps written in C (`docs/C_API.md`; the SDK in `sdk/c/`): the store
   compiles an app's C to WebAssembly, and the badge runs it in
@@ -260,7 +262,20 @@ Collaborator), on 2.2.0's ESP-IDF master.
   Guide pages they hold (with copies), paged by the server's cursor, 10 an answer. A
   background service may read them. The permission reads "See the items and Guide pages
   you hold" in the store details and Apps info. Regression apps `tests/t-inv`,
-  `tests/c/t-c-inv`.
+  `tests/c/t-c-inv`. Measured on 4YGWAV (production; both installed from a store): 30 items
+  in 3 calls and 20 pages in 2, no item's data; 143 KB of SRAM free at the launcher (86 KB
+  largest block), ~130 KB while the Lua or the native C app walks (70 KB), 143 KB again
+  after each closes.
+- **The update quest** (server side, the parent repo's server/API.md "The update quest"):
+  when an admin offers a build to every badge, running it pays 100 !LAMPs once per X
+  account, with a Mailbox notice from Solana. No firmware change: Quests > Quest log shows
+  it as a row ("Update to Solana OS 2.3.0", its step "Settings > Software update on your
+  badge"), the last list it got when offline. Seen on 4ZT2BX: 2.2.0 listed it, updated over
+  the air, its next hello paid once and the notice arrived.
+- **`lamps.award` allowances** (server side, docs only here: `docs/LUA_API.md`,
+  `docs/C_API.md`): an author asks for one when publishing; an organiser grants it, or
+  another amount, and the author's badge gets a notice from Solana. Seen on 4YGWAV: asked 50,
+  granted 30, three awards of 20 paid 20, 10 and 0.
 - **`sys.tick(ms)` / `sys_tick()`**: on_tick's period, 16 to 1000 ms; an app that sets it
   is woken by a one-shot timer, so 16 ms is 16, not the scheduler's 20. A service keeps its
   1 s tick: `sys.tick` is nil there.

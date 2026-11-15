@@ -311,13 +311,15 @@ if (haveC) {
         await sleep(800);
         m0 = lines.length;
         cmd('lua run t-svc-final');
-        const c = await waitFor(/t-svc-final check n=(\d+) r=(\d+)/, 4000, m0);
+        const c = await waitFor(/t-svc-final check n=(\d+) r=(\d+) s=(\d+)/, 4000, m0);
         last = c ?? 'no check';
-        const m = c?.match(/n=(\d+) r=(\d+)/);
-        if (!m || m[1] !== m[2]) okAll = false;
+        // The app's key every round; the service's after an even round (its last save
+        // overlapped the app's): both shutdown orders, as the badge procedure checks.
+        const m = c?.match(/n=(\d+) r=(\d+) s=(\d+)/);
+        if (!m || m[1] !== m[2] || (Number(m[1]) % 2 === 0 && m[3] !== m[1])) okAll = false;
         await waitFor(/t-svc-final: ended/, 4000, m0);
     }
-    ok(okAll, `last saves: the app's last key is on the card every round (${last})`);
+    ok(okAll, `last saves: the app's last key every round and the service's after even rounds are on the card (${last})`);
     cmd('open home');
     await sleep(800);
     cmd('lua rm t-svc-final');
