@@ -389,7 +389,7 @@ void on_mail(void);                       // a notification for this app ("mail"
 
 A C app with the `background` permission is also its own service: the badge starts a
 second, separate instance of the same module at `on_service_start` instead of
-`on_start` (see ["`service`"](#service-permission-background-solana-os-230)).
+`on_start` (see ["`service`"](#service-permission-background-solana-os-230-lua)).
 
 They are the Lua globals of the same names ([LUA_API.md "Lifecycle"](LUA_API.md#lifecycle)),
 with the same timing and rules:
