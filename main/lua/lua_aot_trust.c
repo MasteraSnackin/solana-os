@@ -152,9 +152,13 @@ void lw_aot_key_refresh(void)
     if (s_refresh != LW_KEY_REFRESH_NONE || !os_api_online()) {
         return;                             // asked already this boot, or offline (a later launch may ask)
     }
+    // One refresh at a time (the check above), so its server number can live
+    // in one variable. "Asked" before the call: the answer runs on the OS
+    // task and may come before this task goes on.
     s_refresh_gen = os_cloud_server_gen();
-    if (os_api_call("GET", "/api/device/aotkey", NULL, 256, refresh_answered, os_api_token()) == ESP_OK) {
-        s_refresh = LW_KEY_REFRESH_ASKED;
+    s_refresh = LW_KEY_REFRESH_ASKED;
+    if (os_api_call("GET", "/api/device/aotkey", NULL, 256, refresh_answered, os_api_token()) != ESP_OK) {
+        s_refresh = LW_KEY_REFRESH_NONE;
     }
 }
 
