@@ -1433,13 +1433,16 @@ static void svc_mesh(os_mesh_type_t type, const os_mesh_peer_t *from, const char
         cJSON_Delete(m);
         return;
     }
+    // Copied: the parsed message goes before the event is queued.
+    char id[LUA_PKG_ID_MAX + 1];
+    strlcpy(id, app->valuestring, sizeof(id));
     // A meet goes to one side: the app when it's on screen with the mesh,
     // else its service (two answers would sign two statements).
-    bool app_has_it = lh_mesh_app_is(app->valuestring);
+    bool app_has_it = lh_mesh_app_is(id);
     char *text = NULL;
     lh_ev_t ev = { 0 };
     xSemaphoreTake(s_mx, portMAX_DELAY);
-    struct lh_svc *sv = slot_find(app->valuestring);
+    struct lh_svc *sv = slot_find(id);
     lh_t *s = sv && sv->state == SV_RUNNING && !sv->stop ? sv->s : NULL;
     bool ok = s && (s->pkg.perms & LUA_PERM_MESH) && sv->ev_n < LH_SVC_EVENTS;
     xSemaphoreGive(s_mx);
@@ -1464,7 +1467,7 @@ static void svc_mesh(os_mesh_type_t type, const os_mesh_peer_t *from, const char
         memcpy(data + idn + 1, text, n + 1);
         ev.data = data;
         xSemaphoreTake(s_mx, portMAX_DELAY);
-        sv = slot_find(app->valuestring);
+        sv = slot_find(id);
         // The slot may have changed meanwhile: only the same state's ring.
         bool pushed = sv && sv->s == s && ring_push(sv, &ev);
         xSemaphoreGive(s_mx);
