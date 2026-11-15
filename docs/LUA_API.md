@@ -69,7 +69,7 @@ Update it from the site's firmware flasher (`/stock`, a USB-C cable) or, from 0.
 Settings > Software update when it's offered. An app with the `rpc` permission needs
 0.5.2: on 0.5.0 and 0.5.1 its details say so, and buying and downloads are refused with
 "Update Solana OS to 0.5.2 or later to install this app". An app with the `ble` permission
-needs 1.0.0 in the same way ("Update Solana OS to 1.0.0 or later to install this app").
+needs 1.0.0 in the same way ("Update Solana OS to 1.0.0 or later to install this app"). An app with `mail` (or `background`) needs 2.3.0.
 
 The manifest, as the badge stores it:
 
@@ -83,7 +83,7 @@ The manifest, as the badge stores it:
   "icon": "play",                   // one of the icon names below
   "accent": "14F195",               // hex colour, no '#'
   "category": "games",              // games | tools | social | quests | demos
-  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc background
+  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc background mail
   "hosts": ["api.example.com"],     // what `http` and `ws` may call (only with the `http` permission)
   "files": 2,                       // bundled files (the store fills it in)
   "filesSize": 5120,                // their bytes together
@@ -118,6 +118,8 @@ end                          -- return a table to sign it ("Meets")
 function on_exit()           -- the app is closing (HOME, CANCEL, sys.exit, error)
 end
 function on_service(msg)     -- the app's own background service sent msg (needs "background", 2.3.0)
+end
+function on_mail(m)          -- a notification for this app arrived (needs "mail", 2.3.0, "mail")
 end
 ```
 
@@ -154,6 +156,7 @@ HOME always returns to the launcher. The screen below the status bar is
 | WebSocket | one at a time, 20 opens a minute per badge, ≤ 4 KB per message either way, 8 waiting to go |
 | Crypto | of a callback's 200 000 instructions: a signature check takes 40 000, an on-curve test 5 000, a program-derived address 10 000 (see `crypto` and `solana`) |
 | Background | a service (`background`, 2.3.0): 1 MB of heap, 100 000 instructions per callback and 2 000 000 a minute, a tick a second, 3 services on a badge at once (see "`service`") |
+| Mail | `mail` (2.3.0): title ≤ 32 and text ≤ 200 printable ASCII, data ≤ 128 bytes of JSON, a send a second, none while 40 uploads wait in the outbox; the server's caps: 30 a day per owner, 5 a day to one person per app (see "`mail`") |
 | Numbers | 32-bit integers (they wrap at ±2^31) and 32-bit floats (about 7 digits) |
 
 How fast Lua is and what these limits allow, measured on a badge against the same work in
@@ -1716,6 +1719,78 @@ Badges below 2.3.0 have no `service`: the store refuses `background` apps to the
 - Stopping calls `on_stop` (100 000 instructions, 1 s), then closes the state; a service
   stuck in a callback is ended by its instruction budget. A stop never waits on the
   service.
+
+### `mail` (permission `mail`, Solana OS 2.3.0)
+
+Notifications that land in another attendee's **Mailbox** (the badge's built-in inbox,
+docs/HHGTS.md "Mailbox"), and the ones your app received. A notification has a short
+title and text that the owner reads in Mailbox, and an optional small `data` table only
+your app sees. Mail goes only between badges whose owners **both installed your app**, and
+your app's server can send it too (server/API.md "Mailbox", with your app key):
+
+```lua
+mail.send("7K2Q9M", "Your turn", "Alice played e4", {game = 12, move = "e4"})
+                      -- to a badge id (from mesh.nearby, on_mesh, a meet): true when queued,
+                      -- or nil, err ("bad id", "title: 1-32 printable ASCII", "text: ...",
+                      -- "data: a table of <= 128 bytes as JSON", "not linked", "full")
+mail.list()           -- this app's mail on this badge, newest first (<= 50):
+                      -- { {id = 41, from = "7K2Q9M", by = "@alice", title = "Your turn",
+                      --    at = 1790000000, read = false}, ... }
+mail.get(41)          -- one of them in full: {id, from, by, title, text, data, at, exp, read}, or nil
+function on_mail(m) end   -- a mail for this app arrived while it's open (m as mail.get gives it);
+                          -- also when the owner opens your app from Mailbox on one of its mails
+```
+
+- **Sending** goes through the badge's outbox: `mail.send` checks the arguments, queues the
+  mail and returns at once, offline too; it uploads when the badge is next online, even
+  after your app closed. Your app learns that it was queued, not that it arrived: the server
+  quietly drops mail the recipient muted or blocked, and refuses it when the recipient's
+  owner doesn't have your app or a cap is reached (the outbox drops it then; the reasons are
+  in server/API.md "Mailbox"). Reply in kind from the receiving badge, or check on your
+  server.
+- `from` is the sending badge's id, `"server"` for your app's server, or `"solana"` for an
+  admin's mail that names your app; `by` is the sender's owner label (`"@alice"`) for badge
+  mail, else `nil`. Times are unix seconds.
+- **What counts**: nothing in mail is proof of anything. Anyone with your app can put any
+  title, text and data in it. Use meets (`mesh.meet`) for proof two badges met, and never
+  trust `data` with anything that matters: the server moves no !LAMPs or items for mail,
+  and neither should your app.
+- **Limits**: title 1-32 and text 0-200 printable ASCII characters (no newlines), `data` a
+  table that encodes to ≤ 128 bytes of JSON (or `nil`); 30 sends a day per owner across all
+  apps, 5 a day to the same person from one app, a send a second; none while 40 uploads
+  wait in the badge's outbox (`"full"`, as meets). Mail expires after 7 days.
+- `mail.list` and `mail.get` read the card (cost as `fs` reads); without a card they see
+  only what came since the badge started. The owner reads, deletes and mutes in Mailbox;
+  your app can't mark mail read or delete it.
+- The Mailbox shows your app's mail as `<App>: <sender>` with its title, and opens your
+  app on it if it's installed: then `on_mail` runs right after your top-level chunk, with
+  that mail. Mail for an app that isn't installed only reads in Mailbox.
+- A background service (`service.lua`, permission `background`) gets `on_mail(m)` too,
+  while it runs, and may call `mail.list` and `mail.get`; `mail.send` from a service counts
+  toward the same caps.
+
+**From your server.** Your app's server sends with the app key (the one that reads your
+meets, made on `/apps/mine`), to one badge, one person (a `user` id from a meet), or everyone
+who has your app (3 times a day). No permission is needed for it, and only people who
+installed your app can get it:
+
+```ts
+// Bun or any fetch: a notification to one badge's owner
+const res = await fetch('https://badge-api.solana.com/api/app/mail', {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${process.env.APP_KEY}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ to: { badge: '7K2Q9M' }, title: 'Your turn', text: 'Alice played e4', data: { game: 12 } })
+});
+console.log(await res.json()); // { send: 81, recipients: 1, skipped: 0 }
+// later: GET /api/app/mail/81 -> { recipients: 1, delivered: 1, ... }
+```
+
+`to: { all: true }` reaches everyone with the app (minus who muted it); `ttl` (seconds, 1 hour
+to 30 days) sets when it expires. The answers and limits are in server/API.md "Mailbox".
+
+Badges below 2.3.0 have no `mail`: the store refuses `mail` apps to them (server/API.md
+"Mail apps"). In the emulator mail goes through the same server: two tabs
+(`/emulator` and `/emulator?badge=2`) signed in as two people can mail each other.
 
 ### Build on the badge, sign on a phone
 

@@ -518,6 +518,7 @@ static int boot(lua_State *L)
     lh_open_ble(L);
     lh_open_fs(L);
     lh_open_crypto(L);
+    lh_open_mail(L);
     lh_storage_load(s);
 
     // Then collect generationally: apps churn short-lived strings and
@@ -602,6 +603,8 @@ static void run_events(lh_t *s, const lh_ev_t *ev)
             lh_mesh_event(s, ev->data);
         } else if (ev->kind == LH_EV_MEET) {
             lh_meet_event(s, ev->data);
+        } else if (ev->kind == LH_EV_MAIL) {
+            lh_mail_event(s, ev->data);
         }                                   // LH_EV_SCAN only wakes us: lh_mesh_scan_run below
     }
     lh_calls_run(s);
@@ -761,6 +764,9 @@ static void lua_task(void *arg)
         } else {
             s->next_tick = lh_now() + LH_TICK_MS;
             lh_callback(s, run_main, NULL);
+            if (s->L && !s->failed) {
+                lh_mail_opened(s);      // opened from Mailbox on a message: on_mail gets it
+            }
             run_events(s, NULL);
         }
         lvgl_port_unlock();

@@ -88,6 +88,7 @@ set(SOLANA_OS_SRCS
     core/os_mesh.c core/os_bridge.c core/os_api.c core/os_socket.c core/os_data.c core/os_cmd.c core/os_ota.c
     core/ed25519.c
     core/os_service.c core/os_service_test.c game/services.c apps/services/services_app.c   # background services (2.3.0)
+    game/mailbox.c apps/mailbox/mailbox_app.c lua/lua_mail.c                               # Mailbox (2.3.0)
     game/game.c game/xdex.c game/trade.c game/quests.c game/beacon.c
     apps/registry.c
     apps/wifi/wifi_app.c

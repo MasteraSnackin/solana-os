@@ -23,6 +23,23 @@ site changes that came with them live in the parent repository.
   `svc test on` and a restart register a test-only service. Measured on a prototype: opening
   and closing Services five times left the largest block as it was (98 304 B); the free heap
   moved by what the console's history costs per command (~40 B).
+- **Mailbox** (`game/mailbox.c`, `apps/mailbox/`, `lua/lua_mail.c`; the parent repo's
+  docs/HHGTS.md "Mailbox" and server/API.md "Mailbox"). A built-in background service
+  (`mailbox`: stoppable, starts at boot) collects the owner's notifications from Solana
+  (admins and admin keys), apps' servers and other badges' apps whenever hello says some wait
+  (`mail`, 0-99), which includes the first hello on Wi-Fi: pages of `GET /api/device/mail`
+  and an ack. Up to 50 on the card (`/sdcard/hh/mail/`, the oldest read one goes first),
+  in PSRAM while it runs (~23 KB), the text read on first use; everything from the server is
+  cut to its field and printable ASCII. A toast `Mailbox: <sender>: <title>` with a Yellow
+  flash, and the status bar's bell. **Mailbox** (Yellow, after My Badge): the list, the
+  reader (open the app it came from, delete, mute the app, report and block another
+  badge's sender), muted apps; offline it shows the card's copy. Console: `mail [status|
+  list|show|sync|hello|read|rm|clear]`.
+- **`mail`** for apps (permission `mail`, `docs/LUA_API.md` "mail", `docs/C_API.md` "mail"):
+  `mail.send` (through the outbox, offline too; a second apart), `mail.list`, `mail.get`,
+  `on_mail` (while the app is open, and when Mailbox opens the app on its mail); C:
+  `mail_send`, `mail_count`, `mail_item`, `mail_get`, `mail_arg`, the `on_mail` export.
+  `tests/t-mail`.
 
 ## 2.2.0 (unreleased)
 

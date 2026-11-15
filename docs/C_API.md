@@ -384,6 +384,7 @@ void on_mesh(void);                       // a message from this app on another 
 int32_t on_meet(void);                    // another badge asks for a meet ("mesh")
 void on_exit(void);                       // the app is closing (HOME, CANCEL, sys_exit)
 void on_service(void);                    // the app's own service sent a message ("background", 2.3.0)
+void on_mail(void);                       // a notification for this app ("mail", 2.3.0)
 ```
 
 A C app with the `background` permission is also its own service: the badge starts a
@@ -960,6 +961,22 @@ int solana_pda(const badge_bytes *seeds, int nseeds, const uint8_t program[32],
 They cost the host steps the Lua reference lists. Plain C can do SHA-256 or base58
 itself too, in its own memory; the badge's versions are its own code, much faster than
 the interpreter (the SHA-256 row of "What runs where").
+
+### `mail` (permission `mail`, Solana OS 2.3.0, [Lua](LUA_API.md#mail-permission-mail-solana-os-230))
+
+```c
+int mail_send(const char *to, const char *title, const char *text, const char *data_json);
+                                           // to a badge id: BADGE_OK when queued; data_json NULL or a JSON object
+int mail_count(void);                      // this app's mail on the badge (<= 50), newest first
+int mail_item(int i, mail_t *out);         // the i-th (0-based): BADGE_OK, or BADGE_ERR past the end
+//   mail_t { int32_t id, at, exp, read; char from[8], by[25], title[33], text[201], data[129]; }
+int mail_get(int32_t id, mail_t *out);     // one by id
+void on_mail(void);                        // export: badge_arg(1) is the mail (a table, as Lua's mail.get)
+```
+
+`mail_item` and `mail_get` fill `data` with the mail's data as compact JSON (`""` when it
+has none). The Lua reference's rules hold as written: only between badges whose owners both
+installed the app, queued through the outbox, the same caps, nothing in it trusted.
 
 ### `service` (permission `background`, Solana OS 2.3.0, [Lua](LUA_API.md#service-permission-background-solana-os-230))
 

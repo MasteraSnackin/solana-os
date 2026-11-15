@@ -185,6 +185,7 @@ typedef struct {
     char beacon[8];                     // "beacon": the beacon id when this badge plays one, "" = none
     int update_size;
     int poll, mesh, lamps, level, packs;
+    int mail;                           // "mail": the owner's mail waiting (2.3.0), 0-99
     int64_t time;
     const char *error;
 } hello_t;
@@ -273,6 +274,8 @@ static void parse(const char *body, hello_t *r)
     r->lamps = num_or(j, "lamps", 0);
     r->level = num_or(j, "level", 0);
     r->packs = num_or(j, "packs", 0);
+    r->mail = num_or(j, "mail", 0);
+    r->mail = r->mail < 0 ? 0 : r->mail > 99 ? 99 : r->mail;
     r->time = cJSON_IsNumber(time) ? (int64_t)time->valuedouble : 0;
     const cJSON *up = cJSON_GetObjectItem(j, "update");
     const char *uv = cJSON_GetStringValue(cJSON_GetObjectItem(up, "version"));
@@ -491,6 +494,7 @@ static int apply(const char *server, const hello_t *r, int *errors, int *backoff
             s_info.lamps = s_info.level = s_info.packs = 0;
         }
         s_info.claimed = r->claimed;
+        s_info.mail = r->claimed ? r->mail : 0;
         s_info.welcome_needs_x = r->claimed && r->needs_x;
         strlcpy(s_info.update, r->update, sizeof(s_info.update));
         strlcpy(s_info.update_sha, r->update_sha, sizeof(s_info.update_sha));

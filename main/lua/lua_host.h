@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "core/os.h"
 
 // Lua heap per app (LUA_API.md "Limits"). With PSRAM (2.0.0; every badge so
@@ -57,6 +58,13 @@ const char *lua_host_running(void);
 // A Lua task for app <id> exists: running, showing its error screen or still
 // closing. Its files are in use until this turns false. Any task.
 bool lua_host_active(const char *id);
+
+// Mailbox (2.3.0, game/mailbox.h): mail `id` for app `app` arrived. When that
+// app is running (and has the "mail" permission) its on_mail gets it. Any task.
+void lua_host_mail(const char *app, uint32_t id);
+// Launch `app` from the Mailbox on its mail `id`: on_mail gets it once the
+// top-level chunk ran. false (and a toast) when it can't start. OS task.
+bool lua_host_open_mail(const char *app, uint32_t id);
 
 // Registers the "lua" console command. Call before console_start().
 void lua_host_init(void);

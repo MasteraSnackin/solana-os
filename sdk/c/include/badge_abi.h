@@ -146,6 +146,7 @@ SOS_EXPORT(on_tick) void on_tick(int32_t ms);                       // every 30 
 SOS_EXPORT(on_exit) void on_exit(void);                             // the app is closing
 SOS_EXPORT(on_mesh) void on_mesh(void);                             // frame: 1 = the sender's badge id, 2 = the message (a table)
 SOS_EXPORT(on_meet) int32_t on_meet(void);                          // frame: 1 = who asks, 2 = their data; push a table and return 1 to sign
+SOS_EXPORT(on_mail) void on_mail(void);                             // frame: 1 = the mail (a table, as mail.get gives it); "mail", 2.3.0
 
 // The ABI this app was built for; the badge refuses a newer one than its own.
 __attribute__((export_name("badge_abi"), weak)) int32_t badge_abi(void)

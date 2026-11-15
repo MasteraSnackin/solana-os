@@ -278,14 +278,14 @@ typedef struct {
 extern lh_stats_t lh_stats;
 
 // Events for the Lua task.
-typedef enum { LH_EV_KEY, LH_EV_WAKE, LH_EV_MESH, LH_EV_MEET, LH_EV_SCAN, LH_EV_QUIT } lh_ev_kind_t;
+typedef enum { LH_EV_KEY, LH_EV_WAKE, LH_EV_MESH, LH_EV_MEET, LH_EV_SCAN, LH_EV_MAIL, LH_EV_QUIT } lh_ev_kind_t;
 
 typedef struct {
     uint8_t kind;
     uint8_t key;
     bool repeat;
     uint32_t gen;
-    char *data;                 // LH_EV_MESH, LH_EV_MEET: "<from id>\0<json>", freed by the receiver
+    char *data;                 // LH_EV_MESH, LH_EV_MEET: "<from id>\0<json>"; LH_EV_MAIL: the id; freed by the receiver
 } lh_ev_t;
 
 extern SemaphoreHandle_t lh_mx;     // guards call records, the mesh filter, lh_cur
@@ -434,6 +434,12 @@ int lh_mesh_meet(lua_State *L);
 void lh_meet_event(lh_t *s, const char *data);          // Lua task: a meet message, "<from id>\0<json>"
 void lh_meet_run(lh_t *s);                              // Lua task: repeats and the timeout of an ask
 void lh_meet_free(lh_t *s);                             // after the Lua task ended
+
+// lua_mail.c: mail (Mailbox, 2.3.0, game/mailbox.h)
+#define LH_MAIL_GAP_MS      1000        // mail.send: one a second
+void lh_open_mail(lua_State *L);
+void lh_mail_event(lh_t *s, const char *data);          // Lua task: LH_EV_MAIL, on_mail(m)
+void lh_mail_opened(lh_t *s);                           // Lua task, after the top-level chunk: the mail it was opened on
 
 // lua_json.c: JSON <-> Lua. Encoding never raises Lua errors (it may run
 // with C memory to free); decoding may (out of memory).
