@@ -78,6 +78,10 @@ typedef struct {
     void (*stop)(void *ctx);                                // OS_SVC_STOPPABLE: see "stop() always works"
     int (*unread)(void *ctx);                               // optional: things waiting for the owner (status bar count)
     void *ctx;
+    // Optional (2.3.0, Collaborator): an LV_SYMBOL_* the status bar shows, in
+    // the service's accent, while this returns one: something the owner must
+    // always be able to see (a takeover), whatever app is open. NULL = none.
+    const char *(*mark)(void *ctx);
 } os_service_def_t;
 
 // What the Services app and the console see of one entry, either kind.
@@ -150,6 +154,10 @@ bool os_service_notify(const char *id, uint32_t led, const char *fmt, ...);
 // Sum of every service's unread(): the status bar shows it (a bell and the
 // count) while above 0. OS task.
 int os_service_unread(void);
+
+// The first running built-in service's mark (def.mark) and its accent, or
+// NULL: the status bar shows it. OS task.
+const char *os_service_mark(uint32_t *accent);
 
 // Running services (either kind) and the running ones' known memory, for
 // the status line and `heap`. OS task.

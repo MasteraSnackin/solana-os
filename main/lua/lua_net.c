@@ -859,7 +859,7 @@ static int l_mesh_nearby(lua_State *L)
         lua_setfield(L, -2, "level");
         lua_pushinteger(L, peers[i].rssi);
         lua_setfield(L, -2, "rssi");
-        lua_pushstring(L, peers[i].kind == OS_PEER_BEACON ? "beacon" : "badge");
+        lua_pushstring(L, peers[i].kind == OS_PEER_BEACON ? "beacon" : peers[i].kind == OS_PEER_STATION ? "station" : "badge");
         lua_setfield(L, -2, "kind");
         lua_pushboolean(L, peers[i].bridged);
         lua_setfield(L, -2, "bridged");

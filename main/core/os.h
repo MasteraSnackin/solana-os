@@ -87,6 +87,13 @@ const os_overlay_t *os_overlay(void);           // the open one, or NULL
 // NULL releases it. OS task.
 void os_hold(const char *why);
 
+// Is the current app held (os_hold)? OS task.
+bool os_held(void);
+
+// esp_timer ms of the last key the OS handed out (buttons, console `key`), 0
+// before the first: how long the owner has left the badge alone. Any task.
+int64_t os_last_key_ms(void);
+
 // Rebuild the UI in the current theme (OS task, LVGL locked; the Settings app).
 void os_theme_apply(void);
 

@@ -9,6 +9,7 @@ extern const os_app_t app_wifi, app_badge, app_espnow, app_debug, app_settings, 
 extern const os_app_t app_guide, app_xdex, app_trade, app_quests, app_beacon, app_store, app_apps;
 extern const os_app_t app_services;     // background services (2.3.0)
 extern const os_app_t app_mailbox;      // Mailbox (2.3.0)
+extern const os_app_t app_collab;       // Collaborator (2.3.0)
 
 const os_app_t *const os_apps[] = {
     &app_wifi,
@@ -22,6 +23,7 @@ const os_app_t *const os_apps[] = {
     &app_store,
     &app_apps,
     &app_services,
+    &app_collab,
     &app_espnow,
     &app_debug,
     &app_settings,

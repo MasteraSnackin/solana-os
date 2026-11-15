@@ -89,6 +89,7 @@ set(SOLANA_OS_SRCS
     core/ed25519.c
     core/os_service.c core/os_service_test.c game/services.c apps/services/services_app.c   # background services (2.3.0)
     game/mailbox.c apps/mailbox/mailbox_app.c lua/lua_mail.c                               # Mailbox (2.3.0)
+    game/collab.c apps/collab/collab_app.c          # Collaborator (2.3.0)
     game/game.c game/xdex.c game/trade.c game/quests.c game/beacon.c
     apps/registry.c
     apps/wifi/wifi_app.c

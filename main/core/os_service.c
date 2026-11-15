@@ -304,6 +304,21 @@ int os_service_unread(void)
     return n;
 }
 
+const char *os_service_mark(uint32_t *accent)
+{
+    for (int i = 0; i < s_ndefs; i++) {
+        const os_service_def_t *d = s_defs[i];
+        const char *m = d->mark && d->state(d->ctx) != OS_SVC_STOPPED ? d->mark(d->ctx) : NULL;
+        if (m) {
+            if (accent) {
+                *accent = d->accent;
+            }
+            return m;
+        }
+    }
+    return NULL;
+}
+
 int os_service_running(int32_t *memory)
 {
     int n = 0;
