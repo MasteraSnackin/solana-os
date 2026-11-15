@@ -203,9 +203,13 @@ static void led_frame(void *arg)
     bsp_rgb_show();
 }
 
-static void led_apply(void)
+// The pattern runs only while the takeover screen shows. on_screen: -1 asks
+// the OS (a display update), 1 the screen is entering, 0 it is leaving: in
+// both on_enter and on_exit os_current() still names the app before.
+static void led_set(int on_screen)
 {
-    bool want = s_led_p[0] && strcmp(s_led_p, "off") && os_current() == &app_collab_screen;
+    bool here = on_screen < 0 ? os_current() == &app_collab_screen : on_screen > 0;
+    bool want = s_led_p[0] && strcmp(s_led_p, "off") && here;
     if (!s_led_timer) {
         return;                             // made at boot (collab_init)
     }
@@ -217,6 +221,16 @@ static void led_apply(void)
         bsp_rgb_fill(0, 0, 0);
         bsp_rgb_show();
     }
+}
+
+static void led_apply(void)
+{
+    led_set(-1);
+}
+
+void collab_screen_entered(void)
+{
+    led_set(1);                             // its first pattern lights now, not at the next update
 }
 
 // ---------------------------------------------------------------------------
@@ -963,7 +977,7 @@ static void screen_tick(int64_t now)
 
 void collab_screen_left(void)
 {
-    led_apply();                            // the badge's own LEDs again
+    led_set(0);                             // stopped and dark: the badge's own LEDs again
     if (s_closing) {
         s_closing = false;
         return;
@@ -1225,6 +1239,8 @@ static void cmd_run(void *arg)
     char st[OS_SERVICE_STATUS_MAX + 1];
     svc_status(NULL, st, sizeof(st));
     printf("collab: %s (%s)%s\n", phases[s_info.phase], st, collab_consent() ? "" : ", no consent");
+    // What the LEDs do (nobody at the console sees them): the pattern and whether it runs.
+    printf("  leds: %s, %s\n", s_led_p[0] ? s_led_p : "none", s_led_timer && esp_timer_is_active(s_led_timer) ? "running" : "off");
     printf("  lend screen %s, earns %s%s%s; today %d min live, %d of %d !LAMPs\n", s_info.lend ? "yes" : "no",
            s_info.earns ? "yes" : "no", s_info.why[0] ? ": " : "", s_info.why, s_info.live_min, s_info.earned, s_info.cap);
     if (s_sid) {

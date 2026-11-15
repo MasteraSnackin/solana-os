@@ -344,6 +344,19 @@ Collaborator), on 2.2.0's ESP-IDF master.
   Collaborator card title wraps instead of running off the screen; `mesh peers` names
   stations; the console keeps one line of history, not 32 (each line a long-lived strdup in
   SRAM).
+- **From the pull request's review**: an app and its service writing different `storage`
+  keys at once no longer lose one (the shared copy is replaced only if nobody replaced it
+  since; else rebuilt and tried again; of one key the last writer wins: measured on a
+  badge, 15 of 200 keys lost before, none after); a copy that can't be made is an error,
+  never "empty", and a failed save stays pending; `data.json` that exists but can't be read
+  stops the app instead of starting it empty; a replaced card file that couldn't be renamed
+  into place survives as `.tmp` and is read from there. An update restarts the app's
+  service only after the installer has finished, and a refused restart is retried (ten
+  updates in a row on a badge, the service running after each). Mailbox acknowledges only
+  what the card saved (a full or failing card leaves mail on the server); without a card it
+  acknowledges what it keeps in RAM. The takeover screen starts its LED pattern when it opens
+  and stops it when it closes (`collab` shows the LED state). A service start that can't be
+  recorded in `services.json` doesn't happen unless the app on screen asked.
 - **From the review**: a C app's `files_read` with a bad name pointer stops the app (it
   could restart the badge, and from a service's start on every boot); a service whose start
   never finished (the badge restarted under it) is skipped at the next boot and turned off

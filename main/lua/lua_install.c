@@ -60,6 +60,9 @@ static const char *TAG = "lua_install";
 
 static SemaphoreHandle_t s_mx;              // s_info, s_name, s_busy and the answer below
 static SemaphoreHandle_t s_swap;            // the renames vs lua_install_recover()
+// The app's background service, stopped for the swap (worker task): restarted
+// only once the worker cleared s_busy, or start() would answer "installing".
+static bool s_svc_was_running;
 static SemaphoreHandle_t s_answered;        // a download's callback ran
 static lua_install_info_t s_info;
 static char s_name[21];
@@ -515,8 +518,8 @@ static bool commit(const char *id, const char *manifest, char *why, size_t n)
     app_dir(nw, sizeof(nw), id, ".new");
     snprintf(from, sizeof(from), "%s/data.json", cur);
     snprintf(to, sizeof(to), "%s/data.json", nw);
+    s_svc_was_running = svc;                // the worker restarts it at its end, whatever happens next
     if (stat(from, &st) == 0 && !copy_file(from, to)) {
-        lua_svc_resume(id, svc);
         return card_fail(why, n);           // the app's storage moves along
     }
     snprintf(rel, sizeof(rel), "apps/%s.old", id);
@@ -529,7 +532,6 @@ static bool commit(const char *id, const char *manifest, char *why, size_t n)
         rename(old, cur);                   // keep the installed version
     }
     xSemaphoreGive(s_swap);
-    lua_svc_resume(id, svc);                // the version now in place (or the old one, kept)
     if (!ok) {
         return card_fail(why, n);
     }
@@ -588,6 +590,7 @@ static void worker(void *arg)
     unlock();
     lua_pkg_t pkg;
     bool update = lua_pkg_load(id, &pkg);
+    s_svc_was_running = false;
     bool ok = install(id, &pkg, why, sizeof(why));
     if (ok) {
         os_toast("%s %s", update ? "Updated" : "Installed", name);
@@ -602,7 +605,12 @@ static void worker(void *arg)
     strlcpy(s_info.error, why, sizeof(s_info.error));
     s_info.seq++;
     s_busy = false;
+    bool resume = s_svc_was_running;
+    s_svc_was_running = false;
     unlock();
+    // After s_busy: the version now in place (or the old one, kept) starts
+    // again; lua_svc keeps the request if start() refuses for a moment.
+    lua_svc_resume(id, resume);
     vTaskDelete(NULL);
 }
 

@@ -59,7 +59,14 @@ char *os_data_read(const char *rel, size_t max, size_t *len_out)
     os_data_path(path, sizeof(path), rel);
     FILE *f = fopen(path, "rb");
     if (!f) {
-        return NULL;
+        // A replace that stopped between removing the old file and renaming
+        // the new one (os_data_write: a power cut, a failed rename) left the
+        // complete new one as .tmp.
+        char tmp[168];
+        snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+        if (!(f = fopen(tmp, "rb"))) {
+            return NULL;
+        }
     }
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
@@ -94,13 +101,23 @@ bool os_data_write(const char *rel, const char *data, size_t len)
     }
     bool ok = fwrite(data, 1, len, f) == len;
     ok = fclose(f) == 0 && ok;
-    // FatFs rename() refuses to replace an existing file.
-    unlink(path);
-    if (!ok || rename(tmp, path) != 0) {
-        unlink(tmp);
+    if (!ok) {
+        unlink(tmp);                        // the old file stays as it was
         return false;
     }
-    return true;
+    // FatFs rename() refuses to replace an existing file. If the rename fails
+    // after the old one is gone, the complete .tmp stays: os_data_read takes it.
+    unlink(path);
+    return rename(tmp, path) == 0;
+}
+
+bool os_data_exists(const char *rel)
+{
+    char path[160], tmp[168];
+    struct stat st;
+    os_data_path(path, sizeof(path), rel);
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    return stat(path, &st) == 0 || stat(tmp, &st) == 0;
 }
 
 bool os_data_append(const char *rel, const char *line)

@@ -43,7 +43,8 @@ typedef struct {
 static SemaphoreHandle_t s_mx;
 static slot_t *s_slots;                 // newest first
 static int s_n, s_cap;
-static uint32_t s_after;                // the highest id collected
+static uint32_t s_after;                // the highest id collected (in RAM)
+static uint32_t s_saved;                // the highest id the card's index holds: what we acknowledge
 static uint32_t s_epoch;
 static bool s_ready;                    // the list was read from the card for this epoch
 static bool s_card;                     // ... and the card was there
@@ -121,10 +122,17 @@ static void remove_at(int i, bool file)
     s_n--;
 }
 
-static void save_index(void)
+// Writes the index; true once the card has it (then s_saved = s_after).
+// Without a card there's nothing to write: what's in RAM is all there is,
+// acknowledged as such (HHGTS.md "Mailbox"), so s_saved follows s_after.
+static bool save_index(void)
 {
-    if (!s_card || !os_data_ready()) {
-        return;
+    if (!s_card) {
+        s_saved = s_after;
+        return true;
+    }
+    if (!os_data_ready()) {
+        return false;
     }
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "after", s_after);
@@ -145,11 +153,18 @@ static void save_index(void)
     }
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
+    bool ok = false;
     if (json) {
         os_data_mkdirs(INDEX_FILE);
-        os_data_write(INDEX_FILE, json, strlen(json));
+        ok = os_data_write(INDEX_FILE, json, strlen(json));
         cJSON_free(json);
     }
+    if (ok) {
+        s_saved = s_after;
+    } else {
+        ESP_LOGW(TAG, "couldn't save the index: acknowledging only up to %" PRIu32, s_saved);
+    }
+    return ok;
 }
 
 static uint32_t jnum(const cJSON *o, const char *k)
@@ -203,7 +218,7 @@ static void parse_body(const cJSON *o, mailbox_mail_t *m)
 static void load(void)
 {
     s_n = 0;
-    s_after = 0;
+    s_after = s_saved = 0;
     s_epoch = os_data_epoch();
     s_card = os_data_ready();
     s_ready = true;
@@ -213,7 +228,7 @@ static void load(void)
     char *raw = os_data_read(INDEX_FILE, INDEX_MAX, NULL);
     cJSON *root = raw ? cJSON_Parse(raw) : NULL;
     free(raw);
-    s_after = jnum(root, "after");
+    s_after = s_saved = jnum(root, "after");
     const cJSON *it;
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(root, "items")) {
         if (s_n >= cap()) {
@@ -254,23 +269,55 @@ static void purge_expired(void)
 }
 
 // A collected message: kept newest first, the oldest read one making room,
-// else the oldest. false when it was there already (a repeated page).
-static bool add(const cJSON *o)
+// else the oldest. ADD_SKIP when it was there already (a repeated page) or
+// has expired; ADD_FAIL when its file couldn't be written to the card: then
+// it isn't kept, s_after doesn't pass it, and the page stops there, so the
+// acknowledgement never covers mail the card doesn't have.
+typedef enum { ADD_NEW, ADD_SKIP, ADD_FAIL } add_t;
+
+static add_t add(const cJSON *o)
 {
     slot_t sl = {0};
     if (cap() == 0 || !parse_head(o, &sl.m.h)) {
-        return false;
+        return ADD_SKIP;
     }
     sl.m.h.read = false;
     uint32_t id = sl.m.h.id;
-    if (id > s_after) {
-        s_after = id;
-    }
     if (find(id) >= 0 || (sl.m.h.exp && now_s() && sl.m.h.exp <= now_s())) {
-        return false;
+        if (id > s_after) {
+            s_after = id;
+        }
+        return ADD_SKIP;
     }
     parse_body(o, &sl.m);
     sl.loaded = true;
+    if (s_card) {
+        // The message as kept: what we parsed, never the server's raw text.
+        cJSON *f = cJSON_CreateObject();
+        cJSON_AddNumberToObject(f, "id", id);
+        cJSON_AddStringToObject(f, "app", sl.m.h.app);
+        cJSON_AddStringToObject(f, "an", sl.m.h.an);
+        cJSON_AddStringToObject(f, "from", sl.m.h.from);
+        cJSON_AddStringToObject(f, "by", sl.m.h.by);
+        cJSON_AddStringToObject(f, "title", sl.m.h.title);
+        cJSON_AddStringToObject(f, "text", sl.m.text);
+        cJSON_AddItemToObject(f, "data", sl.m.data[0] ? cJSON_Parse(sl.m.data) : cJSON_CreateNull());
+        cJSON_AddNumberToObject(f, "at", sl.m.h.at);
+        cJSON_AddNumberToObject(f, "exp", sl.m.h.exp);
+        char *json = cJSON_PrintUnformatted(f);
+        cJSON_Delete(f);
+        char p[32];
+        mail_path(p, sizeof(p), id);
+        bool ok = json && os_data_mkdirs(p) && os_data_write(p, json, strlen(json));
+        cJSON_free(json);
+        if (!ok) {
+            ESP_LOGW(TAG, "mail %" PRIu32 ": couldn't save it to the card; not acknowledged", id);
+            return ADD_FAIL;
+        }
+    }
+    if (id > s_after) {
+        s_after = id;
+    }
     while (s_n > 0 && s_n >= cap()) {
         int drop = s_n - 1;
         for (int i = s_n - 1; i >= 0; i--) {
@@ -288,30 +335,7 @@ static bool add(const cJSON *o)
     memmove(&s_slots[at + 1], &s_slots[at], (s_n - at) * sizeof(slot_t));
     s_slots[at] = sl;
     s_n++;
-    if (s_card) {
-        // The message as kept: what we parsed, never the server's raw text.
-        cJSON *f = cJSON_CreateObject();
-        cJSON_AddNumberToObject(f, "id", id);
-        cJSON_AddStringToObject(f, "app", sl.m.h.app);
-        cJSON_AddStringToObject(f, "an", sl.m.h.an);
-        cJSON_AddStringToObject(f, "from", sl.m.h.from);
-        cJSON_AddStringToObject(f, "by", sl.m.h.by);
-        cJSON_AddStringToObject(f, "title", sl.m.h.title);
-        cJSON_AddStringToObject(f, "text", sl.m.text);
-        cJSON_AddItemToObject(f, "data", sl.m.data[0] ? cJSON_Parse(sl.m.data) : cJSON_CreateNull());
-        cJSON_AddNumberToObject(f, "at", sl.m.h.at);
-        cJSON_AddNumberToObject(f, "exp", sl.m.h.exp);
-        char *json = cJSON_PrintUnformatted(f);
-        cJSON_Delete(f);
-        if (json) {
-            char p[32];
-            mail_path(p, sizeof(p), id);
-            os_data_mkdirs(p);
-            os_data_write(p, json, strlen(json));
-            cJSON_free(json);
-        }
-    }
-    return true;
+    return ADD_NEW;
 }
 
 // ---------------------------------------------------------------------------
@@ -489,8 +513,14 @@ static void page_cb(int status, const char *body, void *ctx)
     lock();
     fresh();
     const cJSON *it;
+    bool failed = false;
     cJSON_ArrayForEach(it, items) {
-        if (!add(it)) {
+        add_t r = add(it);
+        if (r == ADD_FAIL) {
+            failed = true;                  // oldest first: nothing after it may be acknowledged
+            break;
+        }
+        if (r != ADD_NEW) {
             continue;
         }
         const mailbox_item_t *h = &s_slots[find(jnum(it, "id"))].m.h;
@@ -506,8 +536,8 @@ static void page_cb(int status, const char *body, void *ctx)
             told[ntold++].id = h->id;
         }
     }
-    save_index();
-    uint32_t after = s_after;
+    failed = !save_index() || failed;
+    uint32_t after = s_after, saved = s_saved;
     unlock();
     bool more = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "more"));
     cJSON_Delete(root);
@@ -517,12 +547,14 @@ static void page_cb(int status, const char *body, void *ctx)
         // call queue (lua_svc_call), never the app on screen a second time.
         lua_host_mail_service(told[i].app, told[i].id);
     }
-    if (more && after > before && ++s_pages < PAGES_MAX) {
+    if (!failed && more && after > before && ++s_pages < PAGES_MAX) {
         get_page();
         return;
     }
+    // Only what the card holds (s_saved): mail it couldn't keep stays on the
+    // server and comes again at the next collection.
     char req[40];
-    snprintf(req, sizeof(req), "{\"upto\":%" PRIu32 "}", after);
+    snprintf(req, sizeof(req), "{\"upto\":%" PRIu32 "}", saved);
     if (os_api_call("POST", "/api/device/mail/ack", req, 256, ack_cb, s_tok) != ESP_OK) {
         finish(false);
     }

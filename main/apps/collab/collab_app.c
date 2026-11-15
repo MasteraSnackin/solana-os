@@ -348,6 +348,7 @@ static void screen_enter(lv_obj_t *root)
     lv_obj_center(l);
     build_body();
     count_tick();
+    collab_screen_entered();
 }
 
 static bool screen_key(os_key_t k, bool repeat)

@@ -189,10 +189,10 @@ static void known_pkg(known_t *k, const lua_pkg_t *p)   // s_mx held
 
 // Writes the table as it is now. Writers take turns, each writing the
 // newest table, so the file never goes back to an older one.
-static void known_save(void)
+static bool known_save(void)
 {
     if (!os_data_ready()) {
-        return;
+        return false;
     }
     xSemaphoreTake(s_save_mx, portMAX_DELAY);
     cJSON *j = cJSON_CreateObject();
@@ -216,11 +216,13 @@ static void known_save(void)
     xSemaphoreGive(s_mx);
     char *text = j ? cJSON_PrintUnformatted(j) : NULL;
     cJSON_Delete(j);
-    if (text && !os_data_write(SVC_FILE, text, strlen(text))) {
+    bool ok = text && os_data_write(SVC_FILE, text, strlen(text));
+    if (!ok) {
         ESP_LOGW(TAG, "can't write %s", SVC_FILE);
     }
     cJSON_free(text);
     xSemaphoreGive(s_save_mx);
+    return ok;
 }
 
 // Reads services.json once (OS task: a small file), and again after the card
@@ -496,6 +498,8 @@ static void checks_arm(void);
 // Starts app <id>'s service (the owner said yes, or did before). req_gen: the
 // app launch to answer when the boot is done (0 = none). NULL: on its way
 // (or already running); else why not.
+static bool ask_stop(const char *id, uint8_t kind, const char *why);
+
 static const char *start(const char *id, uint32_t req_gen)
 {
     known_load();
@@ -592,8 +596,13 @@ static const char *start(const char *id, uint32_t req_gen)
     free(p);
     if (!why) {
         // The attempt is on the card before the service's code runs: if the badge
-        // restarts in the middle (a crash in its start), the next boot knows.
-        known_save();
+        // restarts in the middle (a crash in its start), the next boot knows. A start
+        // nobody on screen asked for (boot, a resume) that can't be recorded doesn't
+        // happen: without the record the crash guard couldn't stop a restart loop.
+        if (!known_save() && !req_gen) {
+            ask_stop(id, STOP_SYSTEM, "Not started: the card can't record it");
+            ESP_LOGW(TAG, "%s: not started: services.json can't be written", id);
+        }
         reply(req_gen, NULL);               // it was running already
         wake_task();
         checks_arm();
@@ -636,6 +645,11 @@ bool lua_svc_pause(const char *id)
     return true;
 }
 
+static esp_timer_handle_t s_retry_timer;        // a service an update stopped, refused for a moment
+static int s_retries;
+
+static void resume_retry(void *arg);
+
 static void resume_post(void *arg)
 {
     char *id = arg;
@@ -645,7 +659,23 @@ static void resume_post(void *arg)
     xSemaphoreGive(s_mx);
     const char *why = go ? start(id, 0) : NULL;
     if (why) {
-        ESP_LOGW(TAG, "%s: not started after the update: %s", id, why);
+        // Refused for now (busy, low memory, full, a card hiccup...): the request
+        // is kept (resume) and tried again every 2 s for a minute, never lost.
+        bool gone = !strcmp(why, "not installed") || !strcmp(why, "denied") || !strcmp(why, "expired");
+        ESP_LOGW(TAG, "%s: not started after the update: %s%s", id, why, gone ? "" : " (trying again)");
+        if (!gone) {
+            xSemaphoreTake(s_mx, portMAX_DELAY);
+            k = known_find(id);
+            if (k) {
+                k->resume = true;
+                strlcpy(k->status, "Starts again after the update", sizeof(k->status));
+            }
+            xSemaphoreGive(s_mx);
+            s_retries = 0;
+            if (s_retry_timer && !esp_timer_is_active(s_retry_timer)) {
+                esp_timer_start_once(s_retry_timer, 2000 * 1000);
+            }
+        }
     }
     free(id);
 }
@@ -1625,6 +1655,29 @@ static void stop_all(uint8_t kind, const char *why, bool c_only)
 }
 
 // Starts the services the system stopped (battery back on USB, a C app gone).
+static void resume_all(bool c_only);
+
+static void resume_retry_post(void *arg)
+{
+    resume_all(false);
+    bool left = false;
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    for (int i = 0; s_known && i < SVC_KNOWN_MAX; i++) {
+        left = left || (s_known[i].id[0] && s_known[i].resume && s_known[i].allowed && s_known[i].boot);
+    }
+    xSemaphoreGive(s_mx);
+    if (left && ++s_retries < 30 && s_retry_timer) {
+        esp_timer_start_once(s_retry_timer, 2000 * 1000);
+    }
+}
+
+static void resume_retry(void *arg)
+{
+    if (!os_post(resume_retry_post, NULL) && s_retry_timer) {
+        esp_timer_start_once(s_retry_timer, 500 * 1000);
+    }
+}
+
 static void resume_all(bool c_only)
 {
     char ids[SVC_KNOWN_MAX][LUA_PKG_ID_MAX + 1];
@@ -1999,6 +2052,10 @@ void lua_svc_init(void)
     os_service_set_provider(&s_provider);
     const esp_timer_create_args_t ca = { .callback = check_timer, .name = "svc_check" };
     esp_timer_create(&ca, &s_check_timer);
+    const esp_timer_create_args_t ra = { .callback = resume_retry, .name = "svc_retry" };
+    if (esp_timer_create(&ra, &s_retry_timer) != ESP_OK) {
+        s_retry_timer = NULL;
+    }
     const esp_timer_create_args_t ba = { .callback = boot_timer, .name = "svc_appboot" };
     if (esp_timer_create(&ba, &s_boot_timer) == ESP_OK) {
         esp_timer_start_once(s_boot_timer, SVC_BOOT_DELAY_MS * 1000);

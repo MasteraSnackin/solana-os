@@ -372,16 +372,20 @@ static store_t *store_find(const char *id)  // lh_mx held
     return NULL;
 }
 
-// The shared copy, duplicated (NULL: empty), and its version.
-static char *store_copy(const char *id, size_t *len, uint32_t *ver)
+// The shared copy, duplicated into *out (NULL: empty), and its version.
+// false when the duplicate couldn't be made: never read that as empty, or
+// the next set() would write an empty table over the app's data.
+static bool store_copy(const char *id, char **out, size_t *len, uint32_t *ver)
 {
     xSemaphoreTake(lh_mx, portMAX_DELAY);
     store_t *st = store_find(id);
-    char *d = st && st->json ? store_dup(st->json, st->len) : NULL;
+    bool have = st && st->json;
+    char *d = have ? store_dup(st->json, st->len) : NULL;
     *len = d ? st->len : 0;
     *ver = st ? st->ver : 0;
     xSemaphoreGive(lh_mx);
-    return d;
+    *out = d;
+    return !have || d;
 }
 
 // Pushes the table json decodes to, or a new one (missing, broken, not a table).
@@ -406,7 +410,11 @@ static void store_refresh(lua_State *L, lh_t *s)
     }
     size_t len;
     uint32_t ver;
-    char *json = store_copy(s->pkg.id, &len, &ver);
+    char *json;
+    if (!store_copy(s->pkg.id, &json, &len, &ver)) {
+        // The old table and its version stay: nothing is lost, the call fails.
+        luaL_error(L, "storage: not enough memory");
+    }
     store_push(L, json, len);
     free(json);
     luaL_unref(L, LUA_REGISTRYINDEX, s->store_ref);
@@ -439,37 +447,55 @@ static int l_set(lua_State *L)
     luaL_argcheck(L, type == LUA_TNIL || type == LUA_TNONE || type == LUA_TNUMBER || type == LUA_TSTRING
                   || type == LUA_TBOOLEAN || type == LUA_TTABLE, 2, "storage takes numbers, strings, booleans and tables");
     lua_settop(L, 2);
-    int t = store_table(L, s);
-    lua_pushvalue(L, 1);
-    lua_rawget(L, t);               // old value, kept to undo
-    lua_pushvalue(L, 1);
-    lua_pushvalue(L, 2);
-    lua_rawset(L, t);
-    lh_jbuf_t b = { .max = LH_STORAGE_MAX };
-    char *copy = NULL;
-    bool ok = lh_json_encode(L, t, &b);
-    if (ok && !(copy = store_dup(b.p, b.len))) {
-        b.err = "not enough memory";
-        ok = false;
-    }
-    free(b.p);
-    if (!ok) {
+    // The app and its service each change their own table and replace the
+    // shared copy with it. The replacement happens only if nobody replaced
+    // the copy since this table was built from it (the version still
+    // matches); else the table is built again from the newer copy, this key
+    // set on it, and the whole is tried again. So two writers of different
+    // keys both land, and of one key the last one to commit wins.
+    for (int tries = 0;; tries++) {
+        int t = store_table(L, s);
         lua_pushvalue(L, 1);
-        lua_pushvalue(L, -2);
+        lua_rawget(L, t);               // old value, kept to undo
+        lua_pushvalue(L, 1);
+        lua_pushvalue(L, 2);
         lua_rawset(L, t);
-        return luaL_error(L, "storage: %s", !strcmp(b.err, "too big") ? "full (16 KB per app)" : b.err);
+        lh_jbuf_t b = { .max = LH_STORAGE_MAX };
+        char *copy = NULL;
+        bool ok = lh_json_encode(L, t, &b);
+        if (ok && !(copy = store_dup(b.p, b.len))) {
+            b.err = "not enough memory";
+            ok = false;
+        }
+        free(b.p);
+        if (!ok) {
+            lua_pushvalue(L, 1);
+            lua_pushvalue(L, -2);
+            lua_rawset(L, t);
+            return luaL_error(L, "storage: %s", !strcmp(b.err, "too big") ? "full (16 KB per app)" : b.err);
+        }
+        xSemaphoreTake(lh_mx, portMAX_DELAY);
+        store_t *st = store_find(s->pkg.id);
+        bool current = !st || st->ver == s->store_ver;
+        if (st && current) {
+            free(st->json);
+            st->json = copy;
+            st->len = b.len;
+            s->store_ver = ++st->ver;
+            copy = NULL;
+        }
+        xSemaphoreGive(lh_mx);
+        free(copy);
+        if (current) {
+            break;
+        }
+        // The other side committed first: our table is stale (its next
+        // store_table() rebuilds it from the newer copy, without this key).
+        lua_settop(L, 2);
+        if (tries >= 16) {
+            return luaL_error(L, "storage: busy, try again");
+        }
     }
-    xSemaphoreTake(lh_mx, portMAX_DELAY);
-    store_t *st = store_find(s->pkg.id);
-    if (st) {
-        free(st->json);
-        st->json = copy;
-        st->len = b.len;
-        s->store_ver = ++st->ver;
-        copy = NULL;
-    }
-    xSemaphoreGive(lh_mx);
-    free(copy);
     s->store_dirty = true;
     return 0;
 }
@@ -508,6 +534,14 @@ bool lh_storage_load(lh_t *s)
         char *raw = os_data_read(rel, LH_STORAGE_MAX, &len);
         char *json = raw ? store_dup(raw, len) : NULL;
         free(raw);
+        if (!json && os_data_exists(rel)) {
+            // data.json is there but couldn't be read (memory, the card): the app
+            // doesn't start rather than start empty and write that over its data.
+            xSemaphoreTake(lh_mx, portMAX_DELAY);
+            st->users--;
+            xSemaphoreGive(lh_mx);
+            return luaL_error(L, "storage: can't read data.json (not enough memory or a card error)");
+        }
         xSemaphoreTake(lh_mx, portMAX_DELAY);
         if (!st->loaded) {
             st->json = json;
@@ -520,7 +554,10 @@ bool lh_storage_load(lh_t *s)
     }
     size_t len;
     uint32_t ver;
-    char *json = store_copy(id, &len, &ver);
+    char *json;
+    if (!store_copy(id, &json, &len, &ver)) {
+        return luaL_error(L, "storage: not enough memory");
+    }
     store_push(L, json, len);
     free(json);
     s->store_ref = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -537,12 +574,16 @@ void lh_storage_flush(lh_t *s, bool force)
     lua_pkg_rel(rel, sizeof(rel), s->pkg.id, "data.json");
     size_t len;
     uint32_t ver;
-    char *json = store_copy(s->pkg.id, &len, &ver);
-    if (json && !os_data_write(rel, json, len)) {
+    char *json;
+    // A copy that can't be made or a write that fails stays pending (dirty):
+    // the next flush (a second later, or at close) tries again.
+    bool ok = store_copy(s->pkg.id, &json, &len, &ver);
+    if (ok && json && !os_data_write(rel, json, len)) {
         printf("[lua:%s] storage: write failed\n", s->tag[0] ? s->tag : s->pkg.id);
+        ok = false;
     }
     free(json);
-    s->store_dirty = false;
+    s->store_dirty = !ok;
     s->store_saved = lh_now();
 }
 

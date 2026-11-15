@@ -84,4 +84,5 @@ void collab_end_takeover(void);     // forfeits it; no takeover for 10 minutes
 
 // The hidden takeover app (apps/collab/collab_app.c).
 extern const os_app_t app_collab_screen;
-void collab_screen_left(void);      // its on_exit: the owner left it unless we closed it
+void collab_screen_entered(void);   // its on_enter: the LED pattern starts
+void collab_screen_left(void);      // its on_exit: the owner left it unless we closed it; the LEDs stop

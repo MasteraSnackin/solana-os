@@ -90,7 +90,7 @@ const svcList = async () => {
 };
 const svcLine = async (id: string) => (await svcList()).find((l) => l.startsWith(`app:${id} `)) ?? '';
 
-for (const id of ['t-svc', 't-svc-a', 't-svc-b', 't-svc-limits', 't-svc-mesh']) {
+for (const id of ['t-svc', 't-svc-a', 't-svc-b', 't-svc-limits', 't-svc-mesh', 't-svc-store']) {
     put(id, join(here, id));
 }
 // A badge that restarted while these two services were starting (a crash in their
@@ -266,6 +266,19 @@ if (haveC) {
 }
 
 // 6. Removal forgets it
+// The app and its service writing different keys at once: none lost.
+{
+    const m0 = lines.length;
+    await openAndAllow('t-svc-store', /t-svc-store start: true/);
+    const res = await waitFor(/t-svc-store a=200 s=200/, 30000, m0);
+    const last = since(m0).filter((l) => /t-svc-store a=/.test(l)).at(-1) ?? '';
+    ok(!!res, `storage: app and service each wrote 200 keys, all kept (${last})`);
+    cmd('open home');
+    await sleep(500);
+    cmd('svc stop app:t-svc-store');
+    await sleep(500);
+}
+
 // The boot's crash bookkeeping (set up at the start).
 ok(!since(bootMark).some((l) => /t-svc-boot2?:svc started/.test(l)), 'boot: services whose last start never finished are not started');
 ok((await svcLine('t-svc-boot')).includes('Skipped: the badge restarted as it started'), `boot: skipped once (${await svcLine('t-svc-boot')})`);
