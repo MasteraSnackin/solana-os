@@ -94,6 +94,12 @@ static bool alloc_slots(void)
     return s_slots != NULL;
 }
 
+// How many the list holds now: without a card only the last few, in RAM until a restart.
+static int cap(void)
+{
+    return s_card ? s_cap : (s_cap < MAILBOX_RAM_MAX ? s_cap : MAILBOX_RAM_MAX);
+}
+
 static int find(uint32_t id)
 {
     for (int i = 0; i < s_n; i++) {
@@ -210,7 +216,7 @@ static void load(void)
     s_after = jnum(root, "after");
     const cJSON *it;
     cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(root, "items")) {
-        if (s_n >= s_cap) {
+        if (s_n >= cap()) {
             break;
         }
         slot_t *sl = &s_slots[s_n];
@@ -252,7 +258,7 @@ static void purge_expired(void)
 static bool add(const cJSON *o)
 {
     slot_t sl = {0};
-    if (!parse_head(o, &sl.m.h)) {
+    if (cap() == 0 || !parse_head(o, &sl.m.h)) {
         return false;
     }
     sl.m.h.read = false;
@@ -265,7 +271,7 @@ static bool add(const cJSON *o)
     }
     parse_body(o, &sl.m);
     sl.loaded = true;
-    if (s_n >= s_cap) {
+    while (s_n > 0 && s_n >= cap()) {
         int drop = s_n - 1;
         for (int i = s_n - 1; i >= 0; i--) {
             if (s_slots[i].m.h.read) {
