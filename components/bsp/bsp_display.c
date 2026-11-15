@@ -174,6 +174,10 @@ lv_display_t *bsp_display_start(void)
         .trans_queue_depth = 10,
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
+        // ui_frame's colour buffers are in PSRAM: the DMA reads them there, as
+        // 6.0.1 did on its own. Without it master's spi_master copies each one
+        // into an SRAM bounce buffer (bsp_display_frame's no-copy path, 2.3.0).
+        .flags.psram_dma_direct = 1,
     };
     esp_lcd_panel_io_handle_t io;
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BOARD_SPI_HOST, &io_cfg, &io));

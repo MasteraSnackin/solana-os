@@ -377,7 +377,7 @@ speed.
 Can a C app emulate a Game Boy, a Game Boy Color, a Game Boy Advance? Measured on a
 production badge (4YGWAV: ESP32-C5 rev 1.0, 240 MHz, no FPU, 8 MB quad PSRAM at 80 MHz;
 USB power, Wi-Fi off), Solana OS 2.3.0 test builds on ESP-IDF 6.0.1, before the move to
-master (2.2.0), 2026-11-15; the frame path's numbers on master are being measured again:
+master (2.2.0), 2026-11-15; `ui_frame` on master is measured under "`ui_frame`" below:
 
 - **Game Boy and Game Boy Color: yes, for most games, as a store install (native code).**
   The `gameboy` example (Walnut-CGB, MIT) runs real homebrew at full speed: 56 to 60
@@ -843,9 +843,13 @@ whole destination must be inside the app area.
   write to it until the next `ui_frame`: draw the next frame into a second buffer
   (`static uint16_t fb[2][160 * 144] __attribute__((aligned(64)));`). Anything else
   (little-endian, scaled, unaligned) is converted into a buffer of the badge's first.
-  Measured on a production badge, a 160 x 144 frame cost the app 1.0 to 1.4 ms without a
-  copy, 6.5 to 6.9 ms with one, and 11.6 to 17 ms scaled to 240 x 216 (the DMA of the
-  bigger frame, 20.7 ms at 40 MHz, is then the limit).
+  Measured on a production badge on ESP-IDF 6.0.1, a 160 x 144 frame cost the app 1.0 to
+  1.4 ms without a copy, 6.5 to 6.9 ms with one, and 11.6 to 17 ms scaled to 240 x 216 (the
+  DMA of the bigger frame, 20.7 ms at 40 MHz, is then the limit). On ESP-IDF master
+  (`tests/c/t-c-fbench`, the prototype HYQ5VS, interpreted), sending frame after frame, each
+  160 x 144 frame took 9.2 ms without a copy (the SPI wire at 40 MHz: the next frame waits
+  for the last), 15.0 ms with one and 31.4 ms scaled to 240 x 216; `lua mem` counted every
+  unscaled big-endian frame as sent without a copy.
 - **The UI on top**: while your `ui_confirm` or `ui_input`, the badge's own confirm, the
   keyboard or the bridge panel is open, `ui_frame` shows nothing and returns 0; while a
   toast shows, only the rows above it are drawn. The UI also paints over the frame whenever

@@ -95,6 +95,8 @@ const expect: Record<string, Expect> = {
     't-c-import': { title: 'App error', error: /env\.launch_rockets, which the badge doesn't have/ },
     // ui_frame and files_read (2.3.0): every check answers, misuse stops the app.
     't-c-frame': { noError: true, oks: 25, print: [/\] done$/, /\] still running$/] },
+    // ui_frame timings (numbers for a badge; the emulator only shows it runs).
+    't-c-fbench': { noError: true, print: [/\] t-c-fbench shown of 20: 20$/, /\] done$/], wait: 4000 },
     't-c-fr-pointer': { title: 'App error', error: /sos_frame: the pointer 0x7ffffff0 \(1024 bytes\) is outside the app's memory/ },
     't-c-fr-side': { title: 'App error', error: /sos_frame: 2000 x 1 pixels, 1 to 1024 a side/ },
     't-c-fr-flags': { title: 'App error', error: /sos_frame: unknown flags 0x80/ },

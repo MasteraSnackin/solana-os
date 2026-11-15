@@ -39,6 +39,7 @@ cc t-c-api "$here/t-c-api/main.c"
 cc t-c-import "$here/t-c-import/main.c"
 cc t-c-abi "$here/t-c-abi/main.c"
 cc t-c-svc "$here/t-c-svc/main.c"
+cc t-c-fbench "$here/t-c-fbench/main.c"   # ui_frame timings on a badge (C_API.md "Heavy apps")
 # ui_frame and files_read with hostile arguments (2.3.0): the checks, then misuse.
 cc t-c-frame "$here/t-c-frame/main.c" -DCASE=0
 frames=(pointer side flags big buffer name noperm huge)

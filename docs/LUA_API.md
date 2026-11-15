@@ -480,7 +480,7 @@ files.remove("save/Tetris DX.sav")  -- true if it was there
   (up to 32 MB; a name without spaces), which Run on badge's tools use.
 
 C apps read with `files_read()` straight into their own memory, with no Lua string on the
-way ([C_API.md "files"](C_API.md#files-permission-files-solana-os-230)).
+way ([C_API.md "files"](C_API.md#files-permission-files-solana-os-230-lua)).
 
 ### `wifi` (permission `wifi`)
 
