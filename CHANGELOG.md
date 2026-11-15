@@ -244,6 +244,10 @@ Collaborator), on 2.2.0's ESP-IDF master.
   The linear memory is 64-byte aligned (`lua_wasm_port.c`) and `memory.grow` waits for a
   frame in flight, as the app's exit does, so the DMA never reads memory that moved.
   Screenshots show copied frames.
+  On ESP-IDF master the SPI bus takes a whole screen per transaction and the panel's DMA
+  reads PSRAM directly (`psram_dma_direct`): master's esp_lcd stopped splitting big buffers
+  and bounced PSRAM ones through SRAM. Measured there: 9.2 ms a 160 x 144 frame without a
+  copy (the wire at 40 MHz), 15.0 copied, 31.4 scaled 1.5x (`tests/c/t-c-fbench`).
 - **`files`** (permission `files`, Lua and C): the app's own folder `hh/files/<id>/` for
   files the owner copies there (read-only) and its saves in `save/` (1 MB a file, 32
   files); names, never paths. C reads go straight into the app's memory
