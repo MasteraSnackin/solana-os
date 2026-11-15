@@ -251,6 +251,8 @@ static void build_body(void)
     case COLLAB_SHOW_CARD:
         if (sh->title[0]) {
             t = ui_label(b, &sol_font_32, COL_TEXT, sh->title);
+            lv_obj_set_width(t, OS_ROOT_W - 20);    // a long title wraps (it ran off the screen)
+            lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_style_text_color(t, fg, 0);
         }
         if (sh->body[0]) {
@@ -294,6 +296,8 @@ static void build_body(void)
     case COLLAB_SHOW_COLOR:
         if (sh->title[0]) {
             t = ui_label(b, &sol_font_32, COL_TEXT, sh->title);
+            lv_obj_set_width(t, OS_ROOT_W - 20);    // a long title wraps (it ran off the screen)
+            lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_style_text_color(t, fg, 0);
         }
         break;

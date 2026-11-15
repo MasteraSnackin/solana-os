@@ -1896,7 +1896,7 @@ static void print_peers(void)
                    (long long)((now - p->last_ms) / 1000), p->name[0] ? p->name : "(unclaimed)", p->level);
             continue;
         }
-        printf("%s %-6s %02x:%02x:%02x:%02x:%02x:%02x %4d dBm %3llds  %s", p->kind == OS_PEER_BEACON ? "beacon" : "badge ",
+        printf("%s %-6s %02x:%02x:%02x:%02x:%02x:%02x %4d dBm %3llds  %s", p->kind == OS_PEER_BEACON ? "beacon" : p->kind == OS_PEER_STATION ? "station" : "badge ",
                p->id, p->mac[0], p->mac[1], p->mac[2], p->mac[3], p->mac[4], p->mac[5], p->rssi,
                (long long)((now - p->last_ms) / 1000), p->name[0] ? p->name : "(unclaimed)");
         if (p->kind == OS_PEER_BEACON) {

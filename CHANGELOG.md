@@ -328,6 +328,22 @@ Collaborator), on 2.2.0's ESP-IDF master.
   `OS_PEER_STATION` (Lua `mesh.nearby()` kind `"station"`), two holders of keep-Wi-Fi, the
   radio kept awake while anyone needs it; `os_service_def_t.mark` (a status-bar symbol) and
   `os_service_mark()`; `os_held()`, `os_last_key_ms()`.
+- **Measured on a production badge** (4ZT2BX, C5 rev 1.0, Wi-Fi joined, at the launcher):
+  141-143 KB of SRAM free, 110 KB of it for malloc, an 86 KB largest block, idle and with
+  Collaborator live; one to three app services cost ~13 KB and split the largest block to
+  57 KB while the svc task lives (back to 86 KB once the last one stops); 15 minutes of
+  everything at once (Mailbox collecting, Collaborator live, a service, an app opened and
+  closed every minute) held steady, no restart. Over the air: 2.2.0 -> 2.3.0 under the
+  2.1.0 bootloader and 2.1.0 -> 2.3.0, each confirmed at the launcher; a 2.3.1 that aborts
+  before the launcher rolled back; app services stop for an update and start again after
+  it. The Game Boy example from the store, native and run in place: Libbet 53.5-60 emulated
+  and 48-59 shown fps, cgb-acid2 ~59.8 and ~48.5.
+- **From the hardware pass**: a service's crash guard counts only restarts the badge didn't
+  make itself (an orderly `reboot` or update within a service's first minute skipped it),
+  and why starting at boot went off survives a restart (`services.json` `why`); a long
+  Collaborator card title wraps instead of running off the screen; `mesh peers` names
+  stations; the console keeps one line of history, not 32 (each line a long-lived strdup in
+  SRAM).
 - **From the review**: a C app's `files_read` with a bad name pointer stops the app (it
   could restart the badge, and from a service's start on every boot); a service whose start
   never finished (the badge restarted under it) is skipped at the next boot and turned off

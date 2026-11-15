@@ -374,7 +374,10 @@ speed.
 
 ## Heavy apps and emulators
 
-Can a C app emulate a Game Boy, a Game Boy Color, a Game Boy Advance? Measured on a
+Can a C app emulate a Game Boy, a Game Boy Color, a Game Boy Advance? The `gameboy` rows
+were measured again on ESP-IDF master (Solana OS 2.3.0, production badge 4ZT2BX, the store's
+signed native code run in place: the signature check takes 58 ms at launch, the first copy
+into a flash slot 665 ms) and changed little; the rest is as measured on a
 production badge (4YGWAV: ESP32-C5 rev 1.0, 240 MHz, no FPU, 8 MB quad PSRAM at 80 MHz;
 USB power, Wi-Fi off), Solana OS 2.3.0 test builds on ESP-IDF 6.0.1, before the move to
 master (2.2.0), 2026-11-15; `ui_frame` on master is measured under "`ui_frame`" below:
@@ -410,8 +413,8 @@ What reached the screen, frames a second of wall-clock time (60 is full speed):
 |---|---|---|---|
 | Busy loop, Game Boy | 23.3 | 27.8 | |
 | Busy loop, Color double speed | 14.2 | 15.9 | |
-| Libbet | 51.9 | 56.6 | 56 to 60 emulated, 45 to 56 shown (1x); 22 to 28 shown at 1.5x |
-| cgb-acid2 | 54.2 | 58.1 | |
+| Libbet | 51.9 | 56.6 | 56 to 60 emulated, 45 to 56 shown (1x); 22 to 28 shown at 1.5x. On ESP-IDF master (2.3.0, a production badge, installed from the store, run in place): 53.5 to 60.1 emulated, 48 to 59 shown |
+| cgb-acid2 | 54.2 | 58.1 | On ESP-IDF master: 59.6 to 59.9 emulated, 48 to 49.5 shown |
 | A 1 MB MBC5 ROM switching banks every few instructions | | | 21 emulated, 7 shown |
 
 So a C app's native code is 2.5 to 4 times the firmware's for an emulator's CPU loop and

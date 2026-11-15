@@ -39,6 +39,7 @@
 #include "cJSON.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "bsp.h"
 #include "core/os_api.h"
@@ -206,6 +207,9 @@ static void known_save(void)
             if (k->starting) {
                 cJSON_AddBoolToObject(e, "starting", true);
             }
+            if (!k->boot && !strncmp(k->status, "Off: ", 5)) {
+                cJSON_AddStringToObject(e, "why", k->status);   // why starting at boot went off, across restarts
+            }
             cJSON_AddStringToObject(e, "ver", k->ver);
         }
     }
@@ -256,6 +260,10 @@ static void known_load(void)
             const cJSON *f = cJSON_GetObjectItemCaseSensitive(e, "fails");
             k->fails = cJSON_IsNumber(f) && f->valueint > 0 ? (uint8_t)(f->valueint > 9 ? 9 : f->valueint) : 0;
             k->starting = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(e, "starting"));
+            const char *why = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(e, "why"));
+            if (why && !k->boot) {
+                lua_pkg_plain(k->status, sizeof(k->status), why);
+            }
             known_pkg(k, p);
         }
         xSemaphoreGive(s_mx);
@@ -1758,6 +1766,11 @@ static void boot_next(void *arg)
         xSemaphoreTake(s_mx, portMAX_DELAY);
         known_t *k = s_known ? &s_known[i] : NULL;
         bool crashed = false;
+        if (k && k->starting && esp_reset_reason() == ESP_RST_SW) {
+            // An orderly restart (reboot, an update, a factory reset: esp_restart)
+            // within its first minute isn't one it caused.
+            k->starting = false;
+        }
         if (k && k->id[0] && k->allowed && k->boot) {
             if (k->starting) {
                 // Its last start never finished: the badge restarted under it (a crash in

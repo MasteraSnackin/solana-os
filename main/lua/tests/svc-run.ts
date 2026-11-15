@@ -272,7 +272,7 @@ ok((await svcLine('t-svc-boot')).includes('Skipped: the badge restarted as it st
 ok((await svcLine('t-svc-boot2')).includes('Off: it kept restarting the badge'), `boot: off after the third (${await svcLine('t-svc-boot2')})`);
 const sj = JSON.parse(new TextDecoder().decode(mod.FS.readFile('/sdcard/hh/services.json')));
 ok(sj['t-svc-boot'].fails === 1 && !sj['t-svc-boot'].starting && sj['t-svc-boot'].boot === true, `services.json: one more failure, no attempt pending (${JSON.stringify(sj['t-svc-boot'])})`);
-ok(sj['t-svc-boot2'].boot === false, 'services.json: starting at boot off');
+ok(sj['t-svc-boot2'].boot === false && sj['t-svc-boot2'].why === 'Off: it kept restarting the badge', 'services.json: starting at boot off, and why (shown after a restart too)');
 
 cmd('svc stop app:t-svc');
 await sleep(1500);
