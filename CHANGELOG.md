@@ -24,6 +24,23 @@ site changes that came with them live in the parent repository.
   and closing Services five times left the largest block as it was (98 304 B); the free heap
   moved by what the console's history costs per command (~40 B).
 
+- **Collaborator** (`collab`, Green, after Services; `main/game/collab.c`, `main/apps/collab/`;
+  the parent repo's docs/HHGTS.md "Collaborator", server/API.md "Collaborator", docs/MESH.md
+  "Collaborator stations"). The owner lends the badge to the event: off by default, turned on
+  in its app after the OS's own consent dialog, then a built-in background service that starts
+  at boot until turned off. While on it syncs with the server every 30 s (live, a trickle of
+  !LAMPs the server decides); an admin may take it over: APP messages sent from a **station**
+  id the server gives (its own HELLO, `k:"s"`, next to the badge's, never the owner's id or
+  key), what nearby badges send to the station forwarded back, and, when the owner lends the
+  screen, a card, QR code, image (downloaded to the card), colour or countdown and an LED
+  pattern on the hidden takeover screen, shown only when the badge is idle and never over an
+  install, update, trade, swap or confirm. HOME or CANCEL there ends the takeover (forfeited);
+  the status bar's green eye shows whenever it's taken over. Ends under 15 % battery off USB.
+  Console: `collab [status|on yes|off|end|sync|lend on|off]`. `os_mesh_station()`,
+  `OS_PEER_STATION` (Lua `mesh.nearby()` kind `"station"`), two holders of keep-Wi-Fi, the
+  radio kept awake while anyone needs it; `os_service_def_t.mark` (a status-bar symbol) and
+  `os_service_mark()`; `os_held()`, `os_last_key_ms()`.
+
 ## 2.2.0 (unreleased)
 
 - **C apps.** Store apps written in C (`docs/C_API.md`; the SDK in `sdk/c/`): the store

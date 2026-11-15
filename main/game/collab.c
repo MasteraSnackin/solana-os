@@ -282,14 +282,22 @@ static void decode_task(void *arg)
     lh_png_info_t info;
     lh_png_work_t *w = malloc(sizeof(*w));
     uint8_t *raw = NULL;
-    if (src.f && w && !lh_png_info(png_read, &src, &info) && info.w <= 320 && info.h <= 200) {
+    const char *err = !src.f ? "can't open it" : !w ? "no memory" : lh_png_info(png_read, &src, &info);
+    if (!err && (info.w > 320 || info.h > 200)) {
+        err = "too big";
+    }
+    if (!err) {
         raw = heap_caps_malloc(lh_png_raw_size(&info), os_mem_bulk_caps());
         d->px = heap_caps_malloc((size_t)info.w * info.h * 2, os_mem_bulk_caps());
-        if (raw && d->px && !lh_png_decode(png_read, &src, &info, w, raw, d->px)) {
+        err = !raw || !d->px ? "no memory" : lh_png_decode(png_read, &src, &info, w, raw, d->px);
+        if (!err) {
             d->w = info.w;
             d->h = info.h;
             d->ok = true;
         }
+    }
+    if (err) {
+        ESP_LOGW(TAG, "image %.12s: %s", d->sha, err);
     }
     if (src.f) {
         fclose(src.f);
@@ -314,6 +322,7 @@ static void on_img(int status, const char *body, void *ctx)
         return;
     }
     s_img_tok = NULL;
+    ESP_LOGI(TAG, "image %.12s: download answered %d", s_img_sha, status);
     decoded_t *d = calloc(1, sizeof(*d));
     if (status < 200 || status > 299 || !d) {
         free(d);
@@ -345,7 +354,7 @@ static void img_fetch(const char *sha)
         s_show.img_failed = true;
         return;
     }
-    char path[64];
+    char path[96];                          // 25 + 64 hex
     snprintf(path, sizeof(path), "/api/device/collab/image/%s", sha);
     char dest[96];
     os_data_path(dest, sizeof(dest), IMG_PATH);
@@ -972,13 +981,6 @@ static void tick(void *arg)
             s_next_sync = now + NEXT_MIN_MS;
         }
     }
-    // Live needs the network: join the saved one if Wi-Fi went off.
-    if (!os_wifi_enabled()) {
-        char ssid[33];
-        if (os_wifi_saved_ssid(ssid, sizeof(ssid))) {
-            os_wifi_set_enabled(true);
-        }
-    }
     if (!s_tok && now >= s_next_sync) {
         sync_now();
     }
@@ -1059,6 +1061,12 @@ static bool svc_start(void *ctx, const char **why)
     s_info.phase = COLLAB_WAITING;
     s_info.why[0] = 0;
     s_next_sync = 0;
+    // Live needs the network: join the saved one if Wi-Fi is off (as the Beacon
+    // app does). Turned off later, it stays off: the owner's choice.
+    char ssid[33];
+    if (!os_wifi_enabled() && os_wifi_saved_ssid(ssid, sizeof(ssid))) {
+        os_wifi_set_enabled(true);
+    }
     os_api_prewarm();
     if (!s_timer) {
         const esp_timer_create_args_t a = { .callback = tick_timer, .name = "collab" };

@@ -86,8 +86,8 @@ static void render(void)
         strlcpy(line, "Today: not synced yet", sizeof(line));
     }
     lv_label_set_text(s_a.today, line);
-    snprintf(line, sizeof(line), "Live: %d !LAMP%s per %d min. Takeover: %d !LAMPs a minute", in->rate_live,
-             in->rate_live == 1 ? "" : "s", in->rate_minutes, in->rate_take);
+    snprintf(line, sizeof(line), "Pays %d per %d min live, %d a minute in use", in->rate_live, in->rate_minutes,
+             in->rate_take);
     lv_label_set_text(s_a.rates, line);
 
     int n = rows();
@@ -206,6 +206,13 @@ static lv_color_t true_col(uint32_t rgb)
     return lv_color_hex(rgb);       // the server's colours are true colours, not the theme's
 }
 
+// Black or white, whichever reads on bg.
+static lv_color_t contrast(uint32_t bg)
+{
+    int lum = (299 * (int)((bg >> 16) & 0xFF) + 587 * (int)((bg >> 8) & 0xFF) + 114 * (int)(bg & 0xFF)) / 1000;
+    return lum > 140 ? lv_color_black() : lv_color_white();
+}
+
 static void build_body(void)
 {
     const collab_show_t *sh = collab_show();
@@ -228,7 +235,7 @@ static void build_body(void)
     lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(b, 6, 0);
-    lv_color_t fg = sh->has_col ? true_col(sh->col) : sh->has_bg ? true_col(game_ink(sh->bg)) : ui_col(COL_TEXT);
+    lv_color_t fg = sh->has_col ? true_col(sh->col) : sh->has_bg ? contrast(sh->bg) : ui_col(COL_TEXT);
 
     lv_obj_t *t = NULL;
     switch (sh->k) {
