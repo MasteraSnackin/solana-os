@@ -12,6 +12,7 @@
 #include "core/os_data.h"
 #include "core/ui.h"
 #include "game.h"
+#include "collab.h"
 #include "beacon.h"
 
 static const char *TAG = "game";
@@ -187,6 +188,7 @@ void game_init(void)
     quests_init();
     beacon_init();
     game_services_init();
+    collab_init();                      // Collaborator (2.3.0): registers its service
     os_mesh_subscribe(OS_MESH_XDEX, on_mesh, NULL);
     os_mesh_subscribe(OS_MESH_TRADE, on_mesh, NULL);
     os_mesh_subscribe(OS_MESH_RELAY_RESP, on_mesh, NULL);

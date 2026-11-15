@@ -453,6 +453,12 @@ mesh.channel(n)             -- move this badge's mesh to channel n while the app
 mesh.scan([opts,] cb)       -- listen on each channel a moment: who is on which ("Choosing a channel", 1.1.0)
 ```
 
+`kind` is `"badge"`, `"beacon"` or, from 2.3.0, `"station"`: a badge the event's server
+is speaking through (Collaborator, the parent repo's docs/MESH.md "Collaborator stations").
+A station sends APP messages like an app on another badge (`on_mesh(station_id, msg)`),
+so an app can take part in something the event runs (a light show, a game); it never
+swaps, trades or meets. In a scan's `peers` a station counts as a badge.
+
 **The mesh channel** (`mesh.info()`, Solana OS 1.0.0). Every badge and beacon at an event
 shares one channel, which the server announces. It is a 2.4 GHz channel (1 to 13,
 `band = "2.4"`) or, when every badge at the event runs 1.0.0, a 5 GHz one (36, 40, 44,

@@ -125,6 +125,7 @@ os_key_t os_key_parse(const char *name)
 
 static lv_obj_t *s_bar;
 static lv_obj_t *s_bell;     // background services' unread count (os_service_unread), hidden at 0
+static lv_obj_t *s_mark;     // a service's mark (os_service_mark: Collaborator's eye), hidden without one
 
 static void status_create(lv_obj_t *scr)
 {
@@ -146,6 +147,8 @@ static void status_create(lv_obj_t *scr)
     lv_obj_align(s_wifi, LV_ALIGN_RIGHT_MID, -76, 0);
     s_bell = ui_label(bar, &lv_font_montserrat_14, COL_PURPLE, "");
     lv_obj_set_hidden(s_bell, true);
+    s_mark = ui_label(bar, &lv_font_montserrat_14, COL_GREEN, "");
+    lv_obj_set_hidden(s_mark, true);
 
     // Brand gradient hairline under the bar.
     lv_obj_t *line = ui_gradient_bar(bar, 0, OS_STATUS_H - 2, BOARD_LCD_H_RES, 2);
@@ -189,11 +192,20 @@ static void status_update(void)
     lv_obj_set_style_text_color(s_wifi, ui_col(c), 0);
     lv_obj_align_to(s_wifi, s_batt, LV_ALIGN_OUT_LEFT_MID, -8, 0);
 
+    uint32_t mark_col = COL_GREEN;
+    const char *mark = os_service_mark(&mark_col);
+    lv_obj_set_hidden(s_mark, mark == NULL);
+    if (mark) {
+        lv_label_set_text(s_mark, mark);
+        lv_obj_set_style_text_color(s_mark, ui_col(mark_col), 0);
+        lv_obj_align_to(s_mark, s_wifi, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+    }
+
     int unread = os_service_unread();
     lv_obj_set_hidden(s_bell, unread <= 0);
     if (unread > 0) {
         lv_label_set_text_fmt(s_bell, LV_SYMBOL_BELL "%d", unread > 99 ? 99 : unread);
-        lv_obj_align_to(s_bell, s_wifi, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+        lv_obj_align_to(s_bell, mark ? s_mark : s_wifi, LV_ALIGN_OUT_LEFT_MID, -8, 0);
     }
 }
 
@@ -441,8 +453,21 @@ static void switch_to(const os_app_t *app)
     }
 }
 
+static volatile int64_t s_last_key_ms;     // os_last_key_ms()
+
+int64_t os_last_key_ms(void)
+{
+    return s_last_key_ms;
+}
+
+bool os_held(void)
+{
+    return s_hold != NULL;
+}
+
 static void dispatch(os_key_t key, bool repeat)
 {
+    s_last_key_ms = now_ms();
     if (confirm_key(key, repeat) || overlay_key(key, repeat)) {
         return;
     }
