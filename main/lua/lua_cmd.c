@@ -54,6 +54,9 @@ static const char *refusal(const char *id)
     if (lua_host_active(id)) {
         return "the app is running; close it first (open home)";
     }
+    if (lua_svc_active(id)) {
+        return "its background service is running; stop it first (svc stop app:<id>)";
+    }
     if (lua_install_busy(id)) {
         return "the App Store is installing it";
     }

@@ -75,6 +75,12 @@
 #define LW_AOT_CALLBACK_MS  200
 // Wall-clock time per callback of a C app, whatever it does (the ceiling).
 #define LW_CALLBACK_MAX_MS  3000
+// A C service's (2.3.0, C_API.md "service"): native time and interpreted
+// instructions per callback, and what a minute of either counts as against
+// LUA_SVC_STEPS_MIN (700 ms of native time a minute ~ 2 000 000).
+#define LW_SVC_CALLBACK_MS  30
+#define LW_SVC_WASM_STEPS   250000
+#define LW_SVC_STEPS_PER_US 3
 // What the store signs: "sos-aot1|" LW_AOT_TARGET "|" <64 lowercase hex>.
 #define LW_AOT_SIG_PREFIX   "sos-aot1|"
 
@@ -149,6 +155,7 @@ typedef struct {
     bool aot;                       // native code; else the interpreter, with env
     void *env;                      // the interpreter's wasm_exec_env_t
     TaskHandle_t task;              // the app's task
+    uint32_t limit_ms;              // native time per callback: LW_AOT_CALLBACK_MS, a service's LW_SVC_CALLBACK_MS
 } lw_clock_t;
 
 // From loading the module to closing it (lua_wasm.c): the watchdog runs

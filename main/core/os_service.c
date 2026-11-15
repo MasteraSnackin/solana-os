@@ -278,6 +278,13 @@ bool os_service_set_boot(const char *id, bool on, const char **why)
     return true;
 }
 
+void os_service_stop_apps(const char *why)
+{
+    if (s_prov && s_prov->stop_all) {
+        s_prov->stop_all(why);
+    }
+}
+
 static void post_stop(void *arg)
 {
     os_service_stop(arg, NULL);

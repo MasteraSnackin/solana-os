@@ -74,19 +74,48 @@ static char s_task_id[LUA_PKG_ID_MAX + 1];  // ... running this app (under lh_mx
 
 // Native C stack guard (vendor/luaconf.h luai_cstackfull): Lua asks before
 // every new C level. The leaf work under a level (LVGL, printf, JSON, pattern
-// matching) stays within LH_STACK_LOW. 0 off the lua task.
-static uintptr_t s_stack_low, s_stack_crit;
+// matching) stays within LH_STACK_LOW. Two tasks run Lua: the app's "lua"
+// task and the services' "svc" task (2.3.0), each with its own bounds; 0
+// on any other task.
+static struct {
+    TaskHandle_t task;
+    uintptr_t low, crit;
+} s_stacks[2];
+
+void lh_stack_enter(int slot, uintptr_t bottom)
+{
+    s_stacks[slot].low = bottom + LH_STACK_LOW;
+    s_stacks[slot].crit = bottom + LH_STACK_CRIT;
+    s_stacks[slot].task = xTaskGetCurrentTaskHandle();
+}
+
+void lh_stack_leave(int slot)
+{
+    s_stacks[slot].task = NULL;
+    s_stacks[slot].low = s_stacks[slot].crit = 0;
+}
+
+static int stack_slot(void)
+{
+    TaskHandle_t me = xTaskGetCurrentTaskHandle();
+    return me == s_stacks[0].task ? 0 : me == s_stacks[1].task ? 1 : -1;
+}
 
 uintptr_t lh_stack_low(void)
 {
-    return s_stack_low;
+    int i = stack_slot();
+    return i < 0 ? 0 : s_stacks[i].low;
 }
 
 int lh_cstack_check(void)
 {
     volatile char probe;
     uintptr_t sp = (uintptr_t)&probe;
-    return !s_stack_low ? 0 : sp < s_stack_crit ? 2 : sp < s_stack_low ? 1 : 0;
+    int i = stack_slot();
+    if (i < 0 || !s_stacks[i].low) {
+        return 0;
+    }
+    return sp < s_stacks[i].crit ? 2 : sp < s_stacks[i].low ? 1 : 0;
 }
 
 int64_t lh_now(void)
@@ -97,6 +126,11 @@ int64_t lh_now(void)
 bool lh_post(const lh_ev_t *ev)
 {
     return s_q && xQueueSend(s_q, ev, 0) == pdTRUE;
+}
+
+bool lh_post_to(lh_t *s, const lh_ev_t *ev)
+{
+    return s && s->svc ? lh_svc_post(s, ev) : lh_post(ev);
 }
 
 void lh_need_perm(lua_State *L, uint32_t perm, const char *module)
@@ -178,10 +212,14 @@ static int over_budget(lua_State *L, int level)
     if (s->pkg.lang == LUA_PKG_LANG_C) {
         // A C app's own code counts in wasm instructions (lua_wasm.c); this is
         // the host work an API call did for it.
-        lua_pushfstring(L, LH_HOST_STEPS_MSG, LUA_HOST_STEPS_MAX);
+        lua_pushfstring(L, LH_HOST_STEPS_MSG, (int)s->steps_max);
     } else {
         luaL_where(L, level);
-        lua_pushliteral(L, "Script took too long");
+        if (s->svc) {
+            lua_pushliteral(L, "Service took too long");
+        } else {
+            lua_pushliteral(L, "Script took too long");
+        }
         lua_concat(L, 2);
     }
     if (!s->kill_msg[0]) {
@@ -194,7 +232,10 @@ static void step_hook(lua_State *L, lua_Debug *ar)
 {
     lh_t *s = lh_get(L);
     s->steps += LH_HOOK_EVERY;
-    if (s->steps > LUA_HOST_STEPS_MAX) {
+    // A service (2.3.0) also has a second of wall-clock time per callback:
+    // work a VM instruction starts in C (string.rep of a big string, a long
+    // concatenation) isn't counted as instructions.
+    if (s->steps > s->steps_max || (s->svc && lh_now() - s->cb_t0 > LH_SVC_CALLBACK_MS)) {
         over_budget(L, 0);      // level 0: the script line running now
     }
 }
@@ -204,7 +245,7 @@ void lh_charge_steps(lua_State *L, unsigned int n)
 {
     lh_t *s = lh_get(L);
     s->steps += n;
-    if (s->steps > LUA_HOST_STEPS_MAX) {
+    if (s->steps > s->steps_max) {
         over_budget(L, 1);      // level 1: the line that called string.find & co.
     }
 }
@@ -262,7 +303,9 @@ static void close_state(lh_t *s)
         s->ui_off = true;
         lh_callback(s, run_on_exit, NULL);
         lh_ble_stop(s);                     // its callbacks go with the state
+        lh_svc_app_closed(s);               // a service.start still waiting answers nobody
         lh_storage_flush(s, true);
+        lh_storage_close(s);
         s->steps = 0;
         lua_close(s->L);
         s->L = NULL;
@@ -334,6 +377,9 @@ static void fail(lh_t *s, int rc, const char *msg_in)
 
 bool lh_callback(lh_t *s, lua_CFunction fn, void *arg)
 {
+    if (s->svc) {
+        return lh_svc_callback(s, fn, arg);    // a background service (lua_svc.c)
+    }
     lua_State *L = s->L;
     if (!L) {
         return false;
@@ -426,10 +472,10 @@ static int l_print(lua_State *L)
     luaL_pushresult(&b);
     size_t len;
     const char *text = lua_tolstring(L, -1, &len);
-    const char *id = lh_get(L)->pkg.id;
-    if (lh_get(L)->pkg.lang == LUA_PKG_LANG_C) {
+    const char *id = lh_get(L)->tag[0] ? lh_get(L)->tag : lh_get(L)->pkg.id;
+    if (lh_get(L)->pkg.lang == LUA_PKG_LANG_C || lh_get(L)->svc) {
         // A C app's output is charged however it gets out (LH_OUT_STEPS),
-        // before the console blocks on it.
+        // before the console blocks on it; a service's too (2.3.0).
         lh_charge_steps(L, (unsigned)((len + 1 > UINT_MAX / LH_OUT_STEPS ? UINT_MAX / LH_OUT_STEPS : len + 1)
                                       * LH_OUT_STEPS));
     }
@@ -480,6 +526,33 @@ static int boot(lua_State *L)
     lua_setfield(L, LUA_REGISTRYINDEX, "solana.main");
     lua_gc(L, LUA_GCCOLLECT);
 
+    lh_open_base(L);
+    lh_open_ui(L);
+    lh_open_sys(L);
+    lh_open_json(L);
+    lh_open_net(L);
+    lh_open_ws(L);
+    lh_open_ble(L);
+    lh_open_fs(L);
+    lh_open_crypto(L);
+    lh_open_service(L);
+    lh_storage_load(s);
+
+    // Then collect generationally: apps churn short-lived strings and
+    // tables every tick, and young collections keep the heap near the live
+    // data (mesh-wave peaked at 31 KB instead of 45 KB with the incremental
+    // collector). A young collection every 10 % of growth instead of 20 %
+    // trims the peaks another 0.5-1.7 KB. The cap is a ceiling; every KB a
+    // script holds is gone from the badge's heap, and TLS needs ~30 KB of it
+    // for each server call.
+    lua_gc(L, LUA_GCCOLLECT);
+    lua_gc(L, LUA_GCGEN);
+    lua_gc(L, LUA_GCPARAM, LUA_GCPMINORMUL, 10);
+    return 0;
+}
+
+void lh_open_base(lua_State *L)
+{
     static const luaL_Reg libs[] = {
         {LUA_GNAME, luaopen_base}, {LUA_COLIBNAME, luaopen_coroutine}, {LUA_STRLIBNAME, luaopen_string},
         {LUA_TABLIBNAME, luaopen_table}, {LUA_MATHLIBNAME, luaopen_math}, {LUA_UTF8LIBNAME, luaopen_utf8},
@@ -509,28 +582,6 @@ static int boot(lua_State *L)
     lua_pushinteger(L, (lua_Integer)(esp_random() >> 1));
     lua_call(L, 2, 0);
     lua_pop(L, 1);
-
-    lh_open_ui(L);
-    lh_open_sys(L);
-    lh_open_json(L);
-    lh_open_net(L);
-    lh_open_ws(L);
-    lh_open_ble(L);
-    lh_open_fs(L);
-    lh_open_crypto(L);
-    lh_storage_load(s);
-
-    // Then collect generationally: apps churn short-lived strings and
-    // tables every tick, and young collections keep the heap near the live
-    // data (mesh-wave peaked at 31 KB instead of 45 KB with the incremental
-    // collector). A young collection every 10 % of growth instead of 20 %
-    // trims the peaks another 0.5-1.7 KB. The cap is a ceiling; every KB a
-    // script holds is gone from the badge's heap, and TLS needs ~30 KB of it
-    // for each server call.
-    lua_gc(L, LUA_GCCOLLECT);
-    lua_gc(L, LUA_GCGEN);
-    lua_gc(L, LUA_GCPARAM, LUA_GCPMINORMUL, 10);
-    return 0;
 }
 
 static int run_main(lua_State *L)
@@ -602,6 +653,8 @@ static void run_events(lh_t *s, const lh_ev_t *ev)
             lh_mesh_event(s, ev->data);
         } else if (ev->kind == LH_EV_MEET) {
             lh_meet_event(s, ev->data);
+        } else if (ev->kind == LH_EV_CALL || ev->kind == LH_EV_SVC_START) {
+            lh_svc_app_event(s, ev);        // the app's service, lua_host_call (2.3.0)
         }                                   // LH_EV_SCAN only wakes us: lh_mesh_scan_run below
     }
     lh_calls_run(s);
@@ -639,7 +692,7 @@ static TickType_t wait_ticks(lh_t *s)
     if (t < wake) {
         wake = t;
     }
-    if (s->store_pending && s->store_saved + LH_STORAGE_SAVE_MS < wake) {
+    if (s->store_dirty && s->store_saved + LH_STORAGE_SAVE_MS < wake) {
         wake = s->store_saved + LH_STORAGE_SAVE_MS;
     }
     int64_t ms = wake - now;
@@ -657,7 +710,7 @@ static TickType_t wait_ticks(lh_t *s)
 
 static void task_end(lh_t *s)
 {
-    s_stack_low = s_stack_crit = 0;
+    lh_stack_leave(0);
     lh_stats = (lh_stats_t){
         .mem_peak = s->mem_peak, .mem_end = s->mem, .steps_peak = s->steps_peak,
         .stack_free = uxTaskGetStackHighWaterMark(NULL), .heap_before = s->heap_before,
@@ -666,8 +719,6 @@ static void task_end(lh_t *s)
     };
     strlcpy(lh_stats.id, s->pkg.id, sizeof(lh_stats.id));
     strlcpy(lh_stats.err, s->err, sizeof(lh_stats.err));
-    free(s->store_pending);
-    s->store_pending = NULL;
     xSemaphoreTake(lh_mx, portMAX_DELAY);
     s->finished = true;
     bool orphan = s->orphan;
@@ -708,17 +759,33 @@ static void prewarm(lh_t *s)
     }
 }
 
+lua_State *lh_new_state(lh_t *s)
+{
+    lua_State *L = lua_newstate(lh_alloc, s, esp_random());
+    if (L) {
+        *(lh_t **)lua_getextraspace(L) = s;
+        lua_sethook(L, step_hook, LUA_MASKCOUNT, LH_HOOK_EVERY);
+    }
+    return L;
+}
+
 static void lua_task(void *arg)
 {
     lh_t *s = arg;
     volatile char top;
     // The stack ends about LH_STACK below this frame (the frames above it put
     // the real end a few hundred bytes higher; the margins absorb that).
-    uintptr_t bottom = (uintptr_t)&top - LH_STACK;
-    s_stack_low = bottom + LH_STACK_LOW;
-    s_stack_crit = bottom + LH_STACK_CRIT;
+    lh_stack_enter(0, (uintptr_t)&top - LH_STACK);
     char rel[64], path[160];
     prewarm(s);
+    if (s->pkg.lang == LUA_PKG_LANG_C) {
+        // One WebAssembly runtime on the badge: a C service holding it
+        // pauses first (lua_svc.c), at most a second or two.
+        lh_svc_wamr_yield();
+        for (int ms = 0; lh_svc_wamr_busy() && ms < 3000 && !s->quit; ms += 20) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
     // Store installs bring compiled code, run in place (lua_code.c);
     // otherwise main.lua is compiled from the card.
     bool xip = lh_code_open(s);
@@ -728,10 +795,8 @@ static void lua_task(void *arg)
     os_data_path(path, sizeof(path), rel);
     reader_t *rd = malloc(sizeof(*rd));
     int rc = LUA_ERRMEM;
-    s->L = rd ? lua_newstate(lh_alloc, s, esp_random()) : NULL;
+    s->L = rd ? lh_new_state(s) : NULL;
     if (s->L) {
-        *(lh_t **)lua_getextraspace(s->L) = s;
-        lua_sethook(s->L, step_hook, LUA_MASKCOUNT, LH_HOOK_EVERY);
         rd->f = xip ? NULL : fopen(path, "r");
         lua_pushcfunction(s->L, boot);
         lua_pushlightuserdata(s->L, rd);
@@ -799,6 +864,9 @@ static void lua_task(void *arg)
         }
     }
     close_state(s);
+    if (s->pkg.lang == LUA_PKG_LANG_C) {
+        lh_svc_wamr_released();             // the runtime is free: C services it paused start again
+    }
     if (s->led_used) {
         lh_led_off();
     }
@@ -837,7 +905,9 @@ static void host_enter(lv_obj_t *root)
     s->gen = ++s_gen;
     s->t0 = lh_now();
     s->area = area;
-    s->modal_ref = s->store_ref = s->scan_ref = LUA_NOREF;
+    s->modal_ref = s->store_ref = s->scan_ref = s->svc_start_ref = LUA_NOREF;
+    s->steps_max = LUA_HOST_STEPS_MAX;
+    strlcpy(s->tag, pkg.id, sizeof(s->tag));
     lh_ble_init(s);
     s->loading = ui_label(area, &sol_font_14, COL_DIM, "Starting...");
     lv_obj_center(s->loading);
@@ -970,6 +1040,7 @@ void lua_host_init(void)
     s_q = xQueueCreate(LH_QUEUE_LEN, sizeof(lh_ev_t));
     lua_install_init();
     lh_cmd_register();
+    lua_svc_init();
     if (lvgl_port_lock(0)) {
         lh_img_init();
         lvgl_port_unlock();

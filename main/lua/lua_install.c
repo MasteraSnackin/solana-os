@@ -503,12 +503,20 @@ static bool commit(const char *id, const char *manifest, char *why, size_t n)
         strlcpy(why, "Close the app to update it", n);
         return false;
     }
+    // Its background service (2.3.0) stops while the files change and starts
+    // again after, if the new version still asks for it (lua_svc_resume).
+    bool svc = lua_svc_pause(id);
+    if (lua_svc_active(id)) {
+        strlcpy(why, "Its background service is still stopping: try again", n);
+        return false;
+    }
     app_dir(cur, sizeof(cur), id, "");
     app_dir(old, sizeof(old), id, ".old");
     app_dir(nw, sizeof(nw), id, ".new");
     snprintf(from, sizeof(from), "%s/data.json", cur);
     snprintf(to, sizeof(to), "%s/data.json", nw);
     if (stat(from, &st) == 0 && !copy_file(from, to)) {
+        lua_svc_resume(id, svc);
         return card_fail(why, n);           // the app's storage moves along
     }
     snprintf(rel, sizeof(rel), "apps/%s.old", id);
@@ -521,6 +529,7 @@ static bool commit(const char *id, const char *manifest, char *why, size_t n)
         rename(old, cur);                   // keep the installed version
     }
     xSemaphoreGive(s_swap);
+    lua_svc_resume(id, svc);                // the version now in place (or the old one, kept)
     if (!ok) {
         return card_fail(why, n);
     }

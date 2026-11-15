@@ -18,6 +18,8 @@
 #include "core/os_mesh.h"
 #include "core/os_socket.h"
 #include "core/os_wifi.h"
+#include "core/os_mem.h"
+#include "esp_heap_caps.h"
 #include "lua_priv.h"
 
 typedef enum {
@@ -53,7 +55,7 @@ static uint32_t s_token;
 static void wake(lh_t *s)
 {
     lh_ev_t ev = { .kind = LH_EV_WAKE, .gen = s->gen };
-    lh_post(&ev);
+    lh_post_to(s, &ev);
 }
 
 static void free_call(lh_call_t *c)
@@ -65,18 +67,29 @@ static void free_call(lh_call_t *c)
     free(c);
 }
 
-// os_api answer, on the OS task.
+// os_api answer, on the OS task: for the app on screen or one of the
+// background services (2.3.0). A service's copy of the answer goes to PSRAM.
 static void api_cb(int status, const char *body, void *ctx)
 {
     xSemaphoreTake(lh_mx, portMAX_DELAY);
-    lh_t *s = lh_cur;
-    for (lh_call_t *c = s ? s->calls : NULL; c; c = c->next) {
-        if (c->state == LH_CALL_SENT && c->ctx == ctx && !c->done) {
-            c->status = status;
-            c->body = body ? strdup(body) : NULL;
-            c->done = true;
-            wake(s);
-            break;
+    for (int i = -1; i < LUA_SVC_MAX; i++) {
+        lh_t *s = i < 0 ? lh_cur : lh_svc_session(i);
+        for (lh_call_t *c = s ? s->calls : NULL; c; c = c->next) {
+            if (c->state == LH_CALL_SENT && c->ctx == ctx && !c->done) {
+                c->status = status;
+                if (body && s->svc && os_mem_psram()) {
+                    size_t n = strlen(body) + 1;
+                    if ((c->body = heap_caps_malloc(n, OS_MEM_PSRAM))) {
+                        memcpy(c->body, body, n);
+                    }
+                } else {
+                    c->body = body ? strdup(body) : NULL;
+                }
+                c->done = true;
+                wake(s);
+                i = LUA_SVC_MAX;
+                break;
+            }
         }
     }
     xSemaphoreGive(lh_mx);
@@ -193,7 +206,7 @@ static int start_ex(lua_State *L, op_t op, const char *method, const char *path,
     const char *err = !(s->pkg.perms & s_ops[op].perm) ? "denied"
                     : fail ? fail
                     : !body_ok ? (strcmp(b.err, "too big") ? b.err : "request too big")
-                    : n >= LH_CALLS_MAX || (confirm && os_confirm_open()) ? "busy"
+                    : n >= (s->svc ? LH_SVC_CALLS : LH_CALLS_MAX) || (confirm && os_confirm_open()) ? "busy"
                     : lh_ws_busy(s) || os_socket_active() ? "socket open"
                     : !os_api_online() ? "offline" : NULL;
     if (!err) {
@@ -779,6 +792,7 @@ void lh_mesh_start(lh_t *s)
 {
     os_cloud_info_t in;
     os_cloud_get_info(&in);
+    strlcpy(s->mesh_me, in.id, sizeof(s->mesh_me));
     xSemaphoreTake(lh_mx, portMAX_DELAY);
     strlcpy(s_mesh_app, s->pkg.id, sizeof(s_mesh_app));
     strlcpy(s_mesh_me, in.id, sizeof(s_mesh_me));
@@ -790,11 +804,17 @@ void lh_mesh_start(lh_t *s)
     s_mesh_sub = os_mesh_subscribe(OS_MESH_APP, mesh_handler, NULL);
 }
 
-void lh_mesh_me(char out[OS_MESH_ID_LEN + 1])
+void lh_mesh_me(const lh_t *s, char out[OS_MESH_ID_LEN + 1])
+{
+    strlcpy(out, s->mesh_me, OS_MESH_ID_LEN + 1);
+}
+
+bool lh_mesh_app_is(const char *id)
 {
     xSemaphoreTake(lh_mx, portMAX_DELAY);
-    strlcpy(out, s_mesh_me, OS_MESH_ID_LEN + 1);
+    bool is = s_mesh_app[0] && !strcmp(s_mesh_app, id);
     xSemaphoreGive(lh_mx);
+    return is;
 }
 
 void lh_mesh_mute(void)

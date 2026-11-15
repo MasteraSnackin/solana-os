@@ -39,6 +39,7 @@ typedef struct lw {
     lw_clock_t clk;                 // native time in this callback (lua_aot.h)
     int imports;                    // imports now open (native: the clock stops in them)
     bool rt;                        // WAMR is up
+    bool claimed;                   // this one holds the runtime (lw_busy)
     wasm_module_t mod;
     wasm_module_inst_t inst;
     wasm_exec_env_t env;
@@ -66,8 +67,19 @@ typedef struct lw {
     wasm_function_inst_t f_start, f_key, f_tick, f_exit, f_mesh, f_meet;
 } lw_t;
 
-// The running C app (one at a time), NULL between apps.
+// The running C app or C service (one at a time: one WebAssembly runtime
+// on the badge, 2.3.0), NULL between them.
 extern lw_t *lw_cur;
+
+// Who holds the runtime (any task): anyone, a service. lw_boot claims it and
+// raises when it's taken; lw_close gives it back.
+bool lw_busy(void);
+bool lw_busy_svc(void);
+
+// LH_EV_CALL for a C app or service (lua_svc.c): the export `fn`, (void) ->
+// void, with the value on top as its frame's argument 1. Nothing when the
+// module doesn't export it.
+void lw_call_named(lua_State *L, lh_t *s, const char *fn);
 
 // Stops the app: msg goes to the error screen (kind LW_ERR/MEM/BUDGET),
 // and a WAMR exception makes the interpreter unwind. The first reason wins.
