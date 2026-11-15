@@ -3,7 +3,8 @@
 print("t-svc:svc boot, heap " .. sys.memory().used .. " of " .. sys.memory().max)
 
 -- Everything that touches the screen, the radio's channel, Wi-Fi, Bluetooth,
--- or spends or changes !LAMPs and items must be nil in a service.
+-- or spends or changes !LAMPs and items, or mails another attendee, must be
+-- nil in a service.
 local forbidden = {
   "ui", "led", "wifi", "ble", "ws", "quest",
   "sys.keys", "sys.exit",
@@ -11,6 +12,7 @@ local forbidden = {
   "items.grant", "items.update", "items.remove",
   "mesh.channel", "mesh.scan", "mesh.pause", "mesh.resume", "mesh.bridge", "mesh.info",
   "service.start", "service.running",
+  "mail.send",                        -- only the app on screen mails (LUA_API.md "mail")
   "load", "dofile", "loadfile",
 }
 local bad = {}
@@ -30,7 +32,8 @@ end
 print("t-svc:svc forbidden: " .. (#bad == 0 and "all nil" or ("FAIL " .. table.concat(bad, ", "))))
 local allowed = {"timer.every", "storage.set", "fs.read", "json.encode", "crypto.sha256", "solana.encode",
   "lamps.balance", "items.list", "items.all", "mesh.send", "mesh.nearby", "mesh.meet", "mesh.meets",
-  "sys.millis", "sys.memory", "badge.id", "service.send", "service.status", "service.notify", "service.stop", "require"}
+  "sys.millis", "sys.memory", "badge.id", "service.send", "service.status", "service.notify", "service.stop", "require",
+  "mail.list", "mail.get"}
 local missing = {}
 for _, path in ipairs(allowed) do
   local v = _G
