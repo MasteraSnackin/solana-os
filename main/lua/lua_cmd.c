@@ -522,25 +522,27 @@ static int cmd_install(const char *id)
 // aot: why a C app runs app.aot or app.wasm (lua_aot.h). Reads and verifies,
 // never writes app.aot: native code comes only from the store installer.
 
-// OS task (os_api's callbacks run there): cache the key, say how it went.
-// One `lua aotkey` request. The server number it was sent under travels with
-// it: kept in one variable, a second `lua aotkey` after `server <url>` would
-// lend its number to the first one's answer, and the old store's key would be
-// cached. os_api answers every request it took exactly once, which frees it.
-typedef struct {
-    uint32_t gen;                   // os_cloud_server_gen() when it was sent
-} aotkey_req_t;
+// `lua aotkey`: one request counts at a time, and everything about it lives
+// on the OS task (the command posts there, and os_api's answers run there).
+// So the server number a request was sent under can't be replaced under its
+// answer (a second `lua aotkey` after `server <url>` would otherwise lend its
+// number to the first one's answer, and the old store's key would be cached),
+// and nothing is allocated: os_api drops an answer when the OS queue stays
+// full, which would leak a request's record.
+static void *s_aotkey_ctx;          // the request whose answer counts; NULL: none
+static uint32_t s_aotkey_gen;       // os_cloud_server_gen() when it was sent
 
 static void aot_key_answered(int status, const char *body, void *ctx)
 {
-    aotkey_req_t *r = ctx;
-    uint32_t gen = r->gen;
-    free(r);
+    if (ctx != s_aotkey_ctx) {
+        return;                     // a later `lua aotkey` took its place
+    }
+    s_aotkey_ctx = NULL;
     uint8_t key[32];
     char hex[9];
-    if (gen != os_cloud_server_gen()) {
+    if (s_aotkey_gen != os_cloud_server_gen()) {
         printf("aotkey: the server changed meanwhile; ask again\n");
-    } else if (lw_aot_key_answer(status, body, gen) && lw_aot_key(key)) {
+    } else if (lw_aot_key_answer(status, body, s_aotkey_gen) && lw_aot_key(key)) {
         lua_pkg_hex(hex, key, 4);
         printf("aotkey: cached %s...\n", hex);
     } else {
@@ -548,22 +550,31 @@ static void aot_key_answered(int status, const char *body, void *ctx)
     }
 }
 
-static int cmd_aot_key(void)
+// OS task.
+static void aot_key_ask(void *arg)
 {
-    aotkey_req_t *r = malloc(sizeof(*r));
-    if (!r) {
-        printf("aotkey: out of memory\n");
-        return 1;
+    (void)arg;
+    if (s_aotkey_ctx) {
+        os_api_cancel(s_aotkey_ctx);    // an earlier one still on its way: only the newest counts
     }
-    r->gen = os_cloud_server_gen();
-    esp_err_t err = os_api_call("GET", "/api/device/aotkey", NULL, 256, aot_key_answered, r);
+    s_aotkey_ctx = os_api_token();
+    s_aotkey_gen = os_cloud_server_gen();
+    esp_err_t err = os_api_call("GET", "/api/device/aotkey", NULL, 256, aot_key_answered, s_aotkey_ctx);
     if (err != ESP_OK) {
-        free(r);
+        s_aotkey_ctx = NULL;
         printf("aotkey: %s\n", err == ESP_ERR_INVALID_STATE ? "offline (Wi-Fi on, and a registered badge)"
                : "the server queue is full; try again");
-        return 1;
+        return;
     }
     printf("aotkey: asking the server\n");
+}
+
+static int cmd_aot_key(void)
+{
+    if (!os_post(aot_key_ask, NULL)) {
+        printf("aotkey: the badge is busy; try again\n");
+        return 1;
+    }
     return 0;
 }
 
