@@ -502,6 +502,10 @@ static bool ask_stop(const char *id, uint8_t kind, const char *why);
 
 static const char *start(const char *id, uint32_t req_gen)
 {
+    // req_gen is handed to the slot below (and zeroed): whether the app on
+    // screen asked is kept apart, for the record check after.
+    const bool asked = req_gen != 0;
+    bool fresh = false;                 // this call made the slot (not already running)
     known_load();
     lua_pkg_t *p = malloc(sizeof(*p));
     const char *why = NULL;
@@ -578,6 +582,7 @@ static const char *start(const char *id, uint32_t req_gen)
         sv->c = c;
         sv->req_gen = req_gen;
         req_gen = 0;
+        fresh = true;
         strlcpy(sv->id, id, sizeof(sv->id));
         s_slot[i] = sv;
         k->failed = false;
@@ -588,21 +593,33 @@ static const char *start(const char *id, uint32_t req_gen)
             s_task = NULL;
             s_slot[i] = NULL;
             nw = sv;
+            fresh = false;
             why = "not enough memory";
         }
     }
     xSemaphoreGive(s_mx);
     free(nw);
     free(p);
-    if (!why) {
+    if (!why && fresh && !known_save()) {
         // The attempt is on the card before the service's code runs: if the badge
         // restarts in the middle (a crash in its start), the next boot knows. A start
-        // nobody on screen asked for (boot, a resume) that can't be recorded doesn't
-        // happen: without the record the crash guard couldn't stop a restart loop.
-        if (!known_save() && !req_gen) {
+        // nobody on screen asked for (boot, a resume, the owner's Services or `svc
+        // start`) that can't be recorded doesn't happen: the slot ends before its code
+        // runs (the svc task never boots a stopped SV_STARTING slot), and the caller
+        // gets "card error" (a resume keeps trying). The app's own service.start runs
+        // it anyway, and answers true: the app is on screen, and a boot start needs
+        // the record too, so a service the card couldn't record never starts at boot
+        // and can't hold the badge in a restart loop. A start of a service already
+        // running writes nothing and stops nothing.
+        if (!asked) {
             ask_stop(id, STOP_SYSTEM, "Not started: the card can't record it");
             ESP_LOGW(TAG, "%s: not started: services.json can't be written", id);
+            wake_task();
+            return "card error";
         }
+        ESP_LOGW(TAG, "%s: services.json can't be written: started for the app, never at boot", id);
+    }
+    if (!why) {
         reply(req_gen, NULL);               // it was running already
         wake_task();
         checks_arm();
@@ -1986,6 +2003,7 @@ static bool p_start(const char *sid, const char **why)
         {"low memory", "The badge is low on memory"}, {"busy", "A C app is using the runtime: close it first"},
         {"not installed", "The app isn't installed"}, {"installing", "The app is installing"},
         {"expired", "The app has expired"}, {"no card", "Insert a microSD card"},
+        {"card error", "The card can't record it"},
     };
     for (size_t i = 0; err && i < sizeof(texts) / sizeof(texts[0]); i++) {
         if (!strcmp(err, texts[i].code)) {

@@ -1751,7 +1751,10 @@ only the app on the screen can, with the owner there.
   watchdog, or the power; not a restart the badge makes itself, as for an update), the
   next boot skips it (`Skipped: the badge restarted as it started`),
   and three such restarts in a row turn starting at boot off (`Off: it kept restarting the
-  badge`), so a service can never keep a badge in a restart loop. `print` goes to the
+  badge`), so a service can never keep a badge in a restart loop. That guard needs the
+  record of each start in `services.json`: when the card can't write it, the app's own
+  `service.start` still runs the service (`cb(true)`), but nothing else starts one (at
+  boot, after an update, from Services: `Not started: the card can't record it`). `print` goes to the
   console tagged `[<app id>:svc]`, charged like a C app's output (32 instructions a
   byte).
 - An update stops the service while the files change and starts the new version if it
@@ -1869,11 +1872,12 @@ const res = await fetch('https://badge-api.solana.com/api/app/mail', {
   headers: { Authorization: `Bearer ${process.env.APP_KEY}`, 'Content-Type': 'application/json' },
   body: JSON.stringify({ to: { badge: '7K2Q9M' }, title: 'Your turn', text: 'Alice played e4', data: { game: 12 } })
 });
-console.log(await res.json()); // { send: 81, recipients: 1, skipped: 0 }
-// later: GET /api/app/mail/81 -> { recipients: 1, delivered: 1, ... }
+console.log(await res.json()); // { send: 81, recipients: 1 }
+// later: GET /api/app/mail/81 -> { send: 81, recipients: 1, delivered: null, ... }
+// (an app's server never learns who read it, or who muted the app)
 ```
 
-`to: { all: true }` reaches everyone with the app (minus who muted it); `ttl` (seconds, 1 hour
+`to: { all: true }` reaches everyone with the app (minus who muted it; `recipients` counts them all); `ttl` (seconds, 1 hour
 to 30 days) sets when it expires. The answers and limits are in server/API.md "Mailbox".
 
 Badges below 2.3.0 have no `mail`: the store refuses `mail` apps to them (server/API.md

@@ -260,9 +260,10 @@ typedef struct lh {
     long files_size;
     char files_name[LH_FILES_NAME_MAX + 6];
 
-        // storage.*: one copy per app shared by the app and its service (lua_sys.c)
+    // storage.*: one copy per app shared by the app and its service (lua_sys.c)
     int store_ref;
-    bool store_dirty;           // set() since the last write of data.json
+    bool store_held;            // this state counts as one of the shared copy's users (released once, at close)
+    bool store_dirty;           // the shared copy may have changes data.json hasn't got
     uint32_t store_ver;         // the shared copy's version this table was built from
     int64_t store_saved;
 

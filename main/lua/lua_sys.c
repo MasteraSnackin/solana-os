@@ -345,10 +345,23 @@ typedef struct {
     char id[LUA_PKG_ID_MAX + 1];        // "": free
     char *json;                         // NULL: empty (no data.json)
     size_t len;
-    uint32_t ver;
-    int users;
+    uint32_t ver;                       // + 1 per committed set()
+    uint32_t saved;                     // the version data.json has
+    int users;                          // states holding it (lh_t.store_held)
     bool loaded;
+    bool writing;                       // a flush is writing data.json (one at a time)
 } store_t;
+
+// Who owns the entry, line by line: lh_storage_load() creates it or joins
+// it and counts this state as a user (store_held) before anything that can
+// fail; whatever way the state ends (the load failed, its boot errored, a
+// normal close, a service stopped by a limit) close_state() runs
+// lh_storage_flush(force) and then lh_storage_close(), which releases that
+// one reference and nothing else, so a state that never took one (an error
+// before the load) can't drop the other side's. Pending changes belong to
+// the entry, not to the state that made them: any state's flush writes the
+// newest copy, so the last one to leave saves whatever the other left
+// unsaved (a write that failed); then the entry is freed.
 
 static store_t s_store[STORE_SHARED];   // under lh_mx
 
@@ -475,7 +488,7 @@ static int l_set(lua_State *L)
             return luaL_error(L, "storage: %s", !strcmp(b.err, "too big") ? "full (16 KB per app)" : b.err);
         }
         xSemaphoreTake(lh_mx, portMAX_DELAY);
-        store_t *st = store_find(s->pkg.id);
+        store_t *st = s->store_held ? store_find(s->pkg.id) : NULL;
         bool current = !st || st->ver == s->store_ver;
         if (st && current) {
             free(st->json);
@@ -486,6 +499,12 @@ static int l_set(lua_State *L)
         }
         xSemaphoreGive(lh_mx);
         free(copy);
+        if (!st) {
+            // No shared copy to keep it in (never the case while this state
+            // holds one): an error, never a set() that silently isn't kept.
+            lua_settop(L, 2);
+            return luaL_error(L, "storage: unavailable");
+        }
         if (current) {
             break;
         }
@@ -512,8 +531,8 @@ bool lh_storage_load(lh_t *s)
     lua_State *L = s->L;
     const char *id = s->pkg.id;
     xSemaphoreTake(lh_mx, portMAX_DELAY);
-    store_t *st = store_find(id);
-    for (int i = 0; !st && i < STORE_SHARED; i++) {
+    store_t *st = s->store_held ? NULL : store_find(id);
+    for (int i = 0; !s->store_held && !st && i < STORE_SHARED; i++) {
         if (!s_store[i].id[0]) {
             st = &s_store[i];
             *st = (store_t){ 0 };
@@ -521,10 +540,14 @@ bool lh_storage_load(lh_t *s)
         }
     }
     if (st) {
-        st->users++;
+        st->users++;                    // released once, by lh_storage_close()
+        s->store_held = true;
     }
     bool need = st && !st->loaded;
     xSemaphoreGive(lh_mx);
+    if (!st) {
+        return luaL_error(L, "storage: unavailable");
+    }
     if (need) {
         // The first state of this app reads the card (outside the lock: the
         // mesh task takes it too); a second one finds the copy.
@@ -537,9 +560,7 @@ bool lh_storage_load(lh_t *s)
         if (!json && os_data_exists(rel)) {
             // data.json is there but couldn't be read (memory, the card): the app
             // doesn't start rather than start empty and write that over its data.
-            xSemaphoreTake(lh_mx, portMAX_DELAY);
-            st->users--;
-            xSemaphoreGive(lh_mx);
+            // The reference stays held: close_state() releases it, once.
             return luaL_error(L, "storage: can't read data.json (not enough memory or a card error)");
         }
         xSemaphoreTake(lh_mx, portMAX_DELAY);
@@ -567,35 +588,73 @@ bool lh_storage_load(lh_t *s)
 
 void lh_storage_flush(lh_t *s, bool force)
 {
-    if (!s->store_dirty || (!force && lh_now() - s->store_saved < LH_STORAGE_SAVE_MS)) {
+    if (!s->store_held || (!force && (!s->store_dirty || lh_now() - s->store_saved < LH_STORAGE_SAVE_MS))) {
         return;
     }
     char rel[64];
     lua_pkg_rel(rel, sizeof(rel), s->pkg.id, "data.json");
-    size_t len;
-    uint32_t ver;
-    char *json;
-    // A copy that can't be made or a write that fails stays pending (dirty):
-    // the next flush (a second later, or at close) tries again.
-    bool ok = store_copy(s->pkg.id, &json, &len, &ver);
-    if (ok && json && !os_data_write(rel, json, len)) {
+    // The newest copy, whoever changed it. One writer at a time (both write
+    // data.json.tmp); a state that finds the other writing stays pending.
+    xSemaphoreTake(lh_mx, portMAX_DELAY);
+    store_t *st = store_find(s->pkg.id);
+    bool pending = st && st->loaded && st->ver != st->saved;
+    bool busy = pending && st->writing;
+    char *json = NULL;
+    size_t len = 0;
+    uint32_t ver = 0;
+    bool ok = true;
+    if (pending && !busy) {
+        ver = st->ver;
+        len = st->len;
+        json = st->json ? store_dup(st->json, st->len) : NULL;
+        ok = !st->json || json;         // a copy that can't be made stays pending
+        st->writing = ok;
+    }
+    xSemaphoreGive(lh_mx);
+    if (!pending || busy || !ok) {
+        s->store_dirty = pending;
+        s->store_saved = lh_now();
+        return;
+    }
+    // An empty copy (no data.json and nothing set since) has nothing to write.
+    if (json && !os_data_write(rel, json, len)) {
         printf("[lua:%s] storage: write failed\n", s->tag[0] ? s->tag : s->pkg.id);
         ok = false;
     }
     free(json);
-    s->store_dirty = !ok;
+    xSemaphoreTake(lh_mx, portMAX_DELAY);
+    st = store_find(s->pkg.id);
+    if (st) {
+        st->writing = false;
+        if (ok && (int32_t)(ver - st->saved) > 0) {
+            st->saved = ver;
+        }
+        pending = st->ver != st->saved;
+    }
+    xSemaphoreGive(lh_mx);
+    s->store_dirty = pending;
     s->store_saved = lh_now();
 }
 
 void lh_storage_close(lh_t *s)
 {
+    if (!s->store_held) {
+        return;                         // never took a reference: nothing to release
+    }
+    s->store_held = false;
     xSemaphoreTake(lh_mx, portMAX_DELAY);
     store_t *st = store_find(s->pkg.id);
+    bool lost = false;
     if (st && --st->users <= 0) {
+        lost = st->loaded && st->ver != st->saved;  // the last flush failed
         free(st->json);
         *st = (store_t){ 0 };
     }
     xSemaphoreGive(lh_mx);
+    if (lost) {
+        printf("[lua:%s] storage: data.json couldn't be written; the last changes are lost\n",
+               s->tag[0] ? s->tag : s->pkg.id);
+    }
 }
 
 // ---------------------------------------------------------------------------

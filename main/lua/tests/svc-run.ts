@@ -90,7 +90,7 @@ const svcList = async () => {
 };
 const svcLine = async (id: string) => (await svcList()).find((l) => l.startsWith(`app:${id} `)) ?? '';
 
-for (const id of ['t-svc', 't-svc-a', 't-svc-b', 't-svc-limits', 't-svc-mesh', 't-svc-store']) {
+for (const id of ['t-svc', 't-svc-a', 't-svc-b', 't-svc-limits', 't-svc-mesh', 't-svc-store', 't-svc-ref', 't-svc-rec']) {
     put(id, join(here, id));
 }
 // A badge that restarted while these two services were starting (a crash in their
@@ -280,6 +280,59 @@ if (haveC) {
 }
 
 // The boot's crash bookkeeping (set up at the start).
+// Storage references: the app holds its shared copy while its service fails before it
+// loaded storage (service.lua doesn't compile). The failed state must release nothing
+// of the app's: the app's set() after that reaches data.json.
+{
+    const m0 = lines.length;
+    const done = await openAndAllow('t-svc-ref', /t-svc-ref b set/);
+    ok(!!done && since(m0).some((l) => /t-svc-ref start: false/.test(l)), 'storage refs: the service failed to load, the app set b after');
+    cmd('open home');
+    await sleep(1500);
+    let data: any = {};
+    try { data = JSON.parse(new TextDecoder().decode(mod.FS.readFile('/sdcard/hh/apps/t-svc-ref/data.json'))); } catch { /* none */ }
+    ok(data.a === 1 && data.b === 2, `storage refs: a failed service leaves the app's storage working (${JSON.stringify(data)})`);
+    cmd('lua rm t-svc-ref');
+    await sleep(500);
+}
+
+// Start records: with services.json unwritable (a directory where its .tmp goes),
+// the app's own service.start runs the service (true); a start of a running one
+// stops nothing; a start nobody on screen asked for (here `svc start`; boot and
+// resumes take the same path) is refused with "card error" and never runs.
+{
+    mkdirp('/sdcard/hh/services.json.tmp');
+    let m0 = lines.length;
+    const st = await openAndAllow('t-svc-rec', /t-svc-rec start:/);
+    ok(/t-svc-rec start: true/.test(st ?? ''), `start record: the app's own start runs without a record (${st})`);
+    ok(!!(await waitFor(/\[t-svc-rec:svc\] up/, 3000, m0)), 'start record: its code ran');
+    cmd('open home');
+    await sleep(800);
+    m0 = lines.length;
+    cmd('svc start app:t-svc-rec');
+    await sleep(1500);
+    ok((await svcLine('t-svc-rec')).includes(' on '), `start record: starting a running service stops nothing (${await svcLine('t-svc-rec')})`);
+    cmd('svc stop app:t-svc-rec');
+    await waitFor(/t-svc-rec: ended/, 4000, m0);
+    m0 = lines.length;
+    cmd('svc start app:t-svc-rec');
+    const ans = await waitFor(/svc: start app:t-svc-rec/, 3000, m0);
+    await sleep(1500);
+    ok(/can't record it/.test(ans ?? ''), `start record: an unasked start is refused, with why (${ans})`);
+    ok(!since(m0).some((l) => /\[t-svc-rec:svc\] up/.test(l)), 'start record: its code never ran');
+    ok((await svcLine('t-svc-rec')).includes('Not started: the card'), `start record: Services says why (${await svcLine('t-svc-rec')})`);
+    mod.FS.rmdir('/sdcard/hh/services.json.tmp');
+    m0 = lines.length;
+    cmd('svc start app:t-svc-rec');
+    ok(!!(await waitFor(/\[t-svc-rec:svc\] up/, 4000, m0)), 'start record: starts once the card can record it');
+    const sj2 = JSON.parse(new TextDecoder().decode(mod.FS.readFile('/sdcard/hh/services.json')));
+    ok(!!sj2['t-svc-rec'], 'start record: and it is in services.json');
+    cmd('svc stop app:t-svc-rec');
+    await waitFor(/t-svc-rec: ended/, 4000, m0);
+    cmd('lua rm t-svc-rec');
+    await sleep(500);
+}
+
 ok(!since(bootMark).some((l) => /t-svc-boot2?:svc started/.test(l)), 'boot: services whose last start never finished are not started');
 ok((await svcLine('t-svc-boot')).includes('Skipped: the badge restarted as it started'), `boot: skipped once (${await svcLine('t-svc-boot')})`);
 ok((await svcLine('t-svc-boot2')).includes('Off: it kept restarting the badge'), `boot: off after the third (${await svcLine('t-svc-boot2')})`);

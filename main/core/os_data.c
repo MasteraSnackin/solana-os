@@ -94,6 +94,12 @@ bool os_data_write(const char *rel, const char *data, size_t len)
     }
     os_data_path(path, sizeof(path), rel);
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    struct stat st;
+    if (stat(path, &st) != 0 && stat(tmp, &st) == 0 && S_ISREG(st.st_mode)) {
+        // The last write's rename failed: the .tmp is the only complete copy.
+        // Put it in place before "wb" truncates it.
+        rename(tmp, path);
+    }
     FILE *f = fopen(tmp, "wb");
     if (!f) {
         ESP_LOGW(TAG, "can't write %s", tmp);

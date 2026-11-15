@@ -344,6 +344,16 @@ Collaborator), on 2.2.0's ESP-IDF master.
   Collaborator card title wraps instead of running off the screen; `mesh peers` names
   stations; the console keeps one line of history, not 32 (each line a long-lived strdup in
   SRAM).
+- **From the pull request's second review**: a state that ended before it loaded `storage`
+  (a service whose `service.lua` doesn't compile) no longer releases the app's shared copy,
+  which made the app's later `storage.set()` calls succeed without being kept: each state
+  releases the reference it took, once; unsaved changes belong to the shared copy, so the
+  last state to close writes them whoever made them, and the two never write `data.json` at
+  once. A replaced card file whose rename failed is put back in place before the next write.
+  The app's own `service.start` runs the service even when the card can't record the start
+  (it used to be stopped with a bare "stopped"); a start nobody asked for that can't be
+  recorded is refused with a reason (`card error`), and a start of a service already
+  running never stops it.
 - **From the pull request's review**: an app and its service writing different `storage`
   keys at once no longer lose one (the shared copy is replaced only if nobody replaced it
   since; else rebuilt and tried again; of one key the last writer wins: measured on a
