@@ -237,7 +237,7 @@ Collaborator), on 2.2.0's ESP-IDF master.
   built-in services register at boot (id, name, status line, state, start/stop, whether
   the owner may stop it, start at boot remembered in NVS `svc/<id>`, an unread count), and
   app services (`background` permission, `docs/LUA_API.md` "service", `docs/C_API.md`
-  "service") will show up through one provider hook from the Lua host. The mesh, X Dex
+  "service") show up through one provider hook from the Lua host. The mesh, X Dex
   swaps, Trade invites, the quest relay and the server link are listed (always on).
   `os_service_notify()` is the one way a service tells the owner something (a toast
   `<Service>: <text>`, an optional LED flash, one every 10 s); the status bar shows a bell
@@ -247,6 +247,22 @@ Collaborator), on 2.2.0's ESP-IDF master.
   `svc test on` and a restart register a test-only service. Measured on a prototype: opening
   and closing Services five times left the largest block as it was (98 304 B); the free heap
   moved by what the console's history costs per command (~40 B).
+- **App services** (`main/lua/lua_svc.c`, the `background` permission, `docs/LUA_API.md`
+  "service", `docs/C_API.md` "service"): an app's `service.lua` (a C app: a second
+  instance at `on_service_start`) keeps running after the app closes, in a state of its own
+  on one "svc" task: 1 MB of PSRAM heap, 100 000 instructions and a second per callback,
+  2 000 000 a minute, a tick a second, 4 timers >= 1 s, 8 events waiting, 3 services at once.
+  Its globals leave out the screen, LEDs, Wi-Fi, Bluetooth, sockets, the radio's channel and
+  everything that spends. The owner's yes is an `os_confirm`; `/sdcard/hh/services.json`
+  keeps it; services that were running start again ~10 s after boot; stops: the owner
+  (Services, `svc stop`), the app, removal, updates (paused around the swap), quest-app
+  expiry, three failures, low battery, low memory, a software update. The app and its
+  service share `storage`. `lua_host_call()` lets built-in code call a named callback in an
+  app's service and app; Mailbox's `on_mail` reaches a service through `lua_svc_call()`, and a
+  service reads its mail (`mail.list`, `mail.get`) but can't send any. C services share the one WebAssembly runtime:
+  they pause while a C app is open. Measured on a prototype: the svc task's 12 KB stack is
+  the SRAM cost (117 060 B malloc-able at the launcher with none, 103 412 with one, 103 944
+  with three); 20 stop/start cycles left the largest block as it was.
 - **Mailbox** (`game/mailbox.c`, `apps/mailbox/`, `lua/lua_mail.c`; the parent repo's
   docs/HHGTS.md "Mailbox" and server/API.md "Mailbox"). A built-in background service
   (`mailbox`: stoppable, starts at boot) collects the owner's notifications from Solana

@@ -124,7 +124,7 @@ static void watch(void *arg)
     if (c && c->open && !c->aimed) {
         uint32_t now = (uint32_t)esp_timer_get_time();
         uint32_t used = c->used_us + (c->running ? now - c->since_us : 0);
-        bool over = c->aot && used > LW_AOT_CALLBACK_MS * 1000u;
+        bool over = c->aot && used > (c->limit_ms ? c->limit_ms : LW_AOT_CALLBACK_MS) * 1000u;
         bool ceiling = now - c->cb_us > LW_CALLBACK_MAX_MS * 1000u;
         if (over || ceiling) {
             if (!c->kill) {

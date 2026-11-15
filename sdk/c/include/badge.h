@@ -3141,6 +3141,104 @@ static inline int solana_pda(const badge_bytes *seeds, int nseeds, const uint8_t
     return ok ? 0 : BADGE_ERR;
 }
 
+// ============================================================================
+// service (permission "background", Solana OS 2.3.0, C_API.md "service")
+// ============================================================================
+
+// 1 in a service instance (started at on_service_start), 0 in the app.
+static inline int sys_is_service(void)
+{
+    badge__fn("service.status");        // only a service has it
+    int is = sos_type(-1) == SOS_FN;
+    sos_pop(1);
+    return is;
+}
+
+// service.send's answer: 0, or BADGE_ERR ("not running", the queue full, too big).
+static inline int badge__call_sent(int32_t nargs)
+{
+    if (badge__call(nargs, 2)) {
+        return BADGE_ERR;
+    }
+    int ok = sos_to_bool(-2);
+    if (!ok) {
+        if (sos_type(-1) == SOS_STR) {
+            sos_to_str(-1, badge__err, sizeof badge__err);
+        } else {
+            badge__seterr("not running");
+        }
+    }
+    sos_pop(2);
+    return ok ? 0 : BADGE_ERR;
+}
+
+// In the app: start its service. The first time the badge asks the owner;
+// cb(user, result, err): err NULL when it runs, else "denied", "full",
+// "low battery", "busy", ... (LUA_API.md "service").
+static inline int service_start(badge_result_fn cb, void *user)
+{
+    badge__fn("service.start");
+    return badge__call_with_cb(0, badge__tr_result, (badge__fnptr)cb, user);
+}
+
+// Stops it (from either side); it won't start at boot until started again.
+static inline int service_stop(void)
+{
+    badge__fn("service.stop");
+    if (badge__call(0, 0)) {
+        return BADGE_ERR;
+    }
+    return 0;
+}
+
+// In the app: 1 while its service runs.
+static inline int service_running(void)
+{
+    badge__fn("service.running");
+    return badge__call_bool(0);
+}
+
+// A message (JSON, <= 1 KB): from the app to the service's on_message(),
+// from the service to the app's on_service() (only while the app is open).
+static inline int service_send(const char *json)
+{
+    badge__fn("service.send");
+    if (json_push(json)) {
+        sos_pop(1);
+        return BADGE_ERR;
+    }
+    return badge__call_sent(1);
+}
+
+// In the service: the line Services shows (<= 48 printable ASCII; "" = "Running").
+static inline int service_status(const char *line)
+{
+    badge__fn("service.status");
+    sos_push_cstr(line ? line : "");
+    if (badge__call(1, 0)) {
+        return BADGE_ERR;
+    }
+    return 0;
+}
+
+// In the service: a toast "<App>: text" (<= 80 characters), led 0xRRGGBB or
+// 0; one every 10 s. 0, or BADGE_ERR when it was dropped.
+static inline int service_notify(const char *text, uint32_t led)
+{
+    badge__fn("service.notify");
+    sos_push_cstr(text ? text : "");
+    sos_new_table();
+    if (led) {
+        sos_push_int((int32_t)(led & 0xFFFFFF));
+        sos_set(-2, "led", 3);
+    }
+    if (!badge__call_bool(2)) {
+        badge__seterr("dropped: one notice every 10 s");
+        return BADGE_ERR;
+    }
+    return 0;
+}
+
 #ifdef __cplusplus
 }
 #endif

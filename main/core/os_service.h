@@ -110,6 +110,9 @@ typedef struct {
     bool (*start)(const char *id, const char **why);    // the owner's start: no question asked (they pressed it)
     void (*stop)(const char *id);                       // the owner's stop: stops it and turns off boot
     bool (*set_boot)(const char *id, bool on);
+    // Optional (2.3.0, part 2): the system stops every app service (a
+    // software update): they keep their start-at-boot. why: their status.
+    void (*stop_all)(const char *why);
 } os_service_provider_t;
 
 // Register a built-in service (any time before os_service_boot(); OS task
@@ -138,6 +141,11 @@ bool os_service_find(const char *id, os_service_view_t *out);
 bool os_service_start(const char *id, const char **why);
 bool os_service_stop(const char *id, const char **why);
 bool os_service_set_boot(const char *id, bool on, const char **why);
+
+// OS task: stop every app service for the system's own reason (the software
+// update before its download): unlike the owner's stop they start again at
+// the next boot. why: the status they show ("Stopped: software update").
+void os_service_stop_apps(const char *why);
 
 // From any task: stop a service as if the owner had (Collaborator's server
 // asking to end, a low-battery rule). Runs on the OS task after the current

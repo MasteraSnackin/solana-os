@@ -100,6 +100,47 @@ enum { SOS_NONE = -1, SOS_NIL, SOS_BOOL, SOS_INT, SOS_NUM, SOS_STR, SOS_TABLE, S
 
 lw_t *lw_cur;
 
+// The runtime's holder (2.3.0): WAMR's globals are one set for the badge and
+// its locks are empty (lua_wasm_port.c), so a C app and a C service never
+// run it at once (lua_svc.c pauses C services for a C app).
+static portMUX_TYPE s_own_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool s_owned, s_owned_svc;
+
+bool lw_busy(void)
+{
+    return s_owned;
+}
+
+bool lw_busy_svc(void)
+{
+    return s_owned && s_owned_svc;
+}
+
+static bool claim(bool svc)
+{
+    portENTER_CRITICAL(&s_own_mux);
+    bool ok = !s_owned;
+    if (ok) {
+        s_owned = true;
+        s_owned_svc = svc;
+    }
+    portEXIT_CRITICAL(&s_own_mux);
+    return ok;
+}
+
+static void release(void)
+{
+    portENTER_CRITICAL(&s_own_mux);
+    s_owned = s_owned_svc = false;
+    portEXIT_CRITICAL(&s_own_mux);
+}
+
+// Per callback: an app's limits, or a service's (lua_aot.h).
+static uint32_t wasm_steps_max(const lh_t *s)
+{
+    return s->svc ? LW_SVC_WASM_STEPS : LUA_HOST_WASM_STEPS_MAX;
+}
+
 // on_key's numbers: s_key_names' order in lua_host.c (SOS_KEY_* in badge_abi.h).
 static const char *const s_keys[] = {"up", "down", "left", "right", "select", "back"};
 
@@ -147,7 +188,7 @@ static bool over_time(lw_t *w)
         if (c->ceiling) {
             lw_trap(w, LW_BUDGET, "The app ran over %d s in one callback", LW_CALLBACK_MAX_MS / 1000);
         } else {
-            lw_trap(w, LW_BUDGET, "Native code ran over %d ms in one callback", LW_AOT_CALLBACK_MS);
+            lw_trap(w, LW_BUDGET, "Native code ran over %d ms in one callback", (int)c->limit_ms);
         }
     }
     return true;
@@ -157,12 +198,12 @@ bool lw_charge(lw_t *w, uint32_t n)
 {
     lh_t *s = w->s;
     s->steps += n;
-    if (s->steps <= LUA_HOST_STEPS_MAX) {
+    if (s->steps <= s->steps_max) {
         return true;
     }
     if (!w->fatal) {
         s->killed = true;
-        lw_trap(w, LW_BUDGET, LH_HOST_STEPS_MSG, LUA_HOST_STEPS_MAX);
+        lw_trap(w, LW_BUDGET, LH_HOST_STEPS_MSG, (int)s->steps_max);
     }
     return false;
 }
@@ -215,7 +256,7 @@ static void wamr_reason(lw_t *w)
             if (map[i].kind == LW_ERR) {
                 lw_trap(w, LW_ERR, "%s (%s)", map[i].say, map[i].wamr);
             } else if (map[i].kind == LW_BUDGET) {
-                lw_trap(w, LW_BUDGET, "Over %d wasm instructions in one callback", LUA_HOST_WASM_STEPS_MAX);
+                lw_trap(w, LW_BUDGET, "Over %d wasm instructions in one callback", (int)wasm_steps_max(w->s));
             } else {
                 lw_trap(w, map[i].kind, "%s", map[i].say);
             }
@@ -1255,7 +1296,7 @@ static bool enter(lua_State *L, lw_t *w, wasm_function_inst_t fn, uint32_t argc,
         // on_key) share what's left of it.
         if (w->seq != s->cb_seq) {
             w->seq = s->cb_seq;
-            w->left = LUA_HOST_WASM_STEPS_MAX;
+            w->left = (int)wasm_steps_max(s);
             w->clk.used_us = 0;
             w->clk.tries = 0;
             w->clk.cb_us = (uint32_t)esp_timer_get_time();
@@ -1308,13 +1349,15 @@ static bool enter(lua_State *L, lw_t *w, wasm_function_inst_t fn, uint32_t argc,
             if (w->clk.used_us > s->wasm_stat.native_peak_us) {
                 s->wasm_stat.native_peak_us = w->clk.used_us;
             }
+            s->wasm_cpu = w->clk.used_us * LW_SVC_STEPS_PER_US;   // a service's minute (lua_svc.c)
         } else {
             int left = wasm_runtime_get_instruction_count_limit(w->env);
             w->left = left < 0 ? 0 : left;
-            uint32_t used = LUA_HOST_WASM_STEPS_MAX - (uint32_t)w->left;
+            uint32_t used = wasm_steps_max(s) - (uint32_t)w->left;
             if (used > s->wasm_stat.steps_peak) {
                 s->wasm_stat.steps_peak = used;
             }
+            s->wasm_cpu = used;
         }
         update_stats(w);
     }
@@ -1442,8 +1485,23 @@ static void call_export(lua_State *L, lw_t *w, const char *name)
     }
 }
 
+void lw_call_named(lua_State *L, lh_t *s, const char *fn)
+{
+    lw_t *w = s->wasm;
+    if (!w || !w->inst || w->fatal || w->exiting) {
+        return;
+    }
+    wasm_function_inst_t f = wasm_runtime_lookup_function(w->inst, fn);
+    if (!f || wasm_func_get_param_count(f, w->inst) != 0 || wasm_func_get_result_count(f, w->inst) != 0) {
+        return;                             // not exported, or not (void) -> void: not a callback
+    }
+    uint32_t argv[1];
+    enter(L, w, f, 0, argv);
+}
+
 // The main chunk: instantiate, check the ABI, run the C library's
-// constructors (_initialize, wasi-libc's reactor start), then on_start.
+// constructors (_initialize, wasi-libc's reactor start), then on_start (a
+// service instance: on_service_start, 2.3.0).
 static int lw_main(lua_State *L)
 {
     lh_t *s = lh_get(L);
@@ -1460,7 +1518,8 @@ static int lw_main(lua_State *L)
         return luaL_error(L, "The app can't start: %s", err);
     }
     update_stats(w);
-    w->f_start = wasm_runtime_lookup_function(w->inst, "on_start");
+    const char *entry = s->svc ? "on_service_start" : "on_start";
+    w->f_start = wasm_runtime_lookup_function(w->inst, entry);
     w->f_key = wasm_runtime_lookup_function(w->inst, "on_key");
     w->f_tick = wasm_runtime_lookup_function(w->inst, "on_tick");
     w->f_exit = wasm_runtime_lookup_function(w->inst, "on_exit");
@@ -1495,7 +1554,7 @@ static int lw_main(lua_State *L)
     }
     call_export(L, w, "_initialize");
     if (!w->exiting) {
-        call_export(L, w, "on_start");
+        call_export(L, w, entry);
     }
     lua_settop(L, 0);
     return 0;
@@ -1570,9 +1629,11 @@ static void check_imports(lua_State *L, lw_t *w)
 static void check_exports(lua_State *L, lw_t *w)
 {
     static const struct { const char *name; uint8_t params, results; } want[] = {
-        {"on_start", 0, 0}, {"on_key", 2, 1}, {"on_tick", 1, 0}, {"on_exit", 0, 0}, {"on_mesh", 0, 0},
-        {"on_meet", 0, 1}, {"on_mail", 0, 0}, {"badge_abi", 0, 1}, {"_initialize", 0, 0},
+        {"on_start", 0, 0}, {"on_service_start", 0, 0}, {"on_key", 2, 1}, {"on_tick", 1, 0}, {"on_exit", 0, 0},
+        {"on_mesh", 0, 0}, {"on_meet", 0, 1}, {"on_mail", 0, 0}, {"badge_abi", 0, 1}, {"_initialize", 0, 0},
+        {"on_service", 0, 0}, {"on_message", 0, 0}, {"on_stop", 0, 0},
     };
+    size_t entry = w->s->svc ? 1 : 0;       // the instance's on_start: a service's is on_service_start
     bool start = false;
     int32_t n = wasm_runtime_get_export_count(w->mod);
     for (int32_t i = 0; i < n; i++) {
@@ -1597,11 +1658,11 @@ static void check_exports(lua_State *L, lw_t *w)
             if (!ok) {
                 luaL_error(L, "The app's %s has the wrong type (see badge_abi.h)", want[k].name);
             }
-            start = start || k == 0;
+            start = start || k == entry;
         }
     }
     if (!start) {
-        luaL_error(L, "The app has no on_start");
+        luaL_error(L, entry ? "The app has no on_service_start (a C app's service needs it)" : "The app has no on_start");
     }
 }
 
@@ -1642,6 +1703,12 @@ void lw_boot(lua_State *L, lh_t *s)
         luaL_error(L, "not enough memory");
     }
     memset(w, 0, sizeof(*w));
+    if (!claim(s->svc != NULL)) {
+        lh_mem_realloc(s, w, sizeof(*w), 0);
+        luaL_error(L, s->svc ? "A C app is using the badge's WebAssembly runtime"
+                             : "A C service is using the badge's WebAssembly runtime: try again in a moment");
+    }
+    w->claimed = true;
     w->s = s;
     w->refs_ref = LUA_NOREF;
     w->xip.slot = -1;
@@ -1740,6 +1807,7 @@ void lw_boot(lua_State *L, lh_t *s)
     lua_pushcfunction(L, lw_main);
     w->clk.aot = w->aot;
     w->clk.task = xTaskGetCurrentTaskHandle();
+    w->clk.limit_ms = s->svc ? LW_SVC_CALLBACK_MS : LW_AOT_CALLBACK_MS;
     lw_aot_watch(&w->clk);                  // both forms: the ceiling (and native time)
     if (w->aot) {
         ESP_LOGI(TAG, "%s: app.aot, %ld bytes, native from flash slot %d (%s; signature %lu us, slot %lu us)", id,
@@ -1784,7 +1852,11 @@ void lw_close(lh_t *s)
     }
     lw_cur = NULL;
     s->wasm = NULL;
+    bool claimed = w->claimed;
     lh_mem_realloc(s, w, sizeof(*w), 0);
+    if (claimed) {
+        release();                          // after WAMR is down: the next C program may boot
+    }
 }
 
 // ---------------------------------------------------------------------------

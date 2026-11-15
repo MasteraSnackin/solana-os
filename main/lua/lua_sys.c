@@ -10,6 +10,8 @@
 #include "core/os_cloud.h"
 #include "core/os_data.h"
 #include "core/os_wifi.h"
+#include "core/os_mem.h"
+#include "esp_heap_caps.h"
 #include "lua_priv.h"
 
 // ---------------------------------------------------------------------------
@@ -105,10 +107,13 @@ static int add_timer(lua_State *L, bool every)
     if (s->ui_off) {
         return 0;       // closing: nothing will fire
     }
-    if (ms < LH_TIMER_MIN_MS) {
-        ms = LH_TIMER_MIN_MS;
+    // A service (2.3.0): 4 timers, none faster than a second.
+    int max = s->svc ? LH_SVC_TIMER_MAX : LH_TIMER_MAX;
+    lua_Integer min = s->svc ? LH_SVC_TIMER_MIN_MS : LH_TIMER_MIN_MS;
+    if (ms < min) {
+        ms = min;
     }
-    for (int i = 0; i < LH_TIMER_MAX; i++) {
+    for (int i = 0; i < max; i++) {
         lh_timer_t *t = &s->timers[i];
         if (t->id) {
             continue;
@@ -121,7 +126,7 @@ static int add_timer(lua_State *L, bool every)
         lua_pushinteger(L, t->id);
         return 1;
     }
-    return luaL_error(L, "too many timers (%d)", LH_TIMER_MAX);
+    return luaL_error(L, "too many timers (%d)", max);
 }
 
 static int l_after(lua_State *L)
@@ -306,11 +311,92 @@ static int l_badge_online(lua_State *L)
 }
 
 // ---------------------------------------------------------------------------
-// storage: data.json, kept as a table; set() re-encodes it (≤ 16 KB) and the
-// write happens at most once a second, and on exit.
+// storage: data.json, kept as a table per state; set() re-encodes it (≤ 16 KB)
+// into the app's shared copy, which data.json gets at most once a second and
+// when the state closes. The app and its background service (2.3.0) share
+// that copy: a state whose table is older than the copy (the other one set
+// something) builds its table again from it at its next get or set, so each
+// sees the other's writes at once, and data.json always gets the newest.
+// The copy lives in PSRAM when there is some: a service keeps nothing in SRAM.
+
+#define STORE_SHARED    (1 + LUA_SVC_MAX)
+
+typedef struct {
+    char id[LUA_PKG_ID_MAX + 1];        // "": free
+    char *json;                         // NULL: empty (no data.json)
+    size_t len;
+    uint32_t ver;
+    int users;
+    bool loaded;
+} store_t;
+
+static store_t s_store[STORE_SHARED];   // under lh_mx
+
+static char *store_dup(const char *p, size_t len)
+{
+    char *d = heap_caps_malloc(len + 1, os_mem_psram() ? OS_MEM_PSRAM : MALLOC_CAP_DEFAULT);
+    if (d) {
+        memcpy(d, p, len);
+        d[len] = 0;
+    }
+    return d;
+}
+
+static store_t *store_find(const char *id)  // lh_mx held
+{
+    for (int i = 0; i < STORE_SHARED; i++) {
+        if (s_store[i].id[0] && !strcmp(s_store[i].id, id)) {
+            return &s_store[i];
+        }
+    }
+    return NULL;
+}
+
+// The shared copy, duplicated (NULL: empty), and its version.
+static char *store_copy(const char *id, size_t *len, uint32_t *ver)
+{
+    xSemaphoreTake(lh_mx, portMAX_DELAY);
+    store_t *st = store_find(id);
+    char *d = st && st->json ? store_dup(st->json, st->len) : NULL;
+    *len = d ? st->len : 0;
+    *ver = st ? st->ver : 0;
+    xSemaphoreGive(lh_mx);
+    return d;
+}
+
+// Pushes the table json decodes to, or a new one (missing, broken, not a table).
+static void store_push(lua_State *L, const char *json, size_t len)
+{
+    int top = lua_gettop(L);
+    if (!json || lh_json_decode(L, json, len) || !lua_istable(L, -1)) {
+        lua_settop(L, top);
+        lua_newtable(L);
+    }
+}
+
+// The other side set something since this table was built: build it again.
+static void store_refresh(lua_State *L, lh_t *s)
+{
+    xSemaphoreTake(lh_mx, portMAX_DELAY);
+    store_t *st = store_find(s->pkg.id);
+    bool stale = st && st->ver != s->store_ver;
+    xSemaphoreGive(lh_mx);
+    if (!stale) {
+        return;
+    }
+    size_t len;
+    uint32_t ver;
+    char *json = store_copy(s->pkg.id, &len, &ver);
+    store_push(L, json, len);
+    free(json);
+    luaL_unref(L, LUA_REGISTRYINDEX, s->store_ref);
+    s->store_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    s->store_ver = ver;
+}
 
 static int store_table(lua_State *L, lh_t *s)
 {
+    store_refresh(L, s);
     lua_rawgeti(L, LUA_REGISTRYINDEX, s->store_ref);
     return lua_gettop(L);
 }
@@ -340,16 +426,31 @@ static int l_set(lua_State *L)
     lua_pushvalue(L, 2);
     lua_rawset(L, t);
     lh_jbuf_t b = { .max = LH_STORAGE_MAX };
-    if (!lh_json_encode(L, t, &b)) {
-        free(b.p);
+    char *copy = NULL;
+    bool ok = lh_json_encode(L, t, &b);
+    if (ok && !(copy = store_dup(b.p, b.len))) {
+        b.err = "not enough memory";
+        ok = false;
+    }
+    free(b.p);
+    if (!ok) {
         lua_pushvalue(L, 1);
         lua_pushvalue(L, -2);
         lua_rawset(L, t);
         return luaL_error(L, "storage: %s", !strcmp(b.err, "too big") ? "full (16 KB per app)" : b.err);
     }
-    free(s->store_pending);
-    s->store_pending = b.p;
-    s->store_len = b.len;
+    xSemaphoreTake(lh_mx, portMAX_DELAY);
+    store_t *st = store_find(s->pkg.id);
+    if (st) {
+        free(st->json);
+        st->json = copy;
+        st->len = b.len;
+        s->store_ver = ++st->ver;
+        copy = NULL;
+    }
+    xSemaphoreGive(lh_mx);
+    free(copy);
+    s->store_dirty = true;
     return 0;
 }
 
@@ -363,34 +464,77 @@ static int l_remove(lua_State *L)
 bool lh_storage_load(lh_t *s)
 {
     lua_State *L = s->L;
-    char rel[64];
-    lua_pkg_rel(rel, sizeof(rel), s->pkg.id, "data.json");
-    size_t len = 0;
-    int top = lua_gettop(L);
-    char *json = os_data_read(rel, LH_STORAGE_MAX, &len);
-    const char *err = json ? lh_json_decode(L, json, len) : "missing";
-    free(json);
-    if (err || !lua_istable(L, -1)) {
-        lua_settop(L, top);
-        lua_newtable(L);
+    const char *id = s->pkg.id;
+    xSemaphoreTake(lh_mx, portMAX_DELAY);
+    store_t *st = store_find(id);
+    for (int i = 0; !st && i < STORE_SHARED; i++) {
+        if (!s_store[i].id[0]) {
+            st = &s_store[i];
+            *st = (store_t){ 0 };
+            strlcpy(st->id, id, sizeof(st->id));
+        }
     }
+    if (st) {
+        st->users++;
+    }
+    bool need = st && !st->loaded;
+    xSemaphoreGive(lh_mx);
+    if (need) {
+        // The first state of this app reads the card (outside the lock: the
+        // mesh task takes it too); a second one finds the copy.
+        char rel[64];
+        lua_pkg_rel(rel, sizeof(rel), id, "data.json");
+        size_t len = 0;
+        char *raw = os_data_read(rel, LH_STORAGE_MAX, &len);
+        char *json = raw ? store_dup(raw, len) : NULL;
+        free(raw);
+        xSemaphoreTake(lh_mx, portMAX_DELAY);
+        if (!st->loaded) {
+            st->json = json;
+            st->len = json ? len : 0;
+            st->loaded = true;
+            json = NULL;
+        }
+        xSemaphoreGive(lh_mx);
+        free(json);
+    }
+    size_t len;
+    uint32_t ver;
+    char *json = store_copy(id, &len, &ver);
+    store_push(L, json, len);
+    free(json);
     s->store_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    s->store_ver = ver;
     return true;
 }
 
 void lh_storage_flush(lh_t *s, bool force)
 {
-    if (!s->store_pending || (!force && lh_now() - s->store_saved < LH_STORAGE_SAVE_MS)) {
+    if (!s->store_dirty || (!force && lh_now() - s->store_saved < LH_STORAGE_SAVE_MS)) {
         return;
     }
     char rel[64];
     lua_pkg_rel(rel, sizeof(rel), s->pkg.id, "data.json");
-    if (!os_data_write(rel, s->store_pending, s->store_len)) {
-        printf("[lua:%s] storage: write failed\n", s->pkg.id);
+    size_t len;
+    uint32_t ver;
+    char *json = store_copy(s->pkg.id, &len, &ver);
+    if (json && !os_data_write(rel, json, len)) {
+        printf("[lua:%s] storage: write failed\n", s->tag[0] ? s->tag : s->pkg.id);
     }
-    free(s->store_pending);
-    s->store_pending = NULL;
+    free(json);
+    s->store_dirty = false;
     s->store_saved = lh_now();
+}
+
+void lh_storage_close(lh_t *s)
+{
+    xSemaphoreTake(lh_mx, portMAX_DELAY);
+    store_t *st = store_find(s->pkg.id);
+    if (st && --st->users <= 0) {
+        free(st->json);
+        *st = (store_t){ 0 };
+    }
+    xSemaphoreGive(lh_mx);
 }
 
 // ---------------------------------------------------------------------------

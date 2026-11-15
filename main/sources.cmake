@@ -106,6 +106,7 @@ set(SOLANA_OS_SRCS
     lua/lua_host.c lua/lua_ui.c lua/lua_sys.c lua/lua_net.c lua/lua_json.c lua/lua_pkg.c lua/lua_cmd.c
     lua/lua_fs.c lua/lua_install.c lua/lua_code.c lua/lua_ws.c lua/lua_img.c lua/lua_png.c lua/lua_gif.c lua/lua_meet.c
     lua/lua_ble.c lua/lua_crypto.c lua/lua_wasm.c lua/lua_wasi.c lua/lua_wasm_port.c lua/lua_aot_trust.c
+    lua/lua_svc.c  # background services (2.3.0)
     ${SOLANA_OS_LUA_VENDOR_SRCS}
     ${SOLANA_OS_WAMR_SRCS}
     assets/sol_mono_12.c assets/sol_font_14.c assets/sol_font_20.c assets/sol_font_32.c

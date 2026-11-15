@@ -13,6 +13,7 @@
 #include "core/os_cloud.h"
 #include "core/os_data.h"
 #include "lua_aot.h"
+#include "lua_host.h"
 #include "lua_install.h"
 #include "lua_pkg.h"
 #include "vendor/lua.h"
@@ -20,7 +21,7 @@
 #define HASH_CHUNK  1024
 
 static const char *const s_perm_names[LUA_PERM_COUNT] = {
-    "led", "wifi", "mesh", "lamps", "items", "profile", "quest", "http", "rpc", "ble", "mail",
+    "led", "wifi", "mesh", "lamps", "items", "profile", "quest", "http", "rpc", "ble", "mail", "background",
 };
 
 static const char *const s_perm_texts[LUA_PERM_COUNT] = {
@@ -35,6 +36,7 @@ static const char *const s_perm_texts[LUA_PERM_COUNT] = {
     "Read and send to Solana",
     "Talk to Bluetooth devices",
     "Sends you and others notifications",
+    "Runs in the background",
 };
 
 const char *lua_perm_name(int i)
@@ -413,6 +415,7 @@ bool lua_pkg_remove(const char *id)
     if (!lua_pkg_valid_id(id) || lua_install_busy(id)) {
         return false;
     }
+    lua_svc_forget(id);                     // its background service stops and is forgotten (2.3.0)
     snprintf(rel, sizeof(rel), "apps/%s", id);
     return os_data_remove(rel);
 }

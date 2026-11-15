@@ -293,3 +293,43 @@ bool lua_host_open_mail(const char *app, uint32_t id)
     }
     return true;
 }
+
+// The service side of on_mail (2.3.0): the same table as mail.get, as JSON
+// through the services' call queue (lua_svc_call), so the app on screen
+// (lua_host_mail above) never gets it twice. ≤ ~600 bytes: title 32, text
+// 200, data 128 and the header fit LUA_SVC_MSG_MAX.
+void lua_host_mail_service(const char *app, uint32_t id)
+{
+    if (!app || !app[0]) {
+        return;
+    }
+    mailbox_mail_t *m = malloc(sizeof(*m));
+    if (!m || !mailbox_get(id, m) || strcmp(m->h.app, app)) {
+        free(m);
+        return;
+    }
+    cJSON *j = cJSON_CreateObject();
+    if (j) {
+        cJSON_AddNumberToObject(j, "id", m->h.id);
+        cJSON_AddStringToObject(j, "from", m->h.from);
+        if (m->h.by[0]) {
+            cJSON_AddStringToObject(j, "by", m->h.by);
+        }
+        cJSON_AddStringToObject(j, "title", m->h.title);
+        cJSON_AddNumberToObject(j, "at", m->h.at);
+        cJSON_AddBoolToObject(j, "read", m->h.read);
+        cJSON_AddStringToObject(j, "text", m->text);
+        cJSON_AddNumberToObject(j, "exp", m->h.exp);
+        cJSON *data = m->data[0] ? cJSON_Parse(m->data) : NULL;
+        if (data) {
+            cJSON_AddItemToObject(j, "data", data);
+        }
+        char *json = cJSON_PrintUnformatted(j);
+        if (json) {
+            lua_svc_call(app, "on_mail", json, LUA_PERM_MAIL);
+            cJSON_free(json);
+        }
+        cJSON_Delete(j);
+    }
+    free(m);
+}

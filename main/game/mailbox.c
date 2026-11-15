@@ -513,9 +513,9 @@ static void page_cb(int status, const char *body, void *ctx)
     cJSON_Delete(root);
     for (int i = 0; i < ntold; i++) {
         lua_host_mail(told[i].app, told[i].id);     // the app on screen, if it's that one
-        // SERVICE-SIDE on_mail: the app-services runtime (branch app-services) queues
-        // the named callback for the app's service here, at the merge, e.g.
-        // lua_service_callback(told[i].app, "on_mail", id).
+        // SERVICE-SIDE on_mail: the app's running service, through the services'
+        // call queue (lua_svc_call), never the app on screen a second time.
+        lua_host_mail_service(told[i].app, told[i].id);
     }
     if (more && after > before && ++s_pages < PAGES_MAX) {
         get_page();
