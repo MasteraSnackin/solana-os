@@ -427,6 +427,12 @@ static void led_frame(void *arg)
 
 static void led_start(bool sweep, uint32_t rgb, int frames)
 {
+    // While Collaborator's takeover screen shows, the LEDs are the event's (HHGTS.md
+    // "Collaborator": LEDs are part of the screen): a notice's flash (Mailbox, a
+    // service) must not break up a light show. The toast still says it.
+    if (os_current() == &app_collab_screen) {
+        return;
+    }
     if (!s_led_timer) {
         const esp_timer_create_args_t args = { .callback = led_frame, .name = "game_led" };
         if (esp_timer_create(&args, &s_led_timer) != ESP_OK) {
