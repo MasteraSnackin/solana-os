@@ -29,7 +29,7 @@
 // heap in PSRAM grows, so the allocator's PSRAM reserve can't protect them.
 // Every call that makes LVGL objects or grows what they hold (label:text,
 // ui.hint, qr:text, ...; 2.1.0) first checks that the SRAM malloc can take
-// (OS_MEM_SRAM_MALLOC, not the DMA pool) stays above LUA_HOST_SYS_RESERVE
+// (os_mem_sram_malloc_free(), not the DMA pool) stays above LUA_HOST_SYS_RESERVE
 // after it, plus what the app's lists, keyboard and images can still grow by
 // without a call (rows redrawn on a key, the keyboard's text, an image's line
 // buffer while it's drawn): lh_ui_room. The object cap alone isn't enough:

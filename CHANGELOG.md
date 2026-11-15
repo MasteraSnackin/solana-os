@@ -6,6 +6,38 @@ update only to a newer one. Dates are commit dates. The contracts these builds
 implement (`docs/LUA_API.md`, `docs/MESH.md`, `server/API.md`) and the server and
 site changes that came with them live in the parent repository.
 
+## 2.3.0 (unreleased)
+
+- **Built with ESP-IDF master** (was 6.0.1), pinned to commit `4109c8923a5`
+  (v6.1-dev-9359, 2026-11-12, `IDF_VERSION` 6.3.0) in `esp-idf.commit`: the top
+  `CMakeLists.txt` stops a build on any other commit of ESP-IDF (`SOLANA_OS_IDF_UNPINNED=1`
+  makes it a warning, to try a newer master). Toolchain GCC 16.1 (was 15.2), C built as
+  `gnu23`. `tools/build_web.sh` sources `~/.espressif/master/esp-idf/export.sh`.
+- **`components/esp_http_client/` is gone**: master has the keep-alive fix it carried
+  (esp-idf 44987dfd14, merged as 0e658fa1311). Measured: 35 requests on 2 connections.
+- **Over the air from older builds**: a master-built app boots on the 6.0.1 bootloader
+  of 2.0.0/2.1.0 badges, brings PSRAM up and confirms itself after an update (measured:
+  2.3.0 → 2.3.1 from a dev server on a production badge). `/stock` writes master's
+  bootloader; the partition table is byte-identical to 2.1.0's.
+- **Rollback**: master renamed `BOOTLOADER_APP_ROLLBACK_ENABLE` and confirms a new app at
+  startup by default; `sdkconfig.defaults` keeps "confirm by app"
+  (`CONFIG_BOOTLOADER_APP_ROLLBACK_CONFIRM_BY_APP`), so a build that never reaches the
+  launcher still rolls back.
+- **The SRAM figure malloc can take**: master gives the 32 KB DMA reserve pool
+  `MALLOC_CAP_DEFAULT` at its lowest priority (esp-idf 90a275f29ac), so
+  `heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT)` counts it although
+  malloc reaches it only after PSRAM. `os_mem_sram_malloc_free()`/`_min()` (`os_mem.h`)
+  take it off; the console's `sram:` line and the Lua UI guard (`lh_ui_room`) use them.
+- **CS pins**: master's `gpio_config()` reserves output pins, so driving both chip selects
+  high before the bus starts (and the card's after sdspi lets go) warned of a conflict
+  each time esp_lcd or sdspi took the pin. `bsp_sd.c` drives them as plain outputs.
+- **SRAM**: the unused SPI-slave and parallel-IO ISR options no longer pull the GDMA
+  control and link-list functions into IRAM (−1.8 KB). Master's Wi-Fi libraries still
+  take ~2.5 KB more static SRAM than 6.0.1's: ~3.7 KB less free heap than the same source
+  on 6.0.1 (measured on 4ZT2BX, My Badge open: 146.6 KB free with Wi-Fi joined, 156.3 KB
+  off; 6.0.1: 150.4 / 160.0 KB).
+- `os_http`'s per-connection log line also gives what the handshake took from SRAM.
+
 ## 2.2.0 (unreleased)
 
 - **C apps.** Store apps written in C (`docs/C_API.md`; the SDK in `sdk/c/`): the store

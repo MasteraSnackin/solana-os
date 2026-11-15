@@ -244,7 +244,7 @@ void lh_ui_room(lua_State *L, const char *what, size_t need)
 {
     lh_t *s = ui_session(L);
     size_t later = s ? ui_later(s) : 0;
-    if (heap_caps_get_free_size(OS_MEM_SRAM_MALLOC) < LUA_HOST_SYS_RESERVE + need + later) {
+    if (os_mem_sram_malloc_free() < LUA_HOST_SYS_RESERVE + need + later) {
         luaL_error(L, "%s: the badge is low on memory", what);
     }
 }

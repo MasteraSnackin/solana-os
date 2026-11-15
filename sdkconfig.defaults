@@ -17,12 +17,16 @@ CONFIG_SOLANA_OS_SERVER_URL="https://badge-api.solana.com"
 
 # App metadata shown in About / info
 CONFIG_APP_PROJECT_VER_FROM_CONFIG=y
-CONFIG_APP_PROJECT_VER="2.2.0"
+CONFIG_APP_PROJECT_VER="2.3.0"
 
 # Over-the-air updates (core/os_ota.c): a new build boots on trial and the
 # bootloader goes back to the previous slot unless it confirms itself. This
 # lives in the bootloader, which OTA never rewrites: it takes a /stock flash.
-CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# ESP-IDF master (2.3.0) renamed ROLLBACK_ENABLE and made the app confirm
+# itself at startup by default: the badge confirms once it reaches the
+# launcher (os_ota_flash.c), so it keeps "confirm by app".
+CONFIG_BOOTLOADER_APP_ROLLBACK=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_CONFIRM_BY_APP=y
 
 # FAT long file names
 CONFIG_FATFS_LFN_HEAP=y
@@ -71,7 +75,16 @@ CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 # the heap broke as soon as anything used them (measured on both kinds of
 # badge, 2.0.0).
 CONFIG_SPI_FLASH_ROM_IMPL=n
+# Implied by HEAP_PLACE_FUNCTION_INTO_FLASH (Kconfig hides it then); kept as
+# the statement of intent.
 CONFIG_SPI_MASTER_ISR_IN_IRAM=n
+# The badge has no SPI slave and no parallel IO, yet their ISR options (on by
+# default, linked or not) pulled the GDMA control functions into IRAM, and on
+# ESP-IDF master the GDMA link-list ones too (2.3.0). The SPI master's ISR,
+# which uses them, runs from flash already (above).
+CONFIG_SPI_SLAVE_ISR_IN_IRAM=n
+CONFIG_PARLIO_TX_ISR_HANDLER_IN_IRAM=n
+CONFIG_PARLIO_RX_ISR_HANDLER_IN_IRAM=n
 CONFIG_RINGBUF_PLACE_ISR_FUNCTIONS_INTO_FLASH=y
 CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y
 CONFIG_LIBC_LOCKS_PLACE_IN_IRAM=n
@@ -101,6 +114,9 @@ CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_CONTROLLER_ENABLED=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# The three CONFIG_BT_LE_* lines (MAX_CONNECTIONS, 50_FEATURE_SUPPORT,
+# WHITELIST_SIZE) are the controller's own and hidden while NimBLE is the
+# host, whose BT_NIMBLE_* twins govern instead (ESP-IDF 6.0.1 and master).
 CONFIG_BT_LE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y

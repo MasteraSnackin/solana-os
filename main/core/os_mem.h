@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "esp_heap_caps.h"
+#include "sdkconfig.h"
 
 #define OS_MEM_SRAM     (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
 #define OS_MEM_PSRAM    (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
@@ -24,6 +25,20 @@
 // floor that must leave the badge SRAM it can malloc measures this one
 // (2.1.0; 2.0.1's UI check counted the pool, so it protected almost nothing).
 #define OS_MEM_SRAM_MALLOC  (MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT)
+
+// Read that figure through os_mem_sram_malloc_free()/_min(), not
+// heap_caps_get_free_size(OS_MEM_SRAM_MALLOC). ESP-IDF master (2.3.0, esp-idf
+// 90a275f29ac) gives the pool MALLOC_CAP_DEFAULT at its lowest priority:
+// malloc() still reaches it only once PSRAM is full too, but the caps query
+// now counts it, and no caps tell it from the rest of the SRAM. So the pool's
+// size comes off. Nothing takes from the pool while the rest of the SRAM has
+// room (explicit DMA and internal requests use it last as well), so this is
+// exact until the SRAM is nearly full and errs low after, the safe side.
+#if CONFIG_SPIRAM && defined(CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL)
+#define OS_MEM_SRAM_POOL    CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL
+#else
+#define OS_MEM_SRAM_POOL    0
+#endif
 
 // PSRAM is in the heap.
 static inline bool os_mem_psram(void)
@@ -43,4 +58,20 @@ static inline unsigned os_mem_bulk_caps(void)
 static inline unsigned os_mem_tls_caps(void)
 {
     return os_mem_psram() ? OS_MEM_PSRAM : MALLOC_CAP_DEFAULT;
+}
+
+static inline size_t os_mem_sram_less_pool(size_t n)
+{
+    size_t pool = os_mem_psram() ? OS_MEM_SRAM_POOL : 0;
+    return n > pool ? n - pool : 0;
+}
+
+static inline size_t os_mem_sram_malloc_free(void)
+{
+    return os_mem_sram_less_pool(heap_caps_get_free_size(OS_MEM_SRAM_MALLOC));
+}
+
+static inline size_t os_mem_sram_malloc_min(void)
+{
+    return os_mem_sram_less_pool(heap_caps_get_minimum_free_size(OS_MEM_SRAM_MALLOC));
 }

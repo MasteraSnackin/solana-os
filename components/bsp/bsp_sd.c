@@ -51,21 +51,26 @@ static uint64_t s_total_bytes, s_free_bytes;
 #define LOCK()   xSemaphoreTakeRecursive(s_lock, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGiveRecursive(s_lock)
 
+// Level first, then the output, so the pin never glitches low.
+static void drive_high(gpio_num_t pin)
+{
+    gpio_set_level(pin, 1);
+    gpio_pullup_en(pin);
+    gpio_output_enable(pin);
+}
+
 esp_err_t bsp_spi_bus_init(void)
 {
     static bool s_done;
     if (s_done) {
         return ESP_OK;
     }
-    // Deselect both devices before the first clock edge on the bus.
-    gpio_config_t cs = {
-        .pin_bit_mask = BIT64(BOARD_LCD_CS) | BIT64(BOARD_SD_CS),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&cs), TAG, "cs gpio");
-    gpio_set_level(BOARD_LCD_CS, 1);
-    gpio_set_level(BOARD_SD_CS, 1);
+    // Deselect both devices before the first clock edge on the bus. A plain
+    // output, not gpio_config(): since ESP-IDF master (2.3.0) gpio_config()
+    // reserves an output pin, and esp_lcd and sdspi claim these CS pins later
+    // (a "conflict" warning each time, and the reservation outlives us).
+    drive_high(BOARD_LCD_CS);
+    drive_high(BOARD_SD_CS);
 
     spi_bus_config_t bus = {
         .sclk_io_num = BOARD_SPI_SCK,
@@ -146,9 +151,7 @@ static uint8_t raw_cmd(uint8_t cmd, uint32_t arg, bool select)
 // sdspi leaves CS as an undriven input when its device is removed.
 static void drive_cs_high(void)
 {
-    gpio_config_t cs = { .pin_bit_mask = BIT64(BOARD_SD_CS), .mode = GPIO_MODE_OUTPUT };
-    gpio_config(&cs);
-    gpio_set_level(BOARD_SD_CS, 1);
+    drive_high(BOARD_SD_CS);
 }
 
 // Leave CS driven high and the card in idle state after it is released.
