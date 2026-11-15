@@ -2213,7 +2213,7 @@ Bun.serve({
 ## Example
 
 ```lua
--- Tap counter that pays 1 !LAMP per 100 taps (needs an award allowance: ask DevRel on Telegram).
+-- Tap counter that pays 1 !LAMP per 100 taps (needs an award allowance: ask for one when you publish).
 local taps = storage.get("taps") or 0
 local title = ui.label(0, 60, "Taps", {size=20, w=ui.W, align="center"})
 local count = ui.label(0, 100, tostring(taps), {size=32, w=ui.W, align="center", color="green"})
@@ -2310,11 +2310,19 @@ end
   apps that harm players (taking !LAMPs by deception, asking for passwords, sending
   data away, hiding what they do), usually within a minute. What it flags waits for an
   organiser; until then only you see the app, or the store keeps your previous version.
-  `lamps.award` pays nothing until the DevRel team gives the app an allowance (its award
-  cap, the most each player earns a day): ask them in our
-  [Telegram chat](https://t.me/+FbTI1ucYgAQxYmQx) with the app's id, what it awards
-  !LAMPs for and how much a player should earn a day. The submit page, the app's page and
-  Your apps remind you while the code calls `lamps.award` and the app has none.
+  `lamps.award` pays nothing until an organiser grants the app an allowance (its award
+  cap: the most each player earns from it in a UTC day, counted per X account, since only
+  players with X linked earn; 0 to 1,000,000 !LAMPs). **Ask for one when you publish**: with
+  the `lamps` permission, the submit page has a "!LAMPs allowance" field for the amount and a
+  line on why (what players earn for, how often). A version that asks for an amount other
+  than the app's allowance (more, less or none) always waits for an organiser, even when only
+  its details changed; approving it grants the amount the organiser decides (what you asked,
+  unless they change it, with a note saying why), and turning it down keeps the allowance
+  as it was. You get a notice in your badge's Mailbox either way. Leave the field empty to
+  keep what the app has. Your apps and the app's page show every app's allowance (none
+  too), how much it paid today and what came of your last request; only you and the
+  organisers see them. A test run pays only within the published app's allowance, never
+  the one you asked for.
   An app with an award cap (`lamps.award`) waits for an organiser after every change to
   its code, files, permissions or hosts, even when the check passes; the store keeps
   your previous version and its cap meanwhile. An account (and an X account) has at
