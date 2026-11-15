@@ -1102,6 +1102,59 @@ int profile_get(const char *badge_id, profile_fn cb, void *user);
 
 Empty strings where Lua has `nil` (no X, no linked or public Solana address).
 
+The player's items and Guide pages (permission `inventory`, Solana OS 2.3.0; the badge's own
+owner only, [Lua](LUA_API.md#the-players-items-and-guide-pages-permission-inventory-solana-os-230)
+has what each field means, the paging and the limits):
+
+```c
+int profile_items(const char *cursor, badge_result_fn cb, void *user);
+//   result: {items = [...], next = "..." | nil, total = n}
+int profile_pages(const char *cursor, badge_result_fn cb, void *user);
+//   result: {pages = [...], next = "..." | nil, owned = n, total = n}
+void profile_item_info(badge_val item, profile_item_t *out);
+//   profile_item_t { char id[24], kind[33], name[41], app[25], quest[49]; int tradable; }  ("" for nil)
+void profile_page_info(badge_val page, profile_page_t *out);
+//   profile_page_t { char id[49], title[49], category[16], rarity[16]; int32_t number, count; }
+```
+
+`cursor` is `NULL` (or `""`) for the first page, then the result's `next`, read with
+`badge_field_str(result, "next", buf, cap)` (it returns 0 or less at the end). An app that
+shows how many of the Guide's pages its player has:
+
+```c
+#include <stdio.h>
+#include "badge.h"
+
+static ui_obj s_line;
+
+static void on_pages(void *user, badge_val r, const char *err)
+{
+    char next[160], text[64];
+    (void)user;
+    if (err) {
+        ui_label_text(s_line, err);
+        return;
+    }
+    if (badge_field_str(r, "next", next, sizeof next) > 0) {   // more to come: walk on
+        profile_pages(next, on_pages, NULL);
+        return;
+    }
+    snprintf(text, sizeof text, "You hold %d of the Guide's %d pages",
+             (int)badge_field_int(r, "owned", 0), (int)badge_field_int(r, "total", 0));
+    ui_label_text(s_line, text);
+}
+
+void on_start(void)
+{
+    s_line = ui_label(8, 8, "Counting your pages...", &(ui_label_opts){.size = 20, .w = 304});
+    profile_pages(NULL, on_pages, NULL);
+}
+```
+
+(`owned` and `total` come with every page, so an app that only wants the count can stop at
+the first answer; walking on is how it would read each page's `count` or `rarity`, with
+`badge_push_field(r, "pages")`, `badge_len` and `badge_push_index`.)
+
 ### `quest` (permission `quest`, [Lua](LUA_API.md#quest-permission-quest))
 
 ```c

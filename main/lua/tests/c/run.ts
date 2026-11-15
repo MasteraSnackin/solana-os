@@ -110,6 +110,9 @@ const expect: Record<string, Expect> = {
     't-c-fr-name0': { title: 'App error', error: /files_read: the pointer 0x7ffffff0 \(32 bytes\) is outside the app's memory/ },
     't-c-fr-nameread': { title: 'App error', error: /files_read: the pointer 0x7ffffff0 \(8 bytes\) is outside the app's memory/ },
     't-c-fr-namestraddle': { title: 'App error', error: /files_read: the pointer 0x[0-9a-f]+ \(16 bytes\) is outside the app's memory/ },
+    // No inventory server here: the walk stops at the first answer's error, and the app keeps running
+    // (server/test/invemu.test.ts walks it to the end against a real server).
+    't-c-inv': { noError: true, print: [/\] t-c-inv items error: /] },
     't-c-abi': { title: 'App error', error: /needs a newer Solana OS \(its C ABI is 99, this badge's 1\)/ },
     't-c-f-loop': { title: 'App took too long', error: /Over 2000000 wasm instructions in one callback/, wait: 3000 },
     't-c-f-loopcb': { title: 'App took too long', error: /Over 2000000 wasm instructions in one callback/, wait: 3000 },

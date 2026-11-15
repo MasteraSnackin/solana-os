@@ -70,6 +70,34 @@ static uint16_t frame[16 * 16];
         }                                                                       \
     } while (0)
 
+// profile_items / profile_pages: the list under its field, each entry, and the cursor.
+static void on_inv(void *user, badge_val r, const char *err)
+{
+    char next[160];
+    (void)user;
+    if (err) {
+        return;
+    }
+    int pages = badge_field_type(r, "pages") == SOS_TABLE;
+    badge_val list = badge_push_field(r, pages ? "pages" : "items");
+    for (uint32_t i = 0; i < badge_len(list); i++) {
+        badge_val e = badge_push_index(list, (int32_t)i);
+        if (pages) {
+            profile_page_t pg;
+            profile_page_info(e, &pg);
+        } else {
+            profile_item_t it;
+            profile_item_info(e, &it);
+        }
+        badge_pop(1);
+    }
+    badge_pop(1);
+    if (badge_field_str(r, "next", next, sizeof next) > 0) {
+        T(profile_items(next, on_inv, NULL));
+    }
+    (void)badge_field_int(r, "total", 0);
+}
+
 void on_start(void)
 {
     char buf[64];
@@ -187,6 +215,7 @@ void on_start(void)
     T(items_list(on_result, NULL)); T(items_all(on_result, NULL)); T(items_grant("k", "n", "{}", on_result, NULL));
     T(items_update("id", "{}", on_result, NULL)); T(items_remove("id", on_result, NULL));
     T(profile_me(on_profile, NULL)); T(profile_get("7K2Q9M", on_profile, NULL));
+    T(profile_items(NULL, on_inv, NULL)); T(profile_pages("", on_inv, NULL));
     T(quest_report("done", "{}", on_result, NULL)); T(quest_active(on_result, NULL));
 
     T(http_get("https://api.example.com/", on_http, NULL));

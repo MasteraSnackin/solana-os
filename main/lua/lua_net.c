@@ -1,4 +1,5 @@
 // mesh, lamps, items, profile, quest, http and rpc for Lua apps (docs/LUA_API.md).
+// profile.items and profile.pages (2.3.0) read the owner's inventory: permission "inventory".
 // ws is in lua_ws.c; while its socket is open, calls here fail with "socket open".
 //
 // Server calls go through os_api with the app id fixed by the host. A sent
@@ -25,7 +26,7 @@
 typedef enum {
     OP_BALANCE, OP_SPEND, OP_TRANSFER, OP_DEPOSIT, OP_AWARD,
     OP_ITEMS, OP_GRANT, OP_UPDATE, OP_REMOVE,
-    OP_ME, OP_PROFILE,
+    OP_ME, OP_PROFILE, OP_INV_ITEMS, OP_INV_PAGES,
     OP_REPORT, OP_ACTIVE,
     OP_HTTP, OP_RPC,
     OP_MEETS,
@@ -42,6 +43,7 @@ static const struct {
     [OP_ITEMS] = {LUA_PERM_ITEMS, "items"}, [OP_GRANT] = {LUA_PERM_ITEMS, NULL},
     [OP_UPDATE] = {LUA_PERM_ITEMS, NULL}, [OP_REMOVE] = {LUA_PERM_ITEMS, "ok"},
     [OP_ME] = {LUA_PERM_PROFILE, NULL}, [OP_PROFILE] = {LUA_PERM_PROFILE, NULL},
+    [OP_INV_ITEMS] = {LUA_PERM_INVENTORY, NULL}, [OP_INV_PAGES] = {LUA_PERM_INVENTORY, NULL},
     [OP_REPORT] = {LUA_PERM_QUEST, NULL}, [OP_ACTIVE] = {LUA_PERM_QUEST, "items"},
     [OP_HTTP] = {LUA_PERM_HTTP, NULL}, [OP_RPC] = {LUA_PERM_RPC, "result"},
     [OP_MEETS] = {LUA_PERM_MESH, NULL},
@@ -552,6 +554,42 @@ static int l_profile_get(lua_State *L)
     snprintf(tail, sizeof(tail), "profile/%s", id);
     app_path(L, path, sizeof(path), tail);
     return start(L, OP_PROFILE, "GET", path, 0, 2, NULL);
+}
+
+// profile.items([cursor,] cb) / profile.pages([cursor,] cb): one page of the owner's
+// inventory (server/API.md "Player inventory"); the answer's `next` is the cursor for the
+// rest. A cursor is the server's opaque base64url text, so it goes in the query as is.
+static int inventory_get(lua_State *L, op_t op, const char *what)
+{
+    char tail[24 + LH_CURSOR_MAX], path[64 + sizeof(tail)];
+    snprintf(tail, sizeof(tail), "inventory/%s", what);
+    if (lua_gettop(L) >= 1 && !lua_isfunction(L, 1)) {
+        if (!lua_isnil(L, 1)) {
+            const char *cursor = luaL_checkstring(L, 1);
+            size_t n = strlen(cursor);
+            bool ok = n > 0 && n <= LH_CURSOR_MAX;
+            for (size_t i = 0; ok && i < n; i++) {
+                char c = cursor[i];
+                ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+            }
+            luaL_argcheck(L, ok, 1, "not a cursor (pass the answer's next)");
+            strlcat(tail, "?cursor=", sizeof(tail));   // copied while the string is still on the stack
+            strlcat(tail, cursor, sizeof(tail));
+        }
+        lua_remove(L, 1);
+    }
+    app_path(L, path, sizeof(path), tail);
+    return start(L, op, "GET", path, 0, 1, NULL);
+}
+
+static int l_profile_items(lua_State *L)
+{
+    return inventory_get(L, OP_INV_ITEMS, "items");
+}
+
+static int l_profile_pages(lua_State *L)
+{
+    return inventory_get(L, OP_INV_PAGES, "pages");
 }
 
 static int l_report(lua_State *L)
@@ -1297,7 +1335,8 @@ void lh_open_net(lua_State *L)
         {"list", l_items_list}, {"all", l_items_all}, {"grant", l_grant}, {"update", l_update},
         {"remove", l_items_remove}, {NULL, NULL},
     };
-    static const luaL_Reg profile[] = {{"me", l_me}, {"get", l_profile_get}, {NULL, NULL}};
+    static const luaL_Reg profile[] = {{"me", l_me}, {"get", l_profile_get}, {"items", l_profile_items},
+                                       {"pages", l_profile_pages}, {NULL, NULL}};
     static const luaL_Reg quest[] = {{"report", l_report}, {"active", l_active}, {NULL, NULL}};
     static const luaL_Reg mesh[] = {{"nearby", l_mesh_nearby}, {"send", l_mesh_send}, {"bridge", l_mesh_bridge},
                                     {"meet", lh_mesh_meet}, {"meets", l_mesh_meets}, {"pause", l_mesh_pause},

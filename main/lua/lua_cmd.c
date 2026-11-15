@@ -74,7 +74,7 @@ static int cmd_list(void)
     }
     for (int i = 0; i < n; i++) {
         const lua_pkg_t *p = &pkgs[i];
-        char perms[64] = "";
+        char perms[128] = "";
         for (int b = 0; b < LUA_PERM_COUNT; b++) {
             if (p->perms & (1u << b)) {
                 strlcat(perms, perms[0] ? "," : "", sizeof(perms));

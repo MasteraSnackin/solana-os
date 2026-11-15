@@ -1063,7 +1063,7 @@ static void svc_libs(lua_State *L)
     static const char *const sys[] = {"millis", "time", "battery", "memory", NULL};
     static const char *const lamps[] = {"balance", NULL};
     static const char *const items[] = {"list", "all", NULL};
-    static const char *const profile[] = {"me", "get", NULL};
+    static const char *const profile[] = {"me", "get", "items", "pages", NULL};
     static const char *const mesh[] = {"send", "nearby", "meet", "meets", NULL};
     keep(L, "sys", sys);
     keep(L, "lamps", lamps);

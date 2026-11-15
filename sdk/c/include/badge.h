@@ -2827,6 +2827,77 @@ static inline int profile_get(const char *badge_id, profile_fn cb, void *user)
 }
 
 // ============================================================================
+// the player's inventory: profile_items, profile_pages (permission "inventory", Solana OS 2.3.0)
+// ============================================================================
+
+// One page of what the badge's owner holds. cursor: NULL or "" for the first page,
+// else the previous result's "next" (badge_field_str(result, "next", ...); nil at the
+// end). result: {items = {...}, next = "...", total = n} / {pages = {...}, next =
+// "...", owned = n, total = n}; walk its list with badge_push_field, badge_len and
+// badge_push_index, and read each entry with profile_item_info / profile_page_info.
+typedef struct {
+    char id[24];
+    char kind[33];
+    char name[41];
+    char app[25];    // the store app that made it, "" if none
+    char quest[49];  // the quest that gave it, "" if none
+    int tradable;
+} profile_item_t;
+
+typedef struct {
+    char id[49];
+    char title[49];
+    char category[16];
+    char rarity[16];
+    int32_t number;
+    int32_t count;   // copies held
+} profile_page_t;
+
+static inline void profile_item_info(badge_val item, profile_item_t *out)
+{
+    memset(out, 0, sizeof *out);
+    badge_field_str(item, "id", out->id, sizeof out->id);
+    badge_field_str(item, "kind", out->kind, sizeof out->kind);
+    badge_field_str(item, "name", out->name, sizeof out->name);
+    badge_field_str(item, "app", out->app, sizeof out->app);
+    badge_field_str(item, "quest", out->quest, sizeof out->quest);
+    out->tradable = badge_field_bool(item, "tradable");
+}
+
+static inline void profile_page_info(badge_val page, profile_page_t *out)
+{
+    memset(out, 0, sizeof *out);
+    badge_field_str(page, "id", out->id, sizeof out->id);
+    badge_field_str(page, "title", out->title, sizeof out->title);
+    badge_field_str(page, "category", out->category, sizeof out->category);
+    badge_field_str(page, "rarity", out->rarity, sizeof out->rarity);
+    out->number = badge_field_int(page, "number", 0);
+    out->count = badge_field_int(page, "count", 0);
+}
+
+// Each wrapper names its function in a literal of its own: the store's code check credits
+// a name to badge.h only where a wrapper spells it out (server/src/capi.ts).
+static inline int profile_items(const char *cursor, badge_result_fn cb, void *user)
+{
+    badge__fn("profile.items");
+    int n = cursor && cursor[0] ? 1 : 0;
+    if (n) {
+        sos_push_cstr(cursor);
+    }
+    return badge__call_with_cb(n, badge__tr_result, (badge__fnptr)cb, user);
+}
+
+static inline int profile_pages(const char *cursor, badge_result_fn cb, void *user)
+{
+    badge__fn("profile.pages");
+    int n = cursor && cursor[0] ? 1 : 0;
+    if (n) {
+        sos_push_cstr(cursor);
+    }
+    return badge__call_with_cb(n, badge__tr_result, (badge__fnptr)cb, user);
+}
+
+// ============================================================================
 // quest (permission "quest")
 // ============================================================================
 

@@ -90,7 +90,11 @@ if [ -x "$fw/tools/cc/badge-cc" ] && [ -x "$tc/wasi-sdk/bin/clang" ]; then
     mkdir -p "$out/t-c-mail"
     "$fw/tools/cc/badge-cc" "$here/t-c-mail" -o "$out/t-c-mail/app.wasm" -q
     cp "$here/t-c-mail/app.json" "$out/t-c-mail/app.json"
+    # badge.h's profile_items / profile_pages (2.3.0); the server test invemu.test.ts runs it against a server.
+    mkdir -p "$out/t-c-inv"
+    "$fw/tools/cc/badge-cc" "$here/t-c-inv" -o "$out/t-c-inv/app.wasm" -q
+    cp "$here/t-c-inv/app.json" "$out/t-c-inv/app.json"
 else
-    echo "no SDK toolchain (tools/cc/fetch.sh): t-c-libc, t-c-bench, host-probe and t-c-mail skipped"
+    echo "no SDK toolchain (tools/cc/fetch.sh): t-c-libc, t-c-bench, host-probe, t-c-mail and t-c-inv skipped"
 fi
 ls "$out" | wc -l | xargs echo "apps built:"

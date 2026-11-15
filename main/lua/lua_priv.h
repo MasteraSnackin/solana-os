@@ -61,6 +61,7 @@
 #define LH_MEET_MAX         100         // bytes of JSON per side of a mesh.meet
 #define LH_CALLS_MAX        16          // server calls waiting or in flight per app
 #define LH_CALLS_SENT       3           // at once in os_api, whose queue the OS shares
+#define LH_CURSOR_MAX       128         // a server cursor (profile.items / pages): base64url
 #define LH_JSON_DEPTH       16          // nesting; bounds the decoder's recursion
 #define LH_LED_COUNT        8
 #define LH_FS_READ_MAX      LUA_PKG_FILE_MAX    // fs.read / fs.json per call: a whole file (16 KB before 2.0.0)
