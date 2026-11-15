@@ -16,3 +16,7 @@ function on_tick(ms)
   if i <= 200 then storage.set("a" .. i, i) end
   if i % 100 == 0 then print(("t-svc-store a=%d s=%d"):format(count("a"), count("s"))) end
 end
+-- On a badge (not in the emulator, whose tasks take turns) this also races the
+-- shared copy's commits; t-svc-final races the two last saves (hardware, see its
+-- header). Both are run with tools/badge.py-style drivers: lua recv the files
+-- (bundled ones by their bare path, e.g. "service.lua"), lua run, key select once.

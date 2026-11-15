@@ -90,7 +90,7 @@ const svcList = async () => {
 };
 const svcLine = async (id: string) => (await svcList()).find((l) => l.startsWith(`app:${id} `)) ?? '';
 
-for (const id of ['t-svc', 't-svc-a', 't-svc-b', 't-svc-limits', 't-svc-mesh', 't-svc-store', 't-svc-ref', 't-svc-rec']) {
+for (const id of ['t-svc', 't-svc-a', 't-svc-b', 't-svc-limits', 't-svc-mesh', 't-svc-store', 't-svc-ref', 't-svc-rec', 't-svc-final']) {
     put(id, join(here, id));
 }
 // A badge that restarted while these two services were starting (a crash in their
@@ -293,6 +293,34 @@ if (haveC) {
     try { data = JSON.parse(new TextDecoder().decode(mod.FS.readFile('/sdcard/hh/apps/t-svc-ref/data.json'))); } catch { /* none */ }
     ok(data.a === 1 && data.b === 2, `storage refs: a failed service leaves the app's storage working (${JSON.stringify(data)})`);
     cmd('lua rm t-svc-ref');
+    await sleep(500);
+}
+
+// Last saves: each round the service pads storage and stops itself (its last save)
+// while the app sets "r" and exits; the next launch reads both back. The emulator's
+// tasks take turns, so the two last saves never overlap here: this checks the path
+// and the bookkeeping. The overlap itself is a badge test (t-svc-final/main.lua,
+// driven a few hundred rounds with the timing swept; see its header).
+{
+    let m0 = lines.length;
+    await openAndAllow('t-svc-final', /t-svc-final round n=1 /);
+    await waitFor(/t-svc-final: ended/, 4000, m0);
+    let okAll = true;
+    let last = '';
+    for (let i = 0; i < 4; i++) {
+        await sleep(800);
+        m0 = lines.length;
+        cmd('lua run t-svc-final');
+        const c = await waitFor(/t-svc-final check n=(\d+) r=(\d+)/, 4000, m0);
+        last = c ?? 'no check';
+        const m = c?.match(/n=(\d+) r=(\d+)/);
+        if (!m || m[1] !== m[2]) okAll = false;
+        await waitFor(/t-svc-final: ended/, 4000, m0);
+    }
+    ok(okAll, `last saves: the app's last key is on the card every round (${last})`);
+    cmd('open home');
+    await sleep(800);
+    cmd('lua rm t-svc-final');
     await sleep(500);
 }
 

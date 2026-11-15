@@ -352,16 +352,36 @@ typedef struct {
     bool writing;                       // a flush is writing data.json (one at a time)
 } store_t;
 
-// Who owns the entry, line by line: lh_storage_load() creates it or joins
-// it and counts this state as a user (store_held) before anything that can
-// fail; whatever way the state ends (the load failed, its boot errored, a
-// normal close, a service stopped by a limit) close_state() runs
-// lh_storage_flush(force) and then lh_storage_close(), which releases that
-// one reference and nothing else, so a state that never took one (an error
-// before the load) can't drop the other side's. Pending changes belong to
-// the entry, not to the state that made them: any state's flush writes the
-// newest copy, so the last one to leave saves whatever the other left
-// unsaved (a write that failed); then the entry is freed.
+// THE RULES of the shared copy (every function below follows them):
+//  - The entry (store_t) exists while at least one state holds it. A state
+//    takes its one reference in lh_storage_load() (store_held), before
+//    anything there can fail, and gives back exactly that one in
+//    lh_storage_close(); a state that never took one (an error before the
+//    load) releases nothing. close_state() (lua_host.c, lua_svc.c) runs
+//    lh_storage_flush(force) and then lh_storage_close() whatever way the
+//    state ends.
+//  - Every field is read and changed only under lh_mx, which is never held
+//    across a card access, a delay or a Lua call.
+//  - data.json is read only while the entry isn't loaded yet (no state has a
+//    copy, so nobody writes it then); of two first holders loading at once,
+//    the first to finish installs its copy and the other drops its own.
+//  - set() replaces json only if ver still equals the version its table was
+//    built from (else it rebuilds and retries), and bumps ver: a commit.
+//  - The card gets data.json from lh_storage_flush() only, one writer at a
+//    time (writing: set and cleared by the same flush, both under lh_mx); the
+//    copy written is the newest at that moment, whoever committed it, and
+//    saved moves to its version only when the write succeeded.
+//  - A periodic flush that finds the other state writing leaves the change
+//    pending (store_dirty) for its next one. A state's last flush (force)
+//    does not return before every version committed when it began (all of
+//    them once it is the only holder) is on the card: it waits for a write
+//    in flight, then writes the newest copy. Versions the other state
+//    commits later are that state's to save (its own last flush waits the
+//    same way), so a last flush writes at most once more and never chases.
+//  - Lost, only when the card fails: a write that fails is not retried by a
+//    last flush, and a wait longer than STORE_FINAL_MS (a stalled card) stops
+//    waiting; whatever is unsaved when the last holder closes is then logged
+//    and freed with the entry.
 
 static store_t s_store[STORE_SHARED];   // under lh_mx
 
@@ -586,6 +606,13 @@ bool lh_storage_load(lh_t *s)
     return true;
 }
 
+// A last flush's wait for the other state's write in flight is bounded: the
+// app's error path runs it with the LVGL lock held, and the OS task waits
+// LH_EXIT_WAIT_MS (2 s) for an app to close. A data.json write takes tens of
+// ms (16 KB at most), so only a stalled card reaches it.
+#define STORE_FINAL_MS      2000
+#define STORE_FINAL_POLL_MS 20
+
 void lh_storage_flush(lh_t *s, bool force)
 {
     if (!s->store_held || (!force && (!s->store_dirty || lh_now() - s->store_saved < LH_STORAGE_SAVE_MS))) {
@@ -593,45 +620,67 @@ void lh_storage_flush(lh_t *s, bool force)
     }
     char rel[64];
     lua_pkg_rel(rel, sizeof(rel), s->pkg.id, "data.json");
-    // The newest copy, whoever changed it. One writer at a time (both write
-    // data.json.tmp); a state that finds the other writing stays pending.
-    xSemaphoreTake(lh_mx, portMAX_DELAY);
-    store_t *st = store_find(s->pkg.id);
-    bool pending = st && st->loaded && st->ver != st->saved;
-    bool busy = pending && st->writing;
-    char *json = NULL;
-    size_t len = 0;
-    uint32_t ver = 0;
-    bool ok = true;
-    if (pending && !busy) {
-        ver = st->ver;
-        len = st->len;
-        json = st->json ? store_dup(st->json, st->len) : NULL;
-        ok = !st->json || json;         // a copy that can't be made stays pending
-        st->writing = ok;
-    }
-    xSemaphoreGive(lh_mx);
-    if (!pending || busy || !ok) {
-        s->store_dirty = pending;
-        s->store_saved = lh_now();
-        return;
-    }
-    // An empty copy (no data.json and nothing set since) has nothing to write.
-    if (json && !os_data_write(rel, json, len)) {
-        printf("[lua:%s] storage: write failed\n", s->tag[0] ? s->tag : s->pkg.id);
-        ok = false;
-    }
-    free(json);
-    xSemaphoreTake(lh_mx, portMAX_DELAY);
-    st = store_find(s->pkg.id);
-    if (st) {
-        st->writing = false;
-        if (ok && (int32_t)(ver - st->saved) > 0) {
-            st->saved = ver;
+    int64_t t0 = lh_now();
+    bool pending = false;
+    bool have_target = false;
+    uint32_t target = 0;                // a last flush: the version that must reach the card
+    for (;;) {
+        xSemaphoreTake(lh_mx, portMAX_DELAY);
+        store_t *st = store_find(s->pkg.id);
+        if (st && !have_target) {
+            target = st->ver;           // what was committed when this flush began
+            have_target = true;
         }
-        pending = st->ver != st->saved;
+        if (st && st->users <= 1) {
+            target = st->ver;           // the only holder: nobody else can commit any more
+        }
+        pending = st && st->loaded && st->ver != st->saved;
+        bool needed = pending && (!force || (int32_t)(target - st->saved) > 0);
+        bool busy = needed && st->writing;
+        char *json = NULL;
+        size_t len = 0;
+        uint32_t ver = 0;
+        bool ok = true;
+        if (needed && !busy) {
+            ver = st->ver;
+            len = st->len;
+            json = st->json ? store_dup(st->json, st->len) : NULL;
+            ok = !st->json || json;     // a copy that can't be made stays pending
+            st->writing = ok;
+        }
+        xSemaphoreGive(lh_mx);
+        if (!needed || !ok) {
+            break;                      // saved (or not needed by this one), or no memory for the copy
+        }
+        if (busy) {
+            // The other state is writing. A periodic flush leaves it pending (its
+            // next one tries again); a last one waits for that write to end.
+            if (!force || lh_now() - t0 >= STORE_FINAL_MS) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(STORE_FINAL_POLL_MS));
+            continue;
+        }
+        // An empty copy (no data.json and nothing set since) has nothing to write.
+        if (json && !os_data_write(rel, json, len)) {
+            printf("[lua:%s] storage: write failed\n", s->tag[0] ? s->tag : s->pkg.id);
+            ok = false;
+        }
+        free(json);
+        xSemaphoreTake(lh_mx, portMAX_DELAY);
+        st = store_find(s->pkg.id);     // still ours: this state holds a reference
+        if (st) {
+            st->writing = false;
+            if (ok && (int32_t)(ver - st->saved) > 0) {
+                st->saved = ver;
+            }
+            pending = st->ver != st->saved;
+        }
+        xSemaphoreGive(lh_mx);
+        // The copy written was the newest, so it covers the target: done, unless
+        // the write failed (not retried here: the card is failing).
+        break;
     }
-    xSemaphoreGive(lh_mx);
     s->store_dirty = pending;
     s->store_saved = lh_now();
 }

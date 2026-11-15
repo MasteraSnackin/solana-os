@@ -344,6 +344,15 @@ Collaborator), on 2.2.0's ESP-IDF master.
   Collaborator card title wraps instead of running off the screen; `mesh peers` names
   stations; the console keeps one line of history, not 32 (each line a long-lived strdup in
   SRAM).
+- **From the pull request's third review**: an app and its service closing at the same time
+  no longer lose the last change of one of them. A state's last save that found the other
+  state writing used to leave the change to that writer and close, and the writer, holding
+  an older copy and closing too, freed it. Now a last save waits for the write in flight
+  (at most 2 s) and then writes the newest copy, so every version committed before it began
+  reaches the card; later ones belong to the other state, whose own last save does the same.
+  Measured on 4ZT2BX with tests/t-svc-final (the service's last save on the card while the
+  app sets a key and exits, 300 rounds): 2.3.0's first build lost the app's key in 20,
+  this one in none; a close that waited ended within 280 ms of the other's write.
 - **From the pull request's second review**: a state that ended before it loaded `storage`
   (a service whose `service.lua` doesn't compile) no longer releases the app's shared copy,
   which made the app's later `storage.set()` calls succeed without being kept: each state
