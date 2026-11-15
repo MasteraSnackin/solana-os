@@ -1,7 +1,7 @@
 # Solana OS C SDK
 
 Write App Store apps for the Solana BP26 badge in C. The store compiles your C to
-WebAssembly and to the badge's native code; the badge (Solana OS 2.2.0 and later) runs
+WebAssembly and to the badge's native code; the badge (Solana OS 2.3.0 and later) runs
 it in a sandbox with the same API, permissions and limits as a Lua app. A store install
 runs the native code, in place from the badge's flash; everything else (the emulator,
 Run on badge, your own build copied over the console) interprets the WebAssembly, which

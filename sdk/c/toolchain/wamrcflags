@@ -1,6 +1,6 @@
 # wamrc flags that turn app.wasm into the badge's native code (app.aot), one
 # argument a line (# starts a comment). ESP32-C5: single-core RV32IMAC, no FPU.
-# Measured on a badge (Solana OS 2.2.0, CHANGELOG): this set loads and runs in
+# Measured on a badge (Solana OS 2.3.0, CHANGELOG): this set loads and runs in
 # place from a flash slot, every trap comes back as an error, and it is 26 %
 # smaller and faster than plain --xip. Change AOT_TARGET in `versions` with
 # any change here.
@@ -25,6 +25,6 @@
 # llvm.cttz.*, not i32.ctz (a name wamrc ignores, AOT_TARGET -1). Without it
 # LLVM looks ctz up in a table in .rodata, a relocation in the code that the
 # badge refuses ("cannot apply relocation to text section"): every app using
-# wasi-libc's printf or qsort (measured, Solana OS 2.2.0).
+# wasi-libc's printf or qsort (measured, Solana OS 2.3.0).
 --xip
 --enable-builtin-intrinsics=fp.common,fpxint,i64.div_s,i64.div_u,i64.rem_s,i64.rem_u,f32_demote_f64,f64_promote_f32,llvm.cttz.i32,llvm.cttz.i64

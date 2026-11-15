@@ -128,7 +128,7 @@ ignores the channel).
 
 ### C apps: WAMR's interpreter
 
-C apps (Solana OS 2.2.0, `main/lua/lua_wasm.c`) run in the same WAMR
+C apps (Solana OS 2.3.0, `main/lua/lua_wasm.c`) run in the same WAMR
 interpreter as on the badge, compiled from the same sources with the same
 `WASM_ENABLE_*` settings (`main/sources.cmake`), two differences aside: no AOT
 runtime (`platform/lua_aot_emu.c` says no, so the emulator always interprets

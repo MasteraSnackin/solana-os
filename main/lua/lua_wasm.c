@@ -1,4 +1,4 @@
-// C apps (2.2.0, docs/C_API.md): a store app compiled to WebAssembly, run by
+// C apps (2.3.0, docs/C_API.md): a store app compiled to WebAssembly, run by
 // WAMR (lua/wamr/, WAMR 2.4.5) inside the Lua host.
 //
 // The Lua host stays the host. A C app gets the usual Lua state with every

@@ -42,7 +42,7 @@ typedef struct {
     const char *symbol;
     int price;
     bool owned;
-    bool c;                 // a C app (2.2.0, "lang": "c"): a small tag in rows and details
+    bool c;                 // a C app (2.3.0, "lang": "c"): a small tag in rows and details
 } entry_t;
 
 typedef struct {

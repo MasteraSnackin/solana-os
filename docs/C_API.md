@@ -1,6 +1,6 @@
 # Solana OS C apps
 
-From Solana OS 2.2.0 an App Store app can be written in C. The store compiles it to
+From Solana OS 2.3.0 an App Store app can be written in C. The store compiles it to
 WebAssembly and to the badge's native code, and the badge runs it in a sandbox next to
 the Lua apps. A C app has exactly the [Lua API](LUA_API.md): the same modules, the same
 permissions, the same limits (only the CPU limit is its own: "Limits"), reached through
@@ -43,7 +43,7 @@ works on its own memory (copying, drawing into its own frame), slower in API cal
 | Runs as | Lua bytecode, from flash | native code (`app.aot`) in place from flash, or the WebAssembly in WAMR's interpreter |
 | Its own memory | Lua tables and strings | a WebAssembly linear memory: `malloc`, arrays, structs (≤ 4 MB) |
 | Drawing | `ui.canvas` calls | the same, plus whole RGB565 frames with `ui_canvas_blit` |
-| Badges | Solana OS 0.5.0+ | Solana OS 2.2.0+ |
+| Badges | Solana OS 0.5.0+ | Solana OS 2.3.0+ |
 
 ## The package
 
@@ -106,7 +106,7 @@ apps"):
 `aot` is there only when the store has a native form for the badge's current target (see
 "Security" for `sig`).
 
-**C apps need Solana OS 2.2.0 or later.** The store offers them only to badges that run
+**C apps need Solana OS 2.3.0 or later.** The store offers them only to badges that run
 it, and says so in the app's details on older ones, as it does for `ble` apps and 1.0.0.
 
 ## How it is compiled
@@ -204,7 +204,7 @@ the signed file, and runs `app.wasm` if anything fails ("Security"). The app beh
 same either way (the same API, messages and memory cap); only the speed and the CPU limit
 differ.
 
-Measured on a prototype badge (ESP32-C5 rev 1.2, Solana OS 2.2.0, USB power, Wi-Fi off):
+Measured on a prototype badge (ESP32-C5 rev 1.2, Solana OS 2.3.0, USB power, Wi-Fi off):
 
 | | Native (`app.aot`) | Interpreted (`app.wasm`) |
 |---|---|---|
@@ -247,7 +247,7 @@ checksum, and every column below got the same one. Four columns:
   plain arrays, methods looked up once).
 
 Measured on HYQ5VS, a prototype badge (ESP32-C5 rev 1.2), on USB power with Wi-Fi off,
-running a test build of Solana OS 2.2.0 that also takes a native file over the console,
+running a test build of Solana OS 2.3.0 that also takes a native file over the console,
 signed by the server's own signing code with a test key (the released build takes native
 code from the store only). A second pass with Wi-Fi joined gave numbers within 3 % of
 these for about half the cells and within 10 % for all but two Lua rows that draw on a
@@ -427,7 +427,7 @@ crypto), plus:
 | | |
 |---|---|
 | Memory | One cap, the Lua app's: 6 MB in PSRAM. It covers the app's linear memory (≤ 4 MB: its data, its 32 KB stack and `malloc`), WAMR's copy of the module (interpreted; native code stays in flash), its instance and its own 32 KB stack, and the Lua state behind the API (labels' text, loaded images, tables you get). `sys_memory()` reports the sum. When the cap would be passed by growing the linear memory, the growth is refused: `malloc` returns `NULL` and the app runs on. Anything else past it stops the app with "Out of memory". Measured in the emulator: the SDK's examples run with 121 to 221 KB in all. On a badge the benchmark got 3.94 MB of `malloc` before the 4 MB maximum ("Speed and limits: C against Lua") |
-| The badge's memory | Measured on a badge (Solana OS 2.2.0, Wi-Fi off): 125.4 KB of SRAM free for `malloc` and 8.36 MB of PSRAM at the launcher; with `hello` running, 110.2 KB and 8.24 MB native, 112.0 KB and 8.22 MB interpreted. Twenty native launches and exits left the free heap (157 KB) and its largest block (96 KB) as they were |
+| The badge's memory | Measured on a badge (Solana OS 2.3.0's C apps on ESP-IDF 6.0.1, Wi-Fi off): 125.4 KB of SRAM free for `malloc` and 8.36 MB of PSRAM at the launcher; with `hello` running, 110.2 KB and 8.24 MB native, 112.0 KB and 8.22 MB interpreted. Twenty native launches and exits left the free heap (157 KB) and its largest block (96 KB) as they were |
 | CPU, interpreted | 2 000 000 WebAssembly instructions per callback (about 0.45 s of a plain loop on a badge, "What runs where"). A callback's nested calls into the app share it (a list's `on_select` called from inside `on_key`, a C function called through `sos_call`), and so do `_initialize` and `on_start` at launch. `memset`, `memcpy` and `memmove` (WebAssembly's `memory.fill`, `memory.copy` and `memory.init`) cost one instruction per 4 bytes, so a callback moves at most 8 MB with them: on a badge `memset` writes about 12 KB a millisecond and `memmove` about 8 KB, while the interpreter runs 2 200 to 4 500 plain instructions, so 4 bytes take about an instruction's time. Past it: "App took too long". Measured: stuck apps stopped at exactly 2 000 000, with no watchdog warning; a loop of 3.75 MB `memset`s 0.96 s after launch and of `memmove`s 1.27 s (both counting 0.3 s to grow the memory first), of 64 KB `memory.init`s 1.0 s |
 | CPU, native | 200 ms of native time per callback, shared the same way. The app's own code counts, and so do `memset`, `memcpy` and `memmove` (the badge runs them in 4 KB pieces and stops between two); time inside the badge's API functions and while the linear memory grows doesn't (the API's work is bounded by the host's steps, below). Past it: "App took too long". Measured: a plain loop stopped after 204 to 210 ms of native time, a loop calling an API function after 204 to 210 ms, a spinning callback nested inside an API call after 203 to 207 ms, a loop spending its time in the software floating-point helpers after 207 to 295 ms, a loop of 3.75 MB `memset`s or `memmove`s after 200 to 201 ms, of `memory.init`s after 207 ms |
 | Host work | What the API functions do for the app counts against the host's 200 000 steps a callback, as for a Lua app, in both forms: reading files, `crypto`, drawing on a canvas, `ui_canvas_blit`, and the calls themselves. Every call into the badge costs 1 step and `sos_call` 4 more (a Lua call's own instructions); what one copies costs 1 step per 4 bytes (strings in and out: `sos_push_str`, `sos_to_str`, the keys of `sos_get` and `sos_set`); console output (`printf` and `badge_print()`, or Lua's `print` reached through the API) 32 steps a byte, since the console is a 115 200-baud serial line that writes about 11 bytes a millisecond, so a callback prints about 6 KB; `arc4random()` and `getentropy()` 6 steps a byte. Past it: "App took too long". Measured on a badge: a loop pushing 2.5 MB strings stopped at the first one (nothing copied), loops of 1 KB `fd_write`s or `sos_log`s after 6 KB of output, a 64 KB `print` before any of it, and the SDK's API probe (92 checks and their output in one `on_start`) used 119 886 steps |
@@ -475,7 +475,7 @@ The error screen's title and message, as the serial console also prints them
 | A callback past 3 s, whatever it was doing | App took too long | The app ran over 3 s in one callback |
 | The native form can't run (no store key on the badge yet, a signature that doesn't verify, a changed `app.aot`) and there is no `app.wasm` | App error | The app can't start: the store's signature doesn't verify, and it has no app.wasm. Install it again from the App Store |
 
-On a badge (Solana OS 2.2.0), every trap above, a bad pointer, an index outside the frame,
+On a badge (Solana OS 2.3.0), every trap above, a bad pointer, an index outside the frame,
 the 6 MB cap, an unknown import, a newer ABI, a start function, native code as `app.wasm`
 and each kind of stuck code in "Limits" ended on its error screen with no restart, in both
 forms. When the native form can't run and `app.wasm` is
@@ -1198,7 +1198,7 @@ store, permissions, test runs, code check, review, allowances and limits. What d
   emulator's WAMR interpreter, with every data file on the emulated card. `printf` and
   errors show below it.
 - **Run on badge** compiles the draft on the server and copies `app.wasm` and the data
-  files to a real badge over USB (Web Serial), which needs Solana OS 2.2.0. A draft
+  files to a real badge over USB (Web Serial), which needs Solana OS 2.3.0. A draft
   runs in the interpreter there: only the store's install brings native code, so a
   published app that computes a lot runs much faster than its test run ("What runs where").
 - **Locally**, build with `badge-cc` and copy the module over the serial console, which

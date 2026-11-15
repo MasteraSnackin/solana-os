@@ -7,7 +7,7 @@ the API reference. The web shows it at `/apps/docs`, Solana OS implements it
 other badges, gadgets, phones and servers (the mesh, Bluetooth or Wi-Fi) is in the
 [Connectivity guide](CONNECTIVITY.md), with [examples](examples/) to start from.
 
-**C apps.** From Solana OS 2.2.0 an app can also be written in C: the store compiles it to
+**C apps.** From Solana OS 2.3.0 an app can also be written in C: the store compiles it to
 WebAssembly and the badge's native code, and it calls this same API through `badge.h`
 (`ui_label()`, `mesh_send()`, `http_get()`, ...), with the same permissions and limits
 (the CPU limit aside). See the [C API](C_API.md); what each function does stays

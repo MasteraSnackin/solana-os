@@ -17,7 +17,7 @@
 // the Lua API's own work counts against too), so what an import does for the
 // app is bounded per callback like the app's own code. A step is about what
 // a Lua VM instruction takes on a badge (~0.33 us). Measured on a badge
-// (Solana OS 2.2.0): memmove in PSRAM 8 KB/ms, esp_fill_random 520 B/ms, the
+// (Solana OS 2.3.0): memmove in PSRAM 8 KB/ms, esp_fill_random 520 B/ms, the
 // console (UART, 115200 baud, blocking) 11 B/ms.
 #define LW_IMPORT_STEPS 1           // every import: an import loop costs as a Lua loop does
 #define LW_CALL_STEPS   4           // sos_call on top: a Lua call's own instructions

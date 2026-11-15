@@ -8,91 +8,8 @@ site changes that came with them live in the parent repository.
 
 ## 2.3.0 (unreleased)
 
-Background services, with the first two built on them (Mailbox and Collaborator), on
-ESP-IDF master.
-
-- **Background services** (`main/core/os_service.h`, the parent repo's docs/HHGTS.md
-  "Background services"). One registry of everything that runs while its app is closed:
-  built-in services register at boot (id, name, status line, state, start/stop, whether
-  the owner may stop it, start at boot remembered in NVS `svc/<id>`, an unread count), and
-  app services (`background` permission, `docs/LUA_API.md` "service", `docs/C_API.md`
-  "service") will show up through one provider hook from the Lua host. The mesh, X Dex
-  swaps, Trade invites, the quest relay and the server link are listed (always on).
-  `os_service_notify()` is the one way a service tells the owner something (a toast
-  `<Service>: <text>`, an optional LED flash, one every 10 s); the status bar shows a bell
-  and the count while any service has something unread.
-- **Services** (`services`, Purple, after Apps): the list, each service's status, memory and
-  start-at-boot, stop (after a confirm) and start. Console: `svc [list|start|stop|boot|test]`;
-  `svc test on` and a restart register a test-only service. Measured on a prototype: opening
-  and closing Services five times left the largest block as it was (98 304 B); the free heap
-  moved by what the console's history costs per command (~40 B).
-- **Mailbox** (`game/mailbox.c`, `apps/mailbox/`, `lua/lua_mail.c`; the parent repo's
-  docs/HHGTS.md "Mailbox" and server/API.md "Mailbox"). A built-in background service
-  (`mailbox`: stoppable, starts at boot) collects the owner's notifications from Solana
-  (admins and admin keys), apps' servers and other badges' apps whenever hello says some wait
-  (`mail`, 0-99), which includes the first hello on Wi-Fi: pages of `GET /api/device/mail`
-  and an ack. Up to 50 on the card (`/sdcard/hh/mail/`, the oldest read one goes first),
-  in PSRAM while it runs (~23 KB), the text read on first use; everything from the server is
-  cut to its field and printable ASCII. A toast `Mailbox: <sender>: <title>` with a Yellow
-  flash, and the status bar's bell. **Mailbox** (Yellow, after My Badge): the list, the
-  reader (open the app it came from, delete, mute the app, report and block another
-  badge's sender), muted apps; offline it shows the card's copy. Console: `mail [status|
-  list|show|sync|hello|read|rm|clear]`.
-- **`mail`** for apps (permission `mail`, `docs/LUA_API.md` "mail", `docs/C_API.md` "mail"):
-  `mail.send` (through the outbox, offline too; a second apart), `mail.list`, `mail.get`,
-  `on_mail` (while the app is open, and when Mailbox opens the app on its mail); C:
-  `mail_send`, `mail_count`, `mail_item`, `mail_get`, `mail_arg`, the `on_mail` export.
-  `tests/t-mail`.
-- **Collaborator** (`collab`, Green, after Services; `main/game/collab.c`, `main/apps/collab/`;
-  the parent repo's docs/HHGTS.md "Collaborator", server/API.md "Collaborator", docs/MESH.md
-  "Collaborator stations"). The owner lends the badge to the event: off by default, turned on
-  in its app after the OS's own consent dialog, then a built-in background service that starts
-  at boot until turned off. While on it syncs with the server every 30 s (live, a trickle of
-  !LAMPs the server decides); an admin may take it over: APP messages sent from a **station**
-  id the server gives (its own HELLO, `k:"s"`, next to the badge's, never the owner's id or
-  key), what nearby badges send to the station forwarded back, and, when the owner lends the
-  screen, a card, QR code, image (downloaded to the card), colour or countdown and an LED
-  pattern on the hidden takeover screen, shown only when the badge is idle and never over an
-  install, update, trade, swap or confirm. HOME or CANCEL there ends the takeover (forfeited);
-  the status bar's green eye shows whenever it's taken over. Ends under 15 % battery off USB.
-  Console: `collab [status|on yes|off|end|sync|lend on|off]`. `os_mesh_station()`,
-  `OS_PEER_STATION` (Lua `mesh.nearby()` kind `"station"`), two holders of keep-Wi-Fi, the
-  radio kept awake while anyone needs it; `os_service_def_t.mark` (a status-bar symbol) and
-  `os_service_mark()`; `os_held()`, `os_last_key_ms()`.
-
-**The platform: ESP-IDF master.**
-
-- **Built with ESP-IDF master** (was 6.0.1), pinned to commit `4109c8923a5`
-  (v6.1-dev-9359, 2026-11-12, `IDF_VERSION` 6.3.0) in `esp-idf.commit`: the top
-  `CMakeLists.txt` stops a build on any other commit of ESP-IDF (`SOLANA_OS_IDF_UNPINNED=1`
-  makes it a warning, to try a newer master). Toolchain GCC 16.1 (was 15.2), C built as
-  `gnu23`. `tools/build_web.sh` sources `~/.espressif/master/esp-idf/export.sh`.
-- **`components/esp_http_client/` is gone**: master has the keep-alive fix it carried
-  (esp-idf 44987dfd14, merged as 0e658fa1311). Measured: 35 requests on 2 connections.
-- **Over the air from older builds**: a master-built app boots on the 6.0.1 bootloader
-  of 2.0.0/2.1.0 badges, brings PSRAM up and confirms itself after an update (measured:
-  2.3.0 → 2.3.1 from a dev server on a production badge). `/stock` writes master's
-  bootloader; the partition table is byte-identical to 2.1.0's.
-- **Rollback**: master renamed `BOOTLOADER_APP_ROLLBACK_ENABLE` and confirms a new app at
-  startup by default; `sdkconfig.defaults` keeps "confirm by app"
-  (`CONFIG_BOOTLOADER_APP_ROLLBACK_CONFIRM_BY_APP`), so a build that never reaches the
-  launcher still rolls back.
-- **The SRAM figure malloc can take**: master gives the 32 KB DMA reserve pool
-  `MALLOC_CAP_DEFAULT` at its lowest priority (esp-idf 90a275f29ac), so
-  `heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT)` counts it although
-  malloc reaches it only after PSRAM. `os_mem_sram_malloc_free()`/`_min()` (`os_mem.h`)
-  take it off; the console's `sram:` line and the Lua UI guard (`lh_ui_room`) use them.
-- **CS pins**: master's `gpio_config()` reserves output pins, so driving both chip selects
-  high before the bus starts (and the card's after sdspi lets go) warned of a conflict
-  each time esp_lcd or sdspi took the pin. `bsp_sd.c` drives them as plain outputs.
-- **SRAM**: the unused SPI-slave and parallel-IO ISR options no longer pull the GDMA
-  control and link-list functions into IRAM (−1.8 KB). Master's Wi-Fi libraries still
-  take ~2.5 KB more static SRAM than 6.0.1's: ~3.7 KB less free heap than the same source
-  on 6.0.1 (measured on 4ZT2BX, My Badge open: 146.6 KB free with Wi-Fi joined, 156.3 KB
-  off; 6.0.1: 150.4 / 160.0 KB).
-- `os_http`'s per-connection log line also gives what the handshake took from SRAM.
-
-## 2.2.0 (unreleased)
+C apps, and background services with the first two built on them (Mailbox and
+Collaborator), on 2.2.0's ESP-IDF master.
 
 - **C apps.** Store apps written in C (`docs/C_API.md`; the SDK in `sdk/c/`): the store
   compiles an app's C to WebAssembly, and the badge runs it in
@@ -315,6 +232,88 @@ ESP-IDF master.
   `bun main/lua/tests/c/run.ts`, headless in the emulator), and
   `server/test/cemu.test.ts` (the emulated badge against a real test server: publish,
   install with the key fetched and the signature verified, run, `lua aot`, tampering).
+- **Background services** (`main/core/os_service.h`, the parent repo's docs/HHGTS.md
+  "Background services"). One registry of everything that runs while its app is closed:
+  built-in services register at boot (id, name, status line, state, start/stop, whether
+  the owner may stop it, start at boot remembered in NVS `svc/<id>`, an unread count), and
+  app services (`background` permission, `docs/LUA_API.md` "service", `docs/C_API.md`
+  "service") will show up through one provider hook from the Lua host. The mesh, X Dex
+  swaps, Trade invites, the quest relay and the server link are listed (always on).
+  `os_service_notify()` is the one way a service tells the owner something (a toast
+  `<Service>: <text>`, an optional LED flash, one every 10 s); the status bar shows a bell
+  and the count while any service has something unread.
+- **Services** (`services`, Purple, after Apps): the list, each service's status, memory and
+  start-at-boot, stop (after a confirm) and start. Console: `svc [list|start|stop|boot|test]`;
+  `svc test on` and a restart register a test-only service. Measured on a prototype: opening
+  and closing Services five times left the largest block as it was (98 304 B); the free heap
+  moved by what the console's history costs per command (~40 B).
+- **Mailbox** (`game/mailbox.c`, `apps/mailbox/`, `lua/lua_mail.c`; the parent repo's
+  docs/HHGTS.md "Mailbox" and server/API.md "Mailbox"). A built-in background service
+  (`mailbox`: stoppable, starts at boot) collects the owner's notifications from Solana
+  (admins and admin keys), apps' servers and other badges' apps whenever hello says some wait
+  (`mail`, 0-99), which includes the first hello on Wi-Fi: pages of `GET /api/device/mail`
+  and an ack. Up to 50 on the card (`/sdcard/hh/mail/`, the oldest read one goes first),
+  in PSRAM while it runs (~23 KB), the text read on first use; everything from the server is
+  cut to its field and printable ASCII. A toast `Mailbox: <sender>: <title>` with a Yellow
+  flash, and the status bar's bell. **Mailbox** (Yellow, after My Badge): the list, the
+  reader (open the app it came from, delete, mute the app, report and block another
+  badge's sender), muted apps; offline it shows the card's copy. Console: `mail [status|
+  list|show|sync|hello|read|rm|clear]`.
+- **`mail`** for apps (permission `mail`, `docs/LUA_API.md` "mail", `docs/C_API.md` "mail"):
+  `mail.send` (through the outbox, offline too; a second apart), `mail.list`, `mail.get`,
+  `on_mail` (while the app is open, and when Mailbox opens the app on its mail); C:
+  `mail_send`, `mail_count`, `mail_item`, `mail_get`, `mail_arg`, the `on_mail` export.
+  `tests/t-mail`.
+- **Collaborator** (`collab`, Green, after Services; `main/game/collab.c`, `main/apps/collab/`;
+  the parent repo's docs/HHGTS.md "Collaborator", server/API.md "Collaborator", docs/MESH.md
+  "Collaborator stations"). The owner lends the badge to the event: off by default, turned on
+  in its app after the OS's own consent dialog, then a built-in background service that starts
+  at boot until turned off. While on it syncs with the server every 30 s (live, a trickle of
+  !LAMPs the server decides); an admin may take it over: APP messages sent from a **station**
+  id the server gives (its own HELLO, `k:"s"`, next to the badge's, never the owner's id or
+  key), what nearby badges send to the station forwarded back, and, when the owner lends the
+  screen, a card, QR code, image (downloaded to the card), colour or countdown and an LED
+  pattern on the hidden takeover screen, shown only when the badge is idle and never over an
+  install, update, trade, swap or confirm. HOME or CANCEL there ends the takeover (forfeited);
+  the status bar's green eye shows whenever it's taken over. Ends under 15 % battery off USB.
+  Console: `collab [status|on yes|off|end|sync|lend on|off]`. `os_mesh_station()`,
+  `OS_PEER_STATION` (Lua `mesh.nearby()` kind `"station"`), two holders of keep-Wi-Fi, the
+  radio kept awake while anyone needs it; `os_service_def_t.mark` (a status-bar symbol) and
+  `os_service_mark()`; `os_held()`, `os_last_key_ms()`.
+
+## 2.2.0 (unreleased)
+
+ESP-IDF master instead of 6.0.1; nothing else changes for players.
+
+- **Built with ESP-IDF master** (was 6.0.1), pinned to commit `4109c8923a5`
+  (v6.1-dev-9359, 2026-11-12, `IDF_VERSION` 6.3.0) in `esp-idf.commit`: the top
+  `CMakeLists.txt` stops a build on any other commit of ESP-IDF (`SOLANA_OS_IDF_UNPINNED=1`
+  makes it a warning, to try a newer master). Toolchain GCC 16.1 (was 15.2), C built as
+  `gnu23`. `tools/build_web.sh` sources `~/.espressif/master/esp-idf/export.sh`.
+- **`components/esp_http_client/` is gone**: master has the keep-alive fix it carried
+  (esp-idf 44987dfd14, merged as 0e658fa1311). Measured: 35 requests on 2 connections.
+- **Over the air from older builds**: a master-built app boots on the 6.0.1 bootloader
+  of 2.0.0/2.1.0 badges, brings PSRAM up and confirms itself after an update (measured:
+  2.3.0 → 2.3.1 from a dev server on a production badge). `/stock` writes master's
+  bootloader; the partition table is byte-identical to 2.1.0's.
+- **Rollback**: master renamed `BOOTLOADER_APP_ROLLBACK_ENABLE` and confirms a new app at
+  startup by default; `sdkconfig.defaults` keeps "confirm by app"
+  (`CONFIG_BOOTLOADER_APP_ROLLBACK_CONFIRM_BY_APP`), so a build that never reaches the
+  launcher still rolls back.
+- **The SRAM figure malloc can take**: master gives the 32 KB DMA reserve pool
+  `MALLOC_CAP_DEFAULT` at its lowest priority (esp-idf 90a275f29ac), so
+  `heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT)` counts it although
+  malloc reaches it only after PSRAM. `os_mem_sram_malloc_free()`/`_min()` (`os_mem.h`)
+  take it off; the console's `sram:` line and the Lua UI guard (`lh_ui_room`) use them.
+- **CS pins**: master's `gpio_config()` reserves output pins, so driving both chip selects
+  high before the bus starts (and the card's after sdspi lets go) warned of a conflict
+  each time esp_lcd or sdspi took the pin. `bsp_sd.c` drives them as plain outputs.
+- **SRAM**: the unused SPI-slave and parallel-IO ISR options no longer pull the GDMA
+  control and link-list functions into IRAM (−1.8 KB). Master's Wi-Fi libraries still
+  take ~2.5 KB more static SRAM than 6.0.1's: ~3.7 KB less free heap than the same source
+  on 6.0.1 (measured on 4ZT2BX, My Badge open: 146.6 KB free with Wi-Fi joined, 156.3 KB
+  off; 6.0.1: 150.4 / 160.0 KB).
+- `os_http`'s per-connection log line also gives what the handshake took from SRAM.
 
 ## 2.1.0 (2026-11-13)
 

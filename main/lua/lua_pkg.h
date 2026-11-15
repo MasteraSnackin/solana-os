@@ -4,7 +4,7 @@
 // /sdcard/hh/apps/<id>/{main.lua, app.json, data.json}, the bundled files
 // under files/ and, for store installs, code.bin: the store's compiled code
 // (server/API.md "Compiled code"), which the host runs in place from flash.
-// A C app (2.2.0, docs/C_API.md; app.json "lang": "c") has no main.lua: its
+// A C app (2.3.0, docs/C_API.md; app.json "lang": "c") has no main.lua: its
 // code is app.wasm (WebAssembly, interpreted) and/or app.aot (the store's
 // native form of it for this badge's target, lua_aot.h); only the store
 // installer writes app.aot, after checking the store's signature and its

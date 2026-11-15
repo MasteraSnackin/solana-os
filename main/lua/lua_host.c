@@ -778,7 +778,7 @@ static void lua_task(void *arg)
         // A frame that takes longer than LH_TICK_MS (a C app drawing the
         // whole screen) leaves no wait between ticks: then the idle task
         // still gets one tick a second, or the task watchdog complains (seen
-        // on a badge, 2.2.0).
+        // on a badge, 2.3.0).
         TickType_t wait = wait_ticks(s);
         int64_t now = lh_now();
         if (wait || now - blocked >= LH_BUSY_MAX_MS) {

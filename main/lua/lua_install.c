@@ -8,7 +8,7 @@
 //      otherwise, and its hash checked either way
 //   3. with compiled code for this badge (the manifest's "code"), code.bin
 //      (server/API.md "Compiled code"), kept or downloaded like a file. A C
-//      app (2.2.0, "lang": "c") has no main.lua (its source answer is empty):
+//      app (2.3.0, "lang": "c") has no main.lua (its source answer is empty):
 //      its code is app.wasm (code?f=wasm) and, when the manifest's target is
 //      this build's, it fits a flash slot, the store's signature verifies
 //      (the key fetched when it isn't cached, lua_aot.h) and the badge can

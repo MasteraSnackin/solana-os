@@ -31,7 +31,7 @@
 #define LUA_HOST_HEAP_MAX_SRAM  (96 * 1024)
 #define LUA_HOST_SYS_RESERVE    (32 * 1024)
 #define LUA_HOST_STEPS_MAX      200000      // VM instructions per callback
-// A C app's budget per callback in WAMR's interpreter (2.2.0): wasm
+// A C app's budget per callback in WAMR's interpreter (2.3.0): wasm
 // instructions, counted across nested calls (a callback the app gets inside
 // sos_call shares it). On a badge the classic interpreter runs 2 200 to
 // 2 900 of them a millisecond, so this is under a second: room for the

@@ -4,7 +4,7 @@
 // The host maps an app's code.bin for as long as it runs; Lua reads the
 // instructions, line info and long strings straight from the mapping
 // (vendor/lundump.c fixed buffers), so they cost no RAM. A C app's native
-// code (app.aot, 2.2.0, lua_aot.h) shares the same slots: the CPU executes
+// code (app.aot, 2.3.0, lua_aot.h) shares the same slots: the CPU executes
 // it straight from the mapping (LUA_XIP_EXEC).
 //
 // Badge: lua_xip.c copies the file into the internal flash's code slots
