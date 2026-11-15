@@ -383,7 +383,13 @@ void on_tick(int32_t ms);                 // every 30 ms; ms since the last tick
 void on_mesh(void);                       // a message from this app on another badge ("mesh")
 int32_t on_meet(void);                    // another badge asks for a meet ("mesh")
 void on_exit(void);                       // the app is closing (HOME, CANCEL, sys_exit)
+void on_service(void);                    // the app's own service sent a message ("background", 2.3.0)
+void on_mail(void);                       // a notification for this app ("mail", 2.3.0)
 ```
+
+A C app with the `background` permission is also its own service: the badge starts a
+second, separate instance of the same module at `on_service_start` instead of
+`on_start` (see ["`service`"](#service-permission-background-solana-os-230)).
 
 They are the Lua globals of the same names ([LUA_API.md "Lifecycle"](LUA_API.md#lifecycle)),
 with the same timing and rules:
@@ -955,6 +961,58 @@ int solana_pda(const badge_bytes *seeds, int nseeds, const uint8_t program[32],
 They cost the host steps the Lua reference lists. Plain C can do SHA-256 or base58
 itself too, in its own memory; the badge's versions are its own code, much faster than
 the interpreter (the SHA-256 row of "What runs where").
+
+### `mail` (permission `mail`, Solana OS 2.3.0, [Lua](LUA_API.md#mail-permission-mail-solana-os-230))
+
+```c
+int mail_send(const char *to, const char *title, const char *text, const char *data_json);
+                                           // to a badge id: BADGE_OK when queued; data_json NULL or a JSON object
+int mail_count(void);                      // this app's mail on the badge (<= 50), newest first
+int mail_item(int i, mail_t *out);         // the i-th (0-based): BADGE_OK, or BADGE_ERR past the end
+//   mail_t { int32_t id, at, exp, read; char from[8], by[25], title[33], text[201], data[129]; }
+int mail_get(int32_t id, mail_t *out);     // one by id
+void on_mail(void);                        // export: badge_arg(1) is the mail (a table, as Lua's mail.get)
+```
+
+`mail_item` and `mail_get` fill `data` with the mail's data as compact JSON (`""` when it
+has none). The Lua reference's rules hold as written: only between badges whose owners both
+installed the app, queued through the outbox, the same caps, nothing in it trusted.
+
+### `service` (permission `background`, Solana OS 2.3.0, [Lua](LUA_API.md#service-permission-background-solana-os-230))
+
+A C app's service is a second instance of the same module, with its own linear memory,
+started at `on_service_start` instead of `on_start` (after `_initialize`). Nothing of the
+app's instance is shared: the two talk by messages and through `storage`. The Lua
+reference's rules hold as written: the owner's first yes, starting at boot, what stops
+it, what it may call (in C, the functions of the modules it lists; the others return
+`BADGE_ERR` with `badge_error()` saying `"not in a service"`, and `ui_*` too), and the
+limits.
+
+```c
+// In the app (on_start / on_key / ...):
+int service_start(badge_result_fn cb, void *user);  // cb(user, ok, result): result "denied", "full", ...
+int service_stop(void);
+int service_running(void);                 // 1 while it runs
+int service_send(const char *json);        // to the service's on_message; BADGE_ERR when not running / full
+void on_service(void);                     // export: badge_arg(1) is the service's message
+
+// In the service instance:
+void on_service_start(void);               // export, required for "background": the service's on_start
+void on_tick(int32_t ms);                  // every 1000 ms in the service
+void on_message(void);                     // export: badge_arg(1) is the app's message
+void on_mesh(void);  int32_t on_meet(void); // as in the app
+void on_stop(void);                        // export: being stopped (same limits as on_exit)
+int service_status(const char *line);      // the Services row's line (≤ 48 printable ASCII)
+int service_notify(const char *text, uint32_t led);  // toast "<App>: text", led 0xRRGGBB or 0
+int sys_is_service(void);                  // 1 in the service instance, 0 in the app
+```
+
+`service_send` from the service reaches the app's `on_service` only while the app is
+open. Limits besides the Lua table's: 1 MB in all per service (its linear memory, WAMR's
+copy of an interpreted module, its instance and stacks), 250 000 interpreted
+instructions or 30 ms of native time per callback (about what Lua's 100 000 take), and
+2 000 000 interpreted instructions or 700 ms of native time a minute. The store refuses a `background` C app
+whose module doesn't export `on_service_start`.
 
 ## Values on the stack
 

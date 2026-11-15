@@ -1423,6 +1423,15 @@ static int g_on_meet(lua_State *L)          // frame: 1 who asks, 2 their data; 
     return 1;
 }
 
+static int g_on_mail(lua_State *L)          // frame: 1 the mail (Mailbox, 2.3.0)
+{
+    lw_t *w = lh_get(L)->wasm;
+    uint32_t argv[1];
+    lua_settop(L, 1);
+    enter(L, w, w->f_mail, 0, argv);
+    return 0;
+}
+
 static void call_export(lua_State *L, lw_t *w, const char *name)
 {
     wasm_function_inst_t f = wasm_runtime_lookup_function(w->inst, name);
@@ -1457,14 +1466,15 @@ static int lw_main(lua_State *L)
     w->f_exit = wasm_runtime_lookup_function(w->inst, "on_exit");
     w->f_mesh = wasm_runtime_lookup_function(w->inst, "on_mesh");
     w->f_meet = wasm_runtime_lookup_function(w->inst, "on_meet");
+    w->f_mail = wasm_runtime_lookup_function(w->inst, "on_mail");
 
     lua_newtable(L);
     w->refs_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     static const struct { const char *name; lua_CFunction fn; } globals[] = {
         {"on_key", g_on_key}, {"on_tick", g_on_tick}, {"on_exit", g_on_exit},
-        {"on_mesh", g_on_mesh}, {"on_meet", g_on_meet},
+        {"on_mesh", g_on_mesh}, {"on_meet", g_on_meet}, {"on_mail", g_on_mail},
     };
-    wasm_function_inst_t *fns[] = { &w->f_key, &w->f_tick, &w->f_exit, &w->f_mesh, &w->f_meet };
+    wasm_function_inst_t *fns[] = { &w->f_key, &w->f_tick, &w->f_exit, &w->f_mesh, &w->f_meet, &w->f_mail };
     for (size_t i = 0; i < sizeof(globals) / sizeof(globals[0]); i++) {
         if (*fns[i]) {
             lua_register(L, globals[i].name, globals[i].fn);
@@ -1561,7 +1571,7 @@ static void check_exports(lua_State *L, lw_t *w)
 {
     static const struct { const char *name; uint8_t params, results; } want[] = {
         {"on_start", 0, 0}, {"on_key", 2, 1}, {"on_tick", 1, 0}, {"on_exit", 0, 0}, {"on_mesh", 0, 0},
-        {"on_meet", 0, 1}, {"badge_abi", 0, 1}, {"_initialize", 0, 0},
+        {"on_meet", 0, 1}, {"on_mail", 0, 0}, {"badge_abi", 0, 1}, {"_initialize", 0, 0},
     };
     bool start = false;
     int32_t n = wasm_runtime_get_export_count(w->mod);

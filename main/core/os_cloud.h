@@ -50,6 +50,9 @@ typedef struct {
     // Hello "beacon": this badge is also a quest beacon (server/API.md "Badge
     // beacons", game/beacon.c), pending or adopted. Kept in NVS. "" = not one.
     char beacon[8];
+    // Hello "mail" (2.3.0, server/API.md "Mailbox"): the owner's mail this badge
+    // hasn't collected yet, 0-99, from the last good hello. Not kept across boots.
+    int mail;
 } os_cloud_info_t;
 
 void os_cloud_init(void);                   // after os_wifi_init()

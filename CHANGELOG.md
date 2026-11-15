@@ -8,6 +8,38 @@ site changes that came with them live in the parent repository.
 
 ## 2.3.0 (unreleased)
 
+- **Background services** (`main/core/os_service.h`, the parent repo's docs/HHGTS.md
+  "Background services"). One registry of everything that runs while its app is closed:
+  built-in services register at boot (id, name, status line, state, start/stop, whether
+  the owner may stop it, start at boot remembered in NVS `svc/<id>`, an unread count), and
+  app services (`background` permission, `docs/LUA_API.md` "service", `docs/C_API.md`
+  "service") will show up through one provider hook from the Lua host. The mesh, X Dex
+  swaps, Trade invites, the quest relay and the server link are listed (always on).
+  `os_service_notify()` is the one way a service tells the owner something (a toast
+  `<Service>: <text>`, an optional LED flash, one every 10 s); the status bar shows a bell
+  and the count while any service has something unread.
+- **Services** (`services`, Purple, after Apps): the list, each service's status, memory and
+  start-at-boot, stop (after a confirm) and start. Console: `svc [list|start|stop|boot|test]`;
+  `svc test on` and a restart register a test-only service. Measured on a prototype: opening
+  and closing Services five times left the largest block as it was (98 304 B); the free heap
+  moved by what the console's history costs per command (~40 B).
+- **Mailbox** (`game/mailbox.c`, `apps/mailbox/`, `lua/lua_mail.c`; the parent repo's
+  docs/HHGTS.md "Mailbox" and server/API.md "Mailbox"). A built-in background service
+  (`mailbox`: stoppable, starts at boot) collects the owner's notifications from Solana
+  (admins and admin keys), apps' servers and other badges' apps whenever hello says some wait
+  (`mail`, 0-99), which includes the first hello on Wi-Fi: pages of `GET /api/device/mail`
+  and an ack. Up to 50 on the card (`/sdcard/hh/mail/`, the oldest read one goes first),
+  in PSRAM while it runs (~23 KB), the text read on first use; everything from the server is
+  cut to its field and printable ASCII. A toast `Mailbox: <sender>: <title>` with a Yellow
+  flash, and the status bar's bell. **Mailbox** (Yellow, after My Badge): the list, the
+  reader (open the app it came from, delete, mute the app, report and block another
+  badge's sender), muted apps; offline it shows the card's copy. Console: `mail [status|
+  list|show|sync|hello|read|rm|clear]`.
+- **`mail`** for apps (permission `mail`, `docs/LUA_API.md` "mail", `docs/C_API.md` "mail"):
+  `mail.send` (through the outbox, offline too; a second apart), `mail.list`, `mail.get`,
+  `on_mail` (while the app is open, and when Mailbox opens the app on its mail); C:
+  `mail_send`, `mail_count`, `mail_item`, `mail_get`, `mail_arg`, the `on_mail` export.
+  `tests/t-mail`.
 - **Built with ESP-IDF master** (was 6.0.1), pinned to commit `4109c8923a5`
   (v6.1-dev-9359, 2026-11-12, `IDF_VERSION` 6.3.0) in `esp-idf.commit`: the top
   `CMakeLists.txt` stops a build on any other commit of ESP-IDF (`SOLANA_OS_IDF_UNPINNED=1`

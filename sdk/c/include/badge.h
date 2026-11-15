@@ -1979,6 +1979,110 @@ static inline int mesh_meets(int32_t after, badge_result_fn cb, void *user)
 }
 
 // ============================================================================
+// mail (permission "mail", Solana OS 2.3.0)
+// ============================================================================
+
+typedef struct {
+    int32_t id, at, exp, read;  // at, exp: unix seconds
+    char from[8];       // a badge id, "server" or "solana"
+    char by[25];        // the sender's owner label for badge mail, "" otherwise
+    char title[33];
+    char text[201];     // mail_get only ("" from mail_item)
+    char data[129];     // mail_get only: the data as compact JSON, "" when none
+} mail_t;
+
+static inline void badge__mail(badge_val m, mail_t *out, int full)
+{
+    out->id = badge_field_int(m, "id", 0);
+    out->at = badge_field_int(m, "at", 0);
+    out->exp = badge_field_int(m, "exp", 0);
+    out->read = badge_field_bool(m, "read");
+    badge_field_str(m, "from", out->from, sizeof out->from);
+    badge_field_str(m, "by", out->by, sizeof out->by);
+    badge_field_str(m, "title", out->title, sizeof out->title);
+    out->text[0] = out->data[0] = 0;
+    if (full) {
+        badge_field_str(m, "text", out->text, sizeof out->text);
+        if (badge_field_type(m, "data") == SOS_TABLE && badge_field_json(m, "data", out->data, sizeof out->data) < 0) {
+            out->data[0] = 0;
+        }
+    }
+}
+
+// Queues a notification for the owner of badge `to`, who must have this app
+// too (the server checks): BADGE_OK, or BADGE_ERR and badge_error() ("bad id",
+// "title: 1-32 printable ASCII", "not linked", "full", "busy" ...). data_json:
+// NULL or a JSON object of <= 128 bytes.
+static inline int mail_send(const char *to, const char *title, const char *text, const char *data_json)
+{
+    badge__fn("mail.send");
+    sos_push_cstr(to ? to : "");
+    sos_push_cstr(title ? title : "");
+    sos_push_cstr(text ? text : "");
+    if (data_json && json_push(data_json)) {
+        sos_pop(4);
+        return BADGE_ERR;
+    }
+    return badge__call_ok(data_json ? 4 : 3);
+}
+
+// This app's mail on the badge, newest first: how many (<= 50), or BADGE_ERR.
+static inline int mail_count(void)
+{
+    badge__fn("mail.list");
+    if (badge__call(0, 1)) {
+        return BADGE_ERR;
+    }
+    int n = (int)badge_len(badge_top());
+    sos_pop(1);
+    return n;
+}
+
+// The i-th (0-based) of mail_count()'s: BADGE_OK, or BADGE_ERR past the end. No text or data.
+static inline int mail_item(int i, mail_t *out)
+{
+    badge__fn("mail.list");
+    if (badge__call(0, 1)) {
+        return BADGE_ERR;
+    }
+    badge_val t = badge_top();
+    int ok = i >= 0 && i < (int)badge_len(t);
+    if (ok) {
+        badge__mail(badge_push_index(t, i), out, 0);
+        sos_pop(1);
+    }
+    sos_pop(1);
+    if (!ok) {
+        badge__seterr("no such mail");
+    }
+    return ok ? 0 : BADGE_ERR;
+}
+
+// One of this app's messages in full, by id: BADGE_OK, or BADGE_ERR when it's gone.
+static inline int mail_get(int32_t id, mail_t *out)
+{
+    badge__fn("mail.get");
+    sos_push_int(id);
+    if (badge__call(1, 1)) {
+        return BADGE_ERR;
+    }
+    int ok = sos_type(-1) == SOS_TABLE;
+    if (ok) {
+        badge__mail(badge_top(), out, 1);
+    } else {
+        badge__seterr("no such mail");
+    }
+    sos_pop(1);
+    return ok ? 0 : BADGE_ERR;
+}
+
+// In on_mail(): the mail that arrived (badge_arg(1)), as mail_get gives it.
+static inline void mail_arg(mail_t *out)
+{
+    badge__mail(badge_arg(1), out, 1);
+}
+
+// ============================================================================
 // ble (permission "ble", Solana OS 1.0.0)
 // ============================================================================
 

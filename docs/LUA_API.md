@@ -69,7 +69,7 @@ Update it from the site's firmware flasher (`/stock`, a USB-C cable) or, from 0.
 Settings > Software update when it's offered. An app with the `rpc` permission needs
 0.5.2: on 0.5.0 and 0.5.1 its details say so, and buying and downloads are refused with
 "Update Solana OS to 0.5.2 or later to install this app". An app with the `ble` permission
-needs 1.0.0 in the same way ("Update Solana OS to 1.0.0 or later to install this app").
+needs 1.0.0 in the same way ("Update Solana OS to 1.0.0 or later to install this app"). An app with `mail` (or `background`) needs 2.3.0.
 
 The manifest, as the badge stores it:
 
@@ -83,7 +83,7 @@ The manifest, as the badge stores it:
   "icon": "play",                   // one of the icon names below
   "accent": "14F195",               // hex colour, no '#'
   "category": "games",              // games | tools | social | quests | demos
-  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc
+  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc background mail
   "hosts": ["api.example.com"],     // what `http` and `ws` may call (only with the `http` permission)
   "files": 2,                       // bundled files (the store fills it in)
   "filesSize": 5120,                // their bytes together
@@ -117,7 +117,15 @@ function on_meet(from, data) -- another badge asks for a signed meet (needs "mes
 end                          -- return a table to sign it ("Meets")
 function on_exit()           -- the app is closing (HOME, CANCEL, sys.exit, error)
 end
+function on_service(msg)     -- the app's own background service sent msg (needs "background", 2.3.0)
+end
+function on_mail(m)          -- a notification for this app arrived (needs "mail", 2.3.0, "mail")
+end
 ```
+
+An app with the `background` permission can also leave a **service** running after it
+closes: `service.lua`, a separate script with its own callbacks (see
+["`service`"](#service-permission-background-solana-os-230)).
 
 Up, down, left, right and CANCEL auto-repeat while held (`rep` true: after 400 ms, then
 every 90 ms); SELECT doesn't. One key repeats at a time, the last one pressed; when it's
@@ -147,6 +155,8 @@ HOME always returns to the launcher. The screen below the status bar is
 | RPC | 30 calls a minute per badge (6 of them `sendTransaction`), ≤ 2 KB of params, ≤ about 3.5 KB of answer, 6 s to answer |
 | WebSocket | one at a time, 20 opens a minute per badge, ≤ 4 KB per message either way, 8 waiting to go |
 | Crypto | of a callback's 200 000 instructions: a signature check takes 40 000, an on-curve test 5 000, a program-derived address 10 000 (see `crypto` and `solana`) |
+| Background | a service (`background`, 2.3.0): 1 MB of heap, 100 000 instructions per callback and 2 000 000 a minute, a tick a second, 3 services on a badge at once (see "`service`") |
+| Mail | `mail` (2.3.0): title ≤ 32 and text ≤ 200 printable ASCII, data ≤ 128 bytes of JSON, a send a second, none while 40 uploads wait in the outbox; the server's caps: 30 a day per owner, 5 a day to one person per app (see "`mail`") |
 | Numbers | 32-bit integers (they wrap at ±2^31) and 32-bit floats (about 7 digits) |
 
 How fast Lua is and what these limits allow, measured on a badge against the same work in
@@ -1596,6 +1606,191 @@ rpc.call("getAccountInfo", {solana.encode(proposal), {encoding = "base64", dataS
     label:text(r.value and "Proposal 12 exists" or "No proposal 12 yet")
   end)
 ```
+
+### `service` (permission `background`, Solana OS 2.3.0)
+
+A service keeps part of your app running while the app is closed: it answers other
+badges over the mesh, polls your server, counts something, and tells the owner when
+there is news. It is a separate script, **`service.lua`** at the top of your app's
+folder, run in a fresh Lua state of its own: nothing of the app's UI or globals stays
+alive, and the app and its service talk by messages and through `storage`.
+
+```
+pinger/
+  main.lua              the app: its screen, and service.start()
+  service.lua           the service: no screen, runs in the background
+  lib/proto.lua         modules both can require
+  app.json              "permissions": ["background", "mesh"]
+```
+
+**In the app** (`main.lua`):
+
+```lua
+service.start(function(ok, err) end)  -- start it; the first time the badge asks the owner:
+                                      -- cb(true) | cb(false, "denied") | cb(false, "full")
+                                      -- (3 already running) | cb(false, "low battery") | ...
+service.stop()                        -- stop it; it won't start at boot either
+service.running()                     -- true while it runs
+service.send(value)                   -- to the service's on_message (JSON-encodable, ≤ 1 KB);
+                                      -- false when it isn't running or 8 are waiting
+function on_service(msg) end          -- the service sent msg while the app is open
+```
+
+**In the service** (`service.lua`): the top-level chunk runs once when it starts, then
+these globals are called when defined:
+
+```lua
+function on_tick(ms) end              -- every 1000 ms; ms since the last tick
+function on_message(msg) end          -- the app sent msg (service.send in main.lua)
+function on_mesh(from, msg) end       -- as in an app (needs "mesh"), while the radio is on the mesh channel
+function on_meet(from, data) end      -- as in an app (needs "mesh"); return a table to sign
+function on_stop() end                -- it is being stopped: save what you need (100 000 instructions, 1 s)
+
+service.send(value)                   -- to the app's on_service, only while the app is open: false otherwise
+service.status("3 new pings")         -- the line Services shows (≤ 48 printable ASCII; "" = "Running")
+service.notify("Ping from 7K2Q9M", {led = 0x14F195})  -- a toast "<App>: Ping from 7K2Q9M",
+                                      -- optional LED flash; one every 10 s, else false
+service.stop()                        -- end itself (starts at boot no more, until the app starts it again)
+```
+
+**What a service may use**: `timer` (4 timers, ≥ 1000 ms), `storage` (the app's own,
+shared with the app: both see each other's writes at once), `fs` and `require`, `json`,
+`sys.millis`/`time`/`battery`/`memory`, `badge`, `crypto` and `solana`, and with their
+permissions `mesh` (`send`, `peers`, `meet`, `meets`; not `channel`, `scan`, `pause`,
+`bridge`), `http` and `rpc` (one call waiting at a time; `"offline"` while the badge is),
+and the reads `lamps.balance`, `items.list`, `items.all`, `profile.me`, `profile.get`.
+Everything else is `nil` in a service: `ui`, `led` (a notice can flash), `sys.keys`,
+`sys.exit`, `wifi`, `ble`, `ws`, `quest`, and everything that spends or changes:
+`lamps.spend`, `transfer`, `deposit`, `award`, `items.grant`, `update`, `remove`. A
+service can never spend: only the app on the screen can, with the owner's confirm.
+
+**Lifecycle.**
+
+- `service.start()` works only from the app on the screen. The first time, the badge asks
+  the owner in its own dialog, which no app can answer: "Let <App> run in the
+  background? It keeps running after you close it and after a restart, until you stop it
+  in Services." SELECT allows it, CANCEL is `"denied"`. The answer is kept; the dialog
+  comes back only after the owner stopped the service in Services, or when an update of
+  the app asks for `background` for the first time.
+- It keeps running when the app closes, and starts again about 10 s after the badge
+  boots, until it's stopped: by the owner (Services, `svc stop`), by `service.stop()`
+  from either side, by removing the app, or when a quest app expires.
+- The app and its service can run at once; each gets its own callbacks. A message to
+  the side that isn't there is dropped (`service.send` returns false): keep state in
+  `storage`.
+- An error in the service stops it and its message becomes the status (`Failed:
+  service.lua:12: attempt to index a nil value`); three failures in a row turn off
+  starting at boot. `print` goes to the console tagged `[<app id>:svc]`.
+- An update stops the service while the files change and starts the new version if it
+  was running. Below 15 % battery (not on USB) services stop (`Stopped: battery low`)
+  and start at the next boot or on USB. When the badge runs low on memory the most
+  recently started service stops first (`Stopped: the badge was low on memory`).
+
+**Limits.**
+
+| | |
+|---|---|
+| Services | 3 app services running on a badge at once (`"full"` past that). Each costs about 2 KB of the badge's SRAM; they share one 12 KB task |
+| Memory | 1 MB of Lua heap each, in PSRAM ("Out of memory: The service needs more than 1 MB."). `sys.memory()` reports it |
+| CPU | 100 000 instructions per callback ("Service took too long"), and 2 000 000 a minute in all (about 0.7 s of the badge's processor a minute, 1 %): past it the service stops with `Stopped: used too much of the processor` |
+| Tick | `on_tick` every 1000 ms; timers ≥ 1000 ms, 4 at a time |
+| Events | 8 waiting per service (mesh messages, app messages, network answers); mesh messages past that are dropped |
+| Messages | `service.send` ≤ 1 KB of JSON either way, 8 waiting |
+| Notices | one every 10 s, ≤ 80 characters |
+| Radio | a service never moves the radio. It hears the mesh only while the radio is on the mesh channel anyway (Wi-Fi off, or joined on the mesh channel, MESH.md "Which channels"); it never suspends Wi-Fi, keeps it awake or turns it on |
+| Battery | none of its own beyond the CPU above: the radio listens anyway. A service ticking once a second that does little costs too little to measure |
+
+Badges below 2.3.0 have no `service`: the store refuses `background` apps to them
+(server/API.md "Background apps").
+
+**How the badge runs it** (what Solana OS implements; you don't need it to write one):
+
+- One "svc" task (12 KB stack, below the app's "lua" task in priority) runs every
+  service's callbacks one at a time, round robin, without the screen's lock (no UI). Each
+  service is a `lua_State` with its own allocator capped at 1 MB in PSRAM, an event
+  queue of 8, its timers and its share of the minute's budget. Starting one needs PSRAM
+  and 64 KB of SRAM free for malloc.
+- `/sdcard/hh/services.json` remembers the owner's answers:
+  `{"<app id>": {"allowed": true, "boot": true, "fails": 0, "ver": "1.2.0"}}`. A
+  missing or broken file means nothing is allowed. Services that were running when the
+  badge restarted start ~10 s after boot, one a second.
+- In the Services app (`os_service.h`) an app service is `app:<app id>`, named after the
+  app, with its Lua heap as its memory; the owner's stop there turns `allowed` off.
+- Stopping calls `on_stop` (100 000 instructions, 1 s), then closes the state; a service
+  stuck in a callback is ended by its instruction budget. A stop never waits on the
+  service.
+
+### `mail` (permission `mail`, Solana OS 2.3.0)
+
+Notifications that land in another attendee's **Mailbox** (the badge's built-in inbox,
+docs/HHGTS.md "Mailbox"), and the ones your app received. A notification has a short
+title and text that the owner reads in Mailbox, and an optional small `data` table only
+your app sees. Mail goes only between badges whose owners **both installed your app**, and
+your app's server can send it too (server/API.md "Mailbox", with your app key):
+
+```lua
+mail.send("7K2Q9M", "Your turn", "Alice played e4", {game = 12, move = "e4"})
+                      -- to a badge id (from mesh.nearby, on_mesh, a meet): true when queued,
+                      -- or nil, err ("bad id", "title: 1-32 printable ASCII", "text: ...",
+                      -- "data: a table of <= 128 bytes as JSON", "not linked", "full")
+mail.list()           -- this app's mail on this badge, newest first (<= 50):
+                      -- { {id = 41, from = "7K2Q9M", by = "@alice", title = "Your turn",
+                      --    at = 1790000000, read = false}, ... }
+mail.get(41)          -- one of them in full: {id, from, by, title, text, data, at, exp, read}, or nil
+function on_mail(m) end   -- a mail for this app arrived while it's open (m as mail.get gives it);
+                          -- also when the owner opens your app from Mailbox on one of its mails
+```
+
+- **Sending** goes through the badge's outbox: `mail.send` checks the arguments, queues the
+  mail and returns at once, offline too; it uploads when the badge is next online, even
+  after your app closed. Your app learns that it was queued, not that it arrived: the server
+  quietly drops mail the recipient muted or blocked, and refuses it when the recipient's
+  owner doesn't have your app or a cap is reached (the outbox drops it then; the reasons are
+  in server/API.md "Mailbox"). Reply in kind from the receiving badge, or check on your
+  server.
+- `from` is the sending badge's id, `"server"` for your app's server, or `"solana"` for an
+  admin's mail that names your app; `by` is the sender's owner label (`"@alice"`) for badge
+  mail, else `nil`. Times are unix seconds.
+- **What counts**: nothing in mail is proof of anything. Anyone with your app can put any
+  title, text and data in it. Use meets (`mesh.meet`) for proof two badges met, and never
+  trust `data` with anything that matters: the server moves no !LAMPs or items for mail,
+  and neither should your app.
+- **Limits**: title 1-32 and text 0-200 printable ASCII characters (no newlines), `data` a
+  table that encodes to ≤ 128 bytes of JSON (or `nil`); 30 sends a day per owner across all
+  apps, 5 a day to the same person from one app, a send a second; none while 40 uploads
+  wait in the badge's outbox (`"full"`, as meets). Mail expires after 7 days.
+- `mail.list` and `mail.get` read the card (cost as `fs` reads); without a card they see
+  only what came since the badge started. The owner reads, deletes and mutes in Mailbox;
+  your app can't mark mail read or delete it.
+- The Mailbox shows your app's mail as `<App>: <sender>` with its title, and opens your
+  app on it if it's installed: then `on_mail` runs right after your top-level chunk, with
+  that mail. Mail for an app that isn't installed only reads in Mailbox.
+- A background service (`service.lua`, permission `background`) gets `on_mail(m)` too,
+  while it runs, and may call `mail.list` and `mail.get`; `mail.send` from a service counts
+  toward the same caps.
+
+**From your server.** Your app's server sends with the app key (the one that reads your
+meets, made on `/apps/mine`), to one badge, one person (a `user` id from a meet), or everyone
+who has your app (3 times a day). No permission is needed for it, and only people who
+installed your app can get it:
+
+```ts
+// Bun or any fetch: a notification to one badge's owner
+const res = await fetch('https://badge-api.solana.com/api/app/mail', {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${process.env.APP_KEY}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ to: { badge: '7K2Q9M' }, title: 'Your turn', text: 'Alice played e4', data: { game: 12 } })
+});
+console.log(await res.json()); // { send: 81, recipients: 1, skipped: 0 }
+// later: GET /api/app/mail/81 -> { recipients: 1, delivered: 1, ... }
+```
+
+`to: { all: true }` reaches everyone with the app (minus who muted it); `ttl` (seconds, 1 hour
+to 30 days) sets when it expires. The answers and limits are in server/API.md "Mailbox".
+
+Badges below 2.3.0 have no `mail`: the store refuses `mail` apps to them (server/API.md
+"Mail apps"). In the emulator mail goes through the same server: two tabs
+(`/emulator` and `/emulator?badge=2`) signed in as two people can mail each other.
 
 ### Build on the badge, sign on a phone
 
