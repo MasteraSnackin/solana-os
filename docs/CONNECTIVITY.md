@@ -4,6 +4,8 @@ How a badge app talks to other badges, to gadgets, to phones and to servers, whi
 pick for what, and working examples to start from. For Solana OS 1.0.0. The calls
 themselves are in the [Lua API](LUA_API.md); this guide is about choosing between them.
 The web shows it at `/apps/docs/connectivity` (raw Markdown: `/docs/connectivity.md`).
+C apps (Solana OS 2.2.0) make the same calls through `badge.h` (`mesh_send()`, `ble_scan()`,
+`http_get()`, ...), so everything here applies to them: see the [C API](C_API.md).
 
 ## The short version
 

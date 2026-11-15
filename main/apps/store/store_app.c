@@ -39,6 +39,7 @@ typedef struct {
     const char *symbol;
     int price;
     bool owned;
+    bool c;                 // a C app (2.2.0, "lang": "c"): a small tag in rows and details
 } entry_t;
 
 typedef struct {
@@ -160,6 +161,13 @@ static const char *installed_version(const char *id)
     return v ? v->version : NULL;
 }
 
+// A store row or details of a C app ("lang": "c"; absent is Lua).
+static bool is_c(const cJSON *o)
+{
+    const cJSON *lang = cJSON_GetObjectItemCaseSensitive(o, "lang");
+    return cJSON_IsString(lang) && !strcmp(lang->valuestring, "c");
+}
+
 static const char *size_text(char *out, size_t n, int bytes)
 {
     if (bytes < 1024) {
@@ -270,7 +278,8 @@ static void row(int i, ui_row_t *r, void *ctx)
     }
     const entry_t *e = &s_entries[i - c];
     snprintf(r->title, sizeof(r->title), "%s  %s", e->symbol, e->name);
-    strlcpy(r->sub, e->summary, sizeof(r->sub));
+    strlcpy(r->sub, e->c ? "C  " LV_SYMBOL_BULLET "  " : "", sizeof(r->sub));
+    strlcat(r->sub, e->summary, sizeof(r->sub));    // the row cuts it with "..."
     const char *have = installed_version(e->id);
     if (have) {
         bool update = strcmp(have, e->version) != 0;
@@ -364,6 +373,7 @@ static void list_cb(int status, const char *body, void *ctx)
             e->symbol = lua_pkg_symbol(cJSON_IsString(icon) ? icon->valuestring : NULL);
             e->price = jint(it, "price", 0);
             e->owned = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(it, "owned"));
+            e->c = is_c(it);
             s_n++;
         }
         jstr(j, "next", s_next, sizeof(s_next));
@@ -488,8 +498,8 @@ static void show_detail(void)
     lv_obj_set_pos(t, 10, 4);
     lv_obj_set_width(t, OS_ROOT_W - 20);
     lv_label_set_long_mode(t, LV_LABEL_LONG_MODE_DOTS);
-    snprintf(line, sizeof(line), "v%s  by %s  " LV_SYMBOL_BULLET "  %s", d->e.version, d->author[0] ? d->author : "?",
-             size_text(size, sizeof(size), d->size));
+    snprintf(line, sizeof(line), "v%s  by %s  " LV_SYMBOL_BULLET "  %s%s", d->e.version, d->author[0] ? d->author : "?",
+             size_text(size, sizeof(size), d->size), d->e.c ? "  " LV_SYMBOL_BULLET "  C" : "");
     lv_obj_t *m = ui_label(box, &sol_mono_12, COL_DIM, line);
     lv_obj_set_pos(m, 10, 32);
     char num[16];
@@ -569,6 +579,7 @@ static void detail_cb(int status, const char *body, void *ctx)
     d->e.symbol = lua_pkg_symbol(cJSON_IsString(icon) ? icon->valuestring : NULL);
     d->e.price = jint(j, "price", 0);
     d->e.owned = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "owned"));
+    d->e.c = is_c(j);
     d->installs = jint(j, "installs", 0);
     d->ratings = jint(j, "ratings", 0);
     d->size = jint(j, "size", 0) + jint(j, "filesSize", 0);

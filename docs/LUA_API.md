@@ -7,6 +7,12 @@ the API reference. The web shows it at `/apps/docs`, Solana OS implements it
 other badges, gadgets, phones and servers (the mesh, Bluetooth or Wi-Fi) is in the
 [Connectivity guide](CONNECTIVITY.md), with [examples](examples/) to start from.
 
+**C apps.** From Solana OS 2.2.0 an app can also be written in C: the store compiles it to
+WebAssembly and the badge's native code, and it calls this same API through `badge.h`
+(`ui_label()`, `mesh_send()`, `http_get()`, ...), with the same permissions and limits
+(the CPU limit aside). See the [C API](C_API.md); what each function does stays
+documented here.
+
 ## The package
 
 An app is a folder. `main.lua` (UTF-8, ≤ 64 KB) runs first, and `app.json` is the
@@ -26,7 +32,9 @@ trivia/
 
 Bundled files: at most 64 besides `main.lua` and `app.json`, each ≤ 256 KB, ≤ 1 MB
 together. Paths use lowercase letters, digits, `_`, `-` and `.`, with `/` between
-folders: ≤ 64 characters, ≤ 4 levels, and no name starts or ends with `.`. The App
+folders: ≤ 64 characters, ≤ 4 levels, and no name starts or ends with `.`. `app.wasm`
+and `app.aot` at the top of the folder are taken (the badge keeps a C app's code under
+those names), so the store refuses a bundled file called that; `bin/app.wasm` is fine. The App
 Store installs an app into `/sdcard/hh/apps/<id>/`: `main.lua`, `app.json`, the app's
 `storage` in `data.json`, and the bundled files under `files/`. An update downloads
 only the files that changed, then swaps the whole folder in once everything is there,
@@ -124,7 +132,7 @@ HOME always returns to the launcher. The screen below the status bar is
 
 | | |
 |---|---|
-| Memory | 6 MB of Lua heap, in the badge's 8 MB of PSRAM (Solana OS 2.0.0). Past it the app stops with "Out of memory: the app needs more than 6 MB". The badge keeps 512 KB of PSRAM for itself while an app runs, and the allocator's own overhead (up to about a quarter for very many small tables or strings) comes out of the rest, so an app made of millions of tiny objects can be stopped a little earlier with "The badge is low on memory". The app's UI objects, label text and 12 KB task stack are in the badge's other memory, capped by the rows below, not in the 6 MB, and Bluetooth no longer shrinks it. `sys.memory()` tells an app where it stands. Badges below 2.0.0 (until they update) give 96 KB (48 KB below 0.5.13), shared with Wi-Fi, TLS and Bluetooth: there an app with 60 labels gets about 80 KB with Wi-Fi joined, about 49 KB with Bluetooth on as well. A store app's compiled code runs from flash and mostly isn't in it; a library function takes a few bytes once the app first uses it. A big heap is a slower one: PSRAM is slower than the chip's own memory, and the collector walks everything an app keeps, so a few MB of live tables can pause a callback noticeably |
+| Memory | 6 MB of Lua heap, in the badge's 8 MB of PSRAM (Solana OS 2.0.0). Past it the app stops with "Out of memory: The app needs more than 6 MB." The badge keeps 512 KB of PSRAM for itself while an app runs, and the allocator's own overhead (up to about a quarter for very many small tables or strings) comes out of the rest, so an app made of millions of tiny objects can be stopped a little earlier with "The badge is low on memory". The app's UI objects, label text and 12 KB task stack are in the badge's other memory, capped by the rows below, not in the 6 MB, and Bluetooth no longer shrinks it. `sys.memory()` tells an app where it stands. Badges below 2.0.0 (until they update) give 96 KB (48 KB below 0.5.13), shared with Wi-Fi, TLS and Bluetooth: there an app with 60 labels gets about 80 KB with Wi-Fi joined, about 49 KB with Bluetooth on as well. A store app's compiled code runs from flash and mostly isn't in it; a library function takes a few bytes once the app first uses it. A big heap is a slower one: PSRAM is slower than the chip's own memory, and the collector walks everything an app keeps, so a few MB of live tables can pause a callback noticeably |
 | CPU | 200 000 VM instructions per callback, coroutines and pattern matching included (else "Script took too long") |
 | UI objects | 128 at a time (64 below 2.0.0), one of them a QR code. They live in the badge's SRAM, not the Lua heap: a call that makes one (`ui.label`, `ui.list`, `ui.image`, …) raises "ui.list: the badge is low on memory" (with its own name) when it would leave the badge less than 32 KB, a catchable error (2.0.1). So does a call that makes what they hold grow (2.1.0): `label:text` with longer text, `ui.hint`, `ui.toast`, `qr:text`, and `ui.confirm` and `ui.input` for their text. The 32 KB are SRAM that the badge can still allocate, not counting the 32 KB set aside for DMA (2.0.1 counted those, so its check left the badge almost nothing), and each list, the keyboard and the first image keep a little more for what they redraw on their own (a list's rows, about 1.3 KB). A `ui.list` costs about 12 KB of it, a label about 250 bytes. Measured on 2.1.0 with Wi-Fi off: 60 labels and six lists, or 128 labels; Wi-Fi joined and Bluetooth on leave less |
 | Images | 2 bytes per pixel of the app's heap (a 48 × 48 PNG: 4.5 KB); up to 1024 pixels a side, shown at up to 16×. The first `ui.anim` reserves 13 KB more for decoding |
@@ -2032,11 +2040,16 @@ emulator page's Console). The web submit page uses `lua run` to test an app in t
 emulator. `lua mem` shows the last run's peak heap and instruction count, and whether
 its code was the store's (run in place) or compiled on the badge; `lua
 install <id>` installs or updates an app from the App Store, as the store app does.
+For a C app, `lua aot <id>` says why it runs native code or its WebAssembly: this
+build's target and the manifest's, whether the store's key is cached, whether the
+signature verifies, `app.aot`'s size against a flash slot, and what runs; `lua aotkey`
+fetches the store's key (Wi-Fi on). Neither writes anything but the key
+([C_API.md "Security"](C_API.md#security)).
 For bridges: `bridge` lists them, `bridge show` opens the code, `bridge code` prints it,
 `bridge <code or link>` bridges with the badge that shows it, `bridge end` closes them.
 
 To copy an app over the serial console, `<file>` is `main.lua`, `app.json` or a
-bundled path like `lib/quiz.lua`:
+bundled path like `lib/quiz.lua` (for a C app, `app.wasm` instead of `main.lua`):
 
 - `lua put <id> <file> begin|<base64>|end` writes a file a line at a time (at most 128
   base64 characters per line), easy to type or script.
@@ -2051,5 +2064,5 @@ bundled path like `lib/quiz.lua`:
 
 These refuse while the app runs (`open home` closes it) and check `app.json` like an
 install does. Writing or removing any file of an app deletes its compiled code from
-the store (`code.bin`): from then on it runs from its source until the store installs
-it again.
+the store (`code.bin`, or a C app's native `app.aot`): from then on it runs from its
+source (a C app: `app.wasm`, interpreted) until the store installs it again.

@@ -58,6 +58,13 @@
 #define LH_LED_COUNT        8
 #define LH_FS_READ_MAX      LUA_PKG_FILE_MAX    // fs.read / fs.json per call: a whole file (16 KB before 2.0.0)
 #define LH_FS_LINE_MAX      512         // fs.lines: longer lines come in pieces
+// A C app's console output costs host steps by the byte (sos_log, stdout and
+// stderr, and print reached through sos_call): the console is a blocking UART
+// at 115200 baud, 11 bytes a ms on a badge, so this allows ~6 KB (~0.55 s) a
+// callback. Lua apps' print isn't charged.
+#define LH_OUT_STEPS        32
+// A C app's host work over budget (lua_host.c, lua_wasm.c): with LUA_HOST_STEPS_MAX.
+#define LH_HOST_STEPS_MSG   "Over %d host steps in one callback (copies, output, fs, crypto, drawing)"
 #define LH_FS_OPEN_STEPS    500         // budget per file opened ...
 #define LH_FS_BYTES_PER_STEP 4          // ... and per bytes read or compiled
 #define LH_READ_CHUNK       256         // compiling from the card, a piece at a time
@@ -162,12 +169,29 @@ typedef struct {
     bool copied;                // copied into it at this launch
 } lh_code_stat_t;
 
+// A C app's figures (lua_wasm.c), for "lua mem".
+typedef struct {
+    bool c;                     // the app is C (pkg.lang)
+    bool aot;                   // it ran app.aot (native code), not app.wasm
+    uint32_t module_size;       // bytes of app.wasm / app.aot loaded
+    uint32_t mem_size;          // its linear memory now (pages x 64 KB)
+    uint32_t mem_peak;          // ... at most
+    uint32_t steps_peak;        // most wasm instructions in one callback (interpreter)
+    uint32_t native_peak_us;    // most native time in one callback (app.aot)
+    int slot;                   // app.aot's flash slot, -1 if none
+    bool copied;                // ... copied into it at this launch
+    uint32_t sig_us, map_us;    // launch: the signature check; the slot (copy,) map and hash
+} lh_wasm_stat_t;
+
 typedef struct lh {
     lua_State *L;
     lua_pkg_t pkg;
     uint32_t gen;               // launch number; events carry it
     lua_xip_t code;             // the store's compiled code, mapped (lua_code.c); data NULL: compiled here
     lh_code_stat_t code_stat;   // for "lua mem"
+    struct lw *wasm;            // a C app's module and runtime (lua_wasm.c), NULL for Lua
+    lh_wasm_stat_t wasm_stat;   // for "lua mem"
+    uint32_t cb_seq;            // bumped by every lh_callback: a C app's budget starts over
 
     // Limits
     size_t mem, mem_peak;
@@ -177,7 +201,8 @@ typedef struct lh {
     bool mem_hit;               // the allocator refused to go over the cap
     uint32_t steps, steps_peak;
     bool killed;                // over the instruction budget
-    char kill_msg[64];          // "main.lua:12: Script took too long"
+    bool mem_fatal;             // a C app ran out of memory: the error screen says so
+    char kill_msg[96];          // "main.lua:12: Script took too long"
     size_t heap_before;         // SRAM free at launch
     char err[96];               // why the script stopped, "" if it didn't
     int64_t t0;                 // ms at launch
@@ -246,6 +271,7 @@ typedef struct {
     int code_slot;              // its flash slot, -1 if none
     bool code_copied;           // copied into the slot at this launch
     size_t heap_before;         // SRAM free when the app started
+    lh_wasm_stat_t wasm;        // a C app's figures
     char err[96];               // last error, "" if none
 } lh_stats_t;
 
@@ -271,6 +297,15 @@ static inline lh_t *lh_get(lua_State *L)
 }
 
 int64_t lh_now(void);
+// The app's heap (lh_alloc's body): every byte its Lua state and, for a C app,
+// WAMR allocate goes through here and counts against lh_t.heap_max, in PSRAM
+// with the reserve. realloc semantics: nsize 0 frees; NULL refuses.
+void *lh_mem_realloc(lh_t *s, void *ptr, size_t osize, size_t nsize);
+// One line of the app's text on the console, as print does: tagged "[<id>] ",
+// a new tag after every newline, control characters as '?'.
+void lh_print_text(const char *id, const char *text, size_t len);
+// The Lua task's stack: below this a C level must not start (0 off the task).
+uintptr_t lh_stack_low(void);
 bool lh_post(const lh_ev_t *ev);                // to the Lua task; false if full
 void lh_need_perm(lua_State *L, uint32_t perm, const char *module);
 
@@ -346,6 +381,24 @@ void lh_code_close(lh_t *s);        // after lua_close
 // the function pushed, a lua_load error and its message, or LH_CODE_NONE
 // (nothing pushed) when the code has no such chunk.
 int lh_code_load(lua_State *L, lh_t *s, const char *rel);
+
+// lua_wasm.c: C apps (docs/C_API.md). The Lua state is the app's API; the
+// module's imports (sdk/c/include/badge_abi.h) work its stack.
+// In boot(), for a C app: reads app.wasm (or app.aot), loads and checks it,
+// and pushes the main chunk, a C function that instantiates it and calls
+// on_start. Raises on failure.
+void lw_boot(lua_State *L, lh_t *s);
+void lw_close(lh_t *s);             // after lua_close: the module and WAMR go
+// lua_img.c: sos_blit. Protected: canvas handle at 1, an lh_blit_t at 2;
+// pushes 0, or -1 when 1 isn't a canvas.
+typedef struct {
+    const uint8_t *px;              // w * h RGB565, little-endian
+    int x, y, w, h;
+} lh_blit_t;
+int lh_cv_blit(lua_State *L);
+// lua_ui.c: the object behind the handle at idx if it is a live `kind`, else
+// NULL. Never raises.
+lh_obj_t *lh_ui_test(lua_State *L, int idx, lh_kind_t kind);
 
 // lua_ws.c: the app's socket
 void lh_open_ws(lua_State *L);

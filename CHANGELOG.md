@@ -6,6 +6,208 @@ update only to a newer one. Dates are commit dates. The contracts these builds
 implement (`docs/LUA_API.md`, `docs/MESH.md`, `server/API.md`) and the server and
 site changes that came with them live in the parent repository.
 
+## 2.2.0 (unreleased)
+
+- **C apps.** Store apps written in C (`docs/C_API.md`; the SDK in `sdk/c/`): the store
+  compiles an app's C to WebAssembly, and the badge runs it in
+  [WAMR](https://github.com/bytecodealliance/wasm-micro-runtime) 2.4.5's classic
+  interpreter, vendored in `main/lua/wamr/` (a subset, Apache-2.0 WITH LLVM-exception;
+  its changes are listed in its README and marked "Solana OS"). The Lua host stays the
+  host: a C app gets the usual Lua state with every API module, its "main chunk" is the
+  module (`main/lua/lua_wasm.c`), and the module's imports (`sdk/c/include/badge_abi.h`,
+  `SOS_ABI` 1) are a small checked Lua C API over that state, so a C app has exactly the
+  Lua API, permissions and limits, and the host's events, timers, sockets, Bluetooth,
+  error screen and `lua mem` work for it unchanged. wasi-libc's few WASI calls are
+  `main/lua/lua_wasi.c` (stdout and stderr to the console as `print`, the clock, random
+  bytes, `proc_exit` as `sys.exit()`). A module importing anything else doesn't load, and
+  the error names the import; one built for a newer ABI is refused with an update hint.
+- **Checked, and errors never cross WAMR.** Every index, pointer and length is checked, at
+  most 64 values a frame and 1024 kept values (`sos_ref`); an app's mistake stops it with
+  a readable message. Imports that can raise a Lua error run protected and turn it into a
+  WAMR exception; the Lua error is raised only once WAMR has unwound (the one jump across
+  WAMR is the watchdog's, out of stuck native code, below).
+  `sos_call` is `lua_pcall`, but out of memory, the budget and a trap in a nested callback
+  always stop the app. Traps read as words on the error screen ("The app read or wrote
+  outside its memory (out of bounds memory access)", "The app divided by zero", ...),
+  titled "App error", "App took too long" or "Out of memory".
+- **One heap cap, two budgets.** WAMR's allocations (module, instance, linear memory, its
+  32 KB stack) go to the app's counted heap through Solana OS's platform layer
+  (`main/lua/lua_wasm_port.c`), so the module and the Lua state share the 6 MB cap in
+  PSRAM with its reserve, and `sys.memory()` reports both; `memory.grow` past it answers
+  -1 (`malloc` returns NULL). WAMR starts and stops around each C app. CPU, interpreted:
+  WAMR's instruction metering, `LUA_HOST_WASM_STEPS_MAX` (2 000 000) wasm instructions a
+  callback, shared by the callbacks nested in it (a patch: stock WAMR gave each nested
+  call a fresh budget). Native: `LW_AOT_CALLBACK_MS` (200 ms) of native time a callback,
+  shared the same way; the badge's own work in an import or in growing memory doesn't
+  count. Host work (fs, crypto, canvas drawing) still counts against the 200 000 host
+  steps. Over either: "App took too long".
+- **Every way a callback spends time is bounded** (from a security review). A callback
+  holds the LVGL lock, so the badge's UI, HOME included, waits for it:
+  - *Bulk memory, interpreted.* `memory.fill`, `memory.copy` and `memory.init` cost one
+    instruction per 4 bytes (`SOLANA_OS_WASM_BULK_BYTES` in `main/sources.cmake`, a patch
+    in `wasm_interp_classic.c`), charged before the work. Before, one opcode cost one
+    instruction whatever its length: 3 000 fills of 3.75 MB in one callback were charged
+    19 563 instructions. Measured on a badge: `memset` 12 KB/ms and `memmove` 8 KB/ms in
+    PSRAM against 2 200 to 4 500 plain instructions a ms, so 4 bytes take about an
+    instruction's time and a callback moves at most 8 MB.
+  - *Bulk memory, native.* wamrc's run-in-place code calls `memset`, `memmove`/`memcpy`
+    and `aot_memory_init` through the native symbol table; WAMR's `aot_memset` and
+    `aot_memmove` now go to `lw_aot_memset`/`lw_aot_memmove` (`main/lua/lua_aot.c`), which
+    work in 4 KB pieces and leave through the innermost `setjmp` once the app must stop
+    (a patch in `aot_runtime.c`; `memory.init` uses them too). Their time is native time.
+    Before, the program counter sat in the runtime's `memset`, never in the module, so the
+    watchdog never fired and a loop of them never stopped. Measured: a loop of 3.75 MB
+    `memset`s or `memmove`s stopped after 200-201 ms of native time, of `memory.init`s
+    after 207 ms. The other helpers native code can reach (soft-float, 64-bit division,
+    the intrinsics, `aot_call_indirect`, `aot_check_app_addr_and_convert`) return within
+    microseconds; the watchdog, when the program counter isn't in the module, now tries
+    again after a random 0.25 to 1.25 ms instead of 10 ms (a soft-float loop stopped
+    after 207-222 ms, passes 3 to 21). Growing the linear memory is refused (`memory.grow`
+    answers -1) once the app must stop.
+  - *Imports, by length.* What an import does for the app costs host steps
+    (`lw_charge`, `main/lua/lua_wasm.h`): 1 a call, 4 more for `sos_call`, 1 per 4 bytes
+    copied (`sos_push_str`, `sos_to_str`, `sos_get`/`sos_set` keys), 32 per byte written
+    to the console (`sos_log`, `fd_write`, and Lua's `print` when a C app calls it), 6 per
+    random byte; `fd_write` takes at most 4 buffers and 1 KB a call (a short count, which
+    stdio carries on from) and `random_get` at most 4 KB (`EINVAL` past it). Measured on
+    a badge: the console writes 11 bytes a ms, `esp_fill_random` 520 bytes a ms; loops of
+    1 KB writes stopped after 6 KB of output, a 2.5 MB push before copying, and the SDK's
+    API probe (92 checks in one `on_start`) used 119 886 of the 200 000 steps. Before,
+    2 000 pushes of 2.5 MB in one callback cost no host steps. The host-steps message is
+    now "Over 200000 host steps in one callback (copies, output, fs, crypto, drawing)".
+  - *The ceiling.* One callback of a C app ends after 3 s of wall-clock time whatever it
+    does (`LW_CALLBACK_MAX_MS`): every import checks it, and on a badge the watchdog
+    (which now watches interpreted apps too) sets the stop flag, aims native code at the
+    trampoline and zeroes the interpreter's remaining count, which the interpreter reads
+    after every import and at every bulk memory operation. "App took too long" ("The app
+    ran over 3 s in one callback"). Measured with the other limits raised in a test build:
+    a native loop, a native `memset` loop, native and interpreted loops of imports and an
+    interpreted `memset` loop each stopped 3.0 to 3.3 s after the callback began.
+- **Nothing runs outside the budget at load.** WAMR runs a module's start function, and
+  exports named `__wasm_call_ctors` or `__post_instantiate`, while it instantiates the
+  module, on an exec env of its own with no instruction limit: a 114-byte module looped
+  there for as long as it liked. The SDK makes none of them (its constructors run from
+  `_initialize`, under the budget) and the server refuses a start section, but sideloads
+  and edited cards never pass the server: the badge now refuses all three before
+  instantiating, for `app.wasm` and `app.aot` alike ("The app has a start function, which
+  the badge doesn't run (rebuild it with the SDK)", "The app exports __wasm_call_ctors,
+  which the badge doesn't run (rebuild it with the SDK)"). Data and element segments are
+  bounded by the file; the initial memory by the heap cap.
+- **Each file is the format its name says.** WAMR's loader picks WebAssembly or native
+  code from the first bytes, and the badge's WAMR has the AOT runtime, so an AOT file
+  sideloaded as `app.wasm` went to the AOT loader unsigned and then jumped into the PSRAM
+  heap (a fault and a restart, since that memory isn't executable). The badge now checks
+  the magic before the loader sees the bytes: `app.wasm` must start with `\0asm`
+  ("app.wasm is native code, not WebAssembly: only the store's signed app.aot runs
+  natively", or "app.wasm isn't WebAssembly"), `app.aot` with `\0aot`. Measured: refused
+  on a badge, no restart.
+- **The store's key, after a rotation.** A launch that finds no key or a signature the
+  cached key doesn't verify still runs `app.wasm`, and now, when the badge is online,
+  asks the server for the key again in the background, once per boot (never in a loop;
+  an offline launch leaves it to a later one), so the next launch can verify; `lua aot
+  <id>` shows the refresh and its outcome.
+- **The package.** `app.json` `"lang": "c"`; the code is `app.wasm` (interpreted) and,
+  when the store made one for this badge's target (`AOT_TARGET` in
+  `sdk/c/toolchain/versions`), `app.aot`; no `main.lua`. The App Store installs `app.wasm`
+  and, when its target matches, it fits a flash slot (1 MB less 4 KB) and the store's
+  signature verifies, `app.aot`, each checked against the manifest's SHA-256; only the
+  installer writes `app.aot`. The console's `lua put`/`recv` take `app.wasm` (never
+  `app.aot`), any console write deletes `app.aot` as it deletes `code.bin`, `lua sums`
+  lists `app.wasm`, `lua list` marks C apps and `lua mem` shows the module, its linear
+  memory, and the most wasm instructions (interpreted) or native time (native) in a
+  callback. App Store and Apps show a small "C" on C apps.
+- **Native C apps.** `app.aot` (wamrc `--xip`, `sdk/c/toolchain/wamrcflags`) runs in place
+  from the flash slots Lua's `code.bin` uses (`main/lua/lua_xip.c`, `LUA_XIP_EXEC`: an
+  instruction mapping above the PSRAM heap's protected region, where the C5 executes;
+  no RAM is made executable, no sdkconfig change). The slot is copied in unless it holds
+  the code already, and its bytes are hashed through the mapping at every launch; the
+  mapping stays until WAMR unloads the module. The seam is `main/lua/lua_aot.c`; the
+  executable-memory hooks it had are gone (a file that isn't `--xip` asks for executable
+  RAM and doesn't load).
+- **Only the store's native code runs.** The store signs `sos-aot1|<target>|<sha256>`
+  with Ed25519 and puts the signature in the manifest's `code.aot.sig`; the badge fetches
+  the store's key (`GET /api/device/aotkey`), keeps it in NVS (`cloud`/`aotkey`, dropped
+  with the server identity), checks the signature at install (fetching the key again
+  once if it fails: rotation) and again at every launch before anything is mapped. No
+  key, no signature, a bad one, a file of the wrong size or a slot that doesn't hash to
+  the signed SHA-256: the app runs `app.wasm`, and without one the error screen says it
+  can't start. The deciding half is portable (`main/lua/lua_aot_trust.c`, both builds:
+  the key's fetch and cache, the signed message, the Ed25519 check, the target and slot
+  checks, the launch's decision); only running native code and the watchdog are the
+  badge's (`main/lua/lua_aot.c`). The installer checks the signature before it asks
+  whether the hardware runs native code, so the emulator fetches the key and verifies
+  every `code.aot.sig` too (then takes `app.wasm`); `app.json` keeps `code.aot` whichever
+  form was installed. A slot found by the signed SHA-256 is mapped without reading the
+  card and hashed, so what runs is the signed code even if `app.aot` on the card changed.
+- **`lua aot <id>`** says why a C app runs `app.aot` or `app.wasm`: this build's target,
+  the manifest's, whether the store's key is cached (its first 8 hex digits), whether
+  the signature in `app.json` verifies, `app.aot`'s size, whether it fits a slot and is
+  the signed SHA-256, and which form runs and why. `lua aotkey` fetches the key from the
+  server now and caches it (one word: `lua aot key` was `lua aot <id>` for an app whose
+  id is `key`). Neither ever writes `app.aot`.
+- **Stopping stuck native code.** An `esp_timer` checks the running callback's native time
+  every 10 ms; past 200 ms it sets a flag every import checks on entry and return, and
+  when the app's task is preempted inside the module's code it points the task's saved
+  program counter at a trampoline that `longjmp`s to the innermost call into the module.
+  Only the module's frames and WAMR's call path lie between (each nested callback has
+  its own `setjmp`); the error then travels the normal way and the app ends with "App
+  took too long" ("Native code ran over 200 ms in one callback"). WASI imports keep
+  WAMR's libc-wasi signatures for native apps: wamrc compiles them as direct calls.
+- **Measured on a badge** (HYQ5VS, prototype, ESP32-C5 rev 1.2; USB; Wi-Fi off). Every
+  regression app in `main/lua/tests/c/` interpreted and native: each trap, bad pointer
+  and index, the memory cap, the unknown-import and wrong-ABI cases on the error screen,
+  never a restart. A stuck loop stopped natively after 204-210 ms (first watchdog pass);
+  a callback that spins, called through `pcall` from native code, after 203-207 ms; a
+  soft-float loop (the program counter mostly in the helpers) after 236-295 ms (pass 4
+  to 10); a loop calling an import after 208-210 ms of native time. Interpreted, the same
+  apps stop at 2 000 000 instructions, with no task-watchdog warning. Launch of a native
+  app: the signature check 57-76 ms every time; the slot copy at first launch 34-58 ms
+  for 1-4 KB, 290-380 ms for 46-76 KB; later launches map and hash a 46 KB slot in
+  3.6-3.8 ms (about 120 ms from `lua run` to the app booted, against about 460 ms the
+  first time and 90 ms for the same app interpreted). Through the bridge: the cheapest
+  import 4 us native, 7 us interpreted; a label's text 176 / 248 us; a full 320 x 216
+  canvas `sos_blit` 16.4-16.7 ms either way. The interpreter ran a plain loop at about
+  4 500 wasm instructions a ms. A starfield frame (examples/starfield's drawing, 160 x
+  108 at 2x) takes 7 ms native, 33 ms interpreted: 19.4 and 12.6-13.2 frames a second
+  (the screen is the limit natively). Lua task stack left (of 12 KB): 7.2 KB native and
+  7.0 KB interpreted for hello, 2.4 KB native and 3.8 KB interpreted at the deepest
+  nesting the test reaches (it ends with "The app ran out of stack"). SRAM free for
+  malloc: launcher 125.4 KB, hello running 110.2 KB native / 112.0 KB interpreted, the
+  speed test 113.0 / 113.0 KB; PSRAM free 8.36 MB at the launcher, 8.24 / 8.22 MB with
+  hello. 20 launch and exit cycles of a native app: SRAM free 157 KB before and after,
+  largest block 96 KB before and after. A Lua app with `code.bin` ran in place from a
+  slot next to native code in the others; `t-crypto` and `t-coro` pass.
+- **The Lua task yields** a tick at least once a second even when frames leave no wait
+  between ticks: a C app drawing the whole screen otherwise starved the idle task and
+  the task watchdog warned (seen on a badge).
+- **The installer's acceptance step, on a badge** (a test build running the installer's
+  own `install_c_code` on a task of its stack size and priority, with apps signed by the
+  server's code, `server/src/aotsign.ts`): the store's signature verifies, `app.wasm`
+  and `app.aot` are hashed and kept; a tampered `app.aot` is refused. The task's stack
+  (5 120 bytes, unchanged) never had less than 748 bytes left over a measurement frame
+  about 300 bytes bigger than the worker's; reading the manifest (`lua_pkg_load`) and
+  the card and logging go deepest, not the signature check or SHA-256 (both stay above
+  it). The console's 5 KB REPL task keeps 1.4 KB after `lua aot`. On the final build:
+  hello and starfield native from their slots, a stuck loop stopped after 206 ms (pass
+  1), a changed signature and a changed `app.aot` (its slot doesn't hash to the signed
+  SHA-256) run `app.wasm`.
+- **What it costs.** About 120 KB of flash (2.1.0's image 2 340 704 bytes, now
+  2 463 216). Nothing while no C app runs.
+- **Not measured on a badge yet:** a real store install over the network (fetching the
+  key from a server that serves it, then downloading `app.aot`; checked end to end in
+  the emulator against a real test server instead, `server/test/cemu.test.ts`), a C app
+  next to a joined Wi-Fi network and the TLS floor, a production badge (C5 rev 1.0),
+  battery.
+- **`tools/cc/badge-cc --aot`** refuses a native file a badge can't run in place (not
+  `--xip`, or a `.rela.text` code relocation group), so a local build fails where the
+  store would.
+- Tests: `main/lua/tests/c/` (regression apps for every import, the callbacks, each trap,
+  the limits, the console and a store install against a stand-in server, and the SDK's
+  `sdk/c/tests/host` probe of `badge.h`, 92 checks; `build.sh`, then
+  `bun main/lua/tests/c/run.ts`, headless in the emulator), and
+  `server/test/cemu.test.ts` (the emulated badge against a real test server: publish,
+  install with the key fetched and the signature verified, run, `lua aot`, tampering).
+
 ## 2.1.0 (2026-11-13)
 
 - **A faster screen.** Measured on a prototype badge:

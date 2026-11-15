@@ -30,6 +30,15 @@
 #define LUA_HOST_HEAP_MAX_SRAM  (96 * 1024)
 #define LUA_HOST_SYS_RESERVE    (32 * 1024)
 #define LUA_HOST_STEPS_MAX      200000      // VM instructions per callback
+// A C app's budget per callback in WAMR's interpreter (2.2.0): wasm
+// instructions, counted across nested calls (a callback the app gets inside
+// sos_call shares it). On a badge the classic interpreter runs 2 200 to
+// 2 900 of them a millisecond, so this is under a second: room for the
+// emulator to run what a badge runs natively at 15 frames a second. Native
+// code (app.aot) is limited by time instead: LW_AOT_CALLBACK_MS (lua_aot.h).
+// Host work an API call does (fs reads, crypto, canvas drawing) still counts
+// against LUA_HOST_STEPS_MAX, as for a Lua app.
+#define LUA_HOST_WASM_STEPS_MAX 2000000
 
 // This badge's cap: LUA_HOST_HEAP_MAX with PSRAM, else LUA_HOST_HEAP_MAX_SRAM.
 size_t lua_host_heap_max(void);

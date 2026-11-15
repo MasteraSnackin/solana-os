@@ -99,6 +99,7 @@ static void unlock(void)
 
 // ---------------------------------------------------------------------------
 // NVS "cloud": server, id, secret, key, mesh channel and the owner's figures
+// (and "aotkey", the store's key for native C apps, lua/lua_aot.h)
 
 static void nvs_load(const char *key, char *out, size_t n)
 {
@@ -833,6 +834,7 @@ void os_cloud_set_server(const char *url)
         nvs_save("key", "");
         nvs_save("owner", "");
         nvs_save("beacon", "");
+        nvs_save("aotkey", "");         // the old store's key for native C apps (lua/lua_aot.h)
         nvs_save_int("claimed", 0);
         ESP_LOGI(TAG, "server set to '%s'", clean);
     }

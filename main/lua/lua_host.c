@@ -26,6 +26,7 @@
 // !LAMPs and sys.time() seconds; bigger whole numbers in JSON (ms
 // timestamps) arrive as floats.
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,6 +56,7 @@ static const char *TAG = "lua";
 #define LH_MAX_WAIT_MS      200         // re-check the quit flag at least this often
 #define LH_LOCK_POLL_MS     20
 #define LH_PREWARM_MS       4000        // longest wait for the server connection at launch
+#define LH_BUSY_MAX_MS      1000        // an app that never leaves the CPU idle still yields a tick this often
 #define LH_SERVER_PERMS     (LUA_PERM_LAMPS | LUA_PERM_ITEMS | LUA_PERM_PROFILE | LUA_PERM_QUEST | LUA_PERM_HTTP | \
                              LUA_PERM_RPC)
 
@@ -74,6 +76,11 @@ static char s_task_id[LUA_PKG_ID_MAX + 1];  // ... running this app (under lh_mx
 // every new C level. The leaf work under a level (LVGL, printf, JSON, pattern
 // matching) stays within LH_STACK_LOW. 0 off the lua task.
 static uintptr_t s_stack_low, s_stack_crit;
+
+uintptr_t lh_stack_low(void)
+{
+    return s_stack_low;
+}
 
 int lh_cstack_check(void)
 {
@@ -107,9 +114,8 @@ size_t lua_host_heap_max(void)
     return os_mem_psram() ? LUA_HOST_HEAP_MAX : LUA_HOST_HEAP_MAX_SRAM;
 }
 
-static void *lh_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
+void *lh_mem_realloc(lh_t *s, void *ptr, size_t osize, size_t nsize)
 {
-    lh_t *s = ud;
     size_t old = ptr ? osize : 0;
     if (nsize == 0) {
         free(ptr);
@@ -151,6 +157,11 @@ static void *lh_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
     return p;
 }
 
+static void *lh_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
+{
+    return lh_mem_realloc(ud, ptr, osize, nsize);
+}
+
 static void step_hook(lua_State *L, lua_Debug *ar);
 
 // Over budget: from now on every thread fails at every instruction, so
@@ -164,9 +175,15 @@ static int over_budget(lua_State *L, int level)
     if (s->L && s->L != L) {
         lua_sethook(s->L, step_hook, LUA_MASKCOUNT, 1);
     }
-    luaL_where(L, level);
-    lua_pushliteral(L, "Script took too long");
-    lua_concat(L, 2);
+    if (s->pkg.lang == LUA_PKG_LANG_C) {
+        // A C app's own code counts in wasm instructions (lua_wasm.c); this is
+        // the host work an API call did for it.
+        lua_pushfstring(L, LH_HOST_STEPS_MSG, LUA_HOST_STEPS_MAX);
+    } else {
+        luaL_where(L, level);
+        lua_pushliteral(L, "Script took too long");
+        lua_concat(L, 2);
+    }
     if (!s->kill_msg[0]) {
         strlcpy(s->kill_msg, lua_tostring(L, -1), sizeof(s->kill_msg));
     }
@@ -256,6 +273,7 @@ static void close_state(lh_t *s)
     }
     lh_fs_close(s);
     lh_code_close(s);                       // nothing points into it now
+    lw_close(s);                            // a C app's module and WAMR, after the state that called it
 }
 
 // The script failed with rc and its error on the stack (or in msg_in).
@@ -264,7 +282,11 @@ static void fail(lh_t *s, int rc, const char *msg_in)
 {
     lua_State *L = s->L;
     char msg[200];
-    const char *title = "Script error";
+    bool c = s->pkg.lang == LUA_PKG_LANG_C;
+    const char *title = c ? "App error" : "Script error";
+    if (s->mem_fatal) {
+        rc = LUA_ERRMEM;                    // a C app's memory ran out (lua_wasm.c)
+    }
     // A memory error that went through pcall (require, or the script's own)
     // comes back as a plain error with Lua's message.
     if (rc != LUA_ERRMEM && s->mem_hit && lua_type(L, -1) == LUA_TSTRING
@@ -288,7 +310,7 @@ static void fail(lh_t *s, int rc, const char *msg_in)
         strlcpy(msg, msg_in ? msg_in : lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1)
                      : "(error is not a string)", sizeof(msg));
         if (s->killed) {
-            title = "Script took too long";
+            title = c ? "App took too long" : "Script took too long";
         }
     }
     lua_settop(L, 0);
@@ -304,6 +326,7 @@ static void fail(lh_t *s, int rc, const char *msg_in)
     lh_ble_stop(s);                         // and its Bluetooth heap
     show_error(s, title, msg);
     s->killed = false;
+    s->mem_fatal = false;
     lua_sethook(L, step_hook, LUA_MASKCOUNT, LH_HOOK_EVERY);
     close_state(s);
     lh_led_off();
@@ -317,6 +340,7 @@ bool lh_callback(lh_t *s, lua_CFunction fn, void *arg)
     }
     s->steps = 0;
     s->kill_msg[0] = 0;
+    s->cb_seq++;
     lua_pushcfunction(L, fn);
     lua_pushlightuserdata(L, arg);
     int rc = lua_pcall(L, 1, 0, 0);
@@ -336,6 +360,7 @@ bool lh_callback(lh_t *s, lua_CFunction fn, void *arg)
             one_line(line);
             printf("[lua:%s] %s\n", s->pkg.id, line);
             lua_settop(L, 0);
+            s->mem_fatal = false;
             return false;
         }
         fail(s, rc, NULL);
@@ -365,6 +390,27 @@ static const char *read_chunk(lua_State *L, void *ud, size_t *size)
 // with the app's tag and no control character passes (a CR would put the
 // cursor back to the start): an app can't write a line, or a prompt, of the
 // OS's own.
+void lh_print_text(const char *id, const char *text, size_t len)
+{
+    char buf[96];
+    size_t n = 0;
+    printf("[%s] ", id);
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (n + 1 >= sizeof(buf) || c == '\n') {
+            fwrite(buf, 1, n, stdout);
+            n = 0;
+        }
+        if (c == '\n') {
+            printf("\n[%s] ", id);
+        } else {
+            buf[n++] = (c < 0x20 && c != '\t') || c == 0x7f ? '?' : (char)c;
+        }
+    }
+    fwrite(buf, 1, n, stdout);
+    putchar('\n');
+}
+
 static int l_print(lua_State *L)
 {
     luaL_Buffer b;
@@ -381,6 +427,12 @@ static int l_print(lua_State *L)
     size_t len;
     const char *text = lua_tolstring(L, -1, &len);
     const char *id = lh_get(L)->pkg.id;
+    if (lh_get(L)->pkg.lang == LUA_PKG_LANG_C) {
+        // A C app's output is charged however it gets out (LH_OUT_STEPS),
+        // before the console blocks on it.
+        lh_charge_steps(L, (unsigned)((len + 1 > UINT_MAX / LH_OUT_STEPS ? UINT_MAX / LH_OUT_STEPS : len + 1)
+                                      * LH_OUT_STEPS));
+    }
     luaL_Buffer o;
     luaL_buffinit(L, &o);
     for (size_t i = 0; i < len; i++) {
@@ -412,8 +464,10 @@ static int boot(lua_State *L)
     // is gone before the libraries take their share (the launch peaks ~6 KB
     // lower). The store's compiled code loads in place, with no parser.
     lh_t *s = lh_get(L);
-    int rc = lh_code_load(L, s, "main.lua");
-    if (rc == LH_CODE_NONE) {
+    int rc = LUA_OK;
+    if (s->pkg.lang == LUA_PKG_LANG_C) {
+        lw_boot(L, s);                      // the main chunk instantiates the module
+    } else if ((rc = lh_code_load(L, s, "main.lua")) == LH_CODE_NONE) {
         reader_t *rd = lua_touserdata(L, 1);
         if (!rd->f) {
             luaL_error(L, "main.lua is missing");
@@ -608,6 +662,7 @@ static void task_end(lh_t *s)
         .mem_peak = s->mem_peak, .mem_end = s->mem, .steps_peak = s->steps_peak,
         .stack_free = uxTaskGetStackHighWaterMark(NULL), .heap_before = s->heap_before,
         .code_size = s->code_stat.size, .code_slot = s->code_stat.slot, .code_copied = s->code_stat.copied,
+        .wasm = s->wasm_stat,
     };
     strlcpy(lh_stats.id, s->pkg.id, sizeof(lh_stats.id));
     strlcpy(lh_stats.err, s->err, sizeof(lh_stats.err));
@@ -686,8 +741,14 @@ static void lua_task(void *arg)
         }
     }
     free(rd);
-    ESP_LOGI(TAG, "%s: booted (%u bytes of Lua heap, %s)", s->pkg.id, (unsigned)s->mem,
-             xip ? "store code run in place" : "compiled here");
+    // How the code runs: a C app's app.aot (native, from a flash slot) or
+    // app.wasm (WAMR's interpreter); a Lua app's code.bin (run in place) or
+    // main.lua compiled on the badge.
+    bool c = s->pkg.lang == LUA_PKG_LANG_C;
+    ESP_LOGI(TAG, "%s: %s (%u bytes of %s heap, %s)", s->pkg.id, rc == LUA_OK ? "booted" : "didn't boot",
+             (unsigned)s->mem, c ? "app" : "Lua",
+             c ? (s->wasm_stat.aot ? "app.aot, native code run in place" : "app.wasm, interpreted")
+             : xip ? "code.bin, store code run in place" : "main.lua, compiled here");
 
     if (lock(s)) {
         lv_obj_delete(s->loading);
@@ -705,9 +766,20 @@ static void lua_task(void *arg)
         lvgl_port_unlock();
     }
 
+    int64_t blocked = lh_now();
     while (s->L && !s->failed && !s->quit) {
         lh_ev_t ev;
-        bool got = xQueueReceive(s_q, &ev, wait_ticks(s)) == pdTRUE;
+        // A frame that takes longer than LH_TICK_MS (a C app drawing the
+        // whole screen) leaves no wait between ticks: then the idle task
+        // still gets one tick a second, or the task watchdog complains (seen
+        // on a badge, 2.2.0).
+        TickType_t wait = wait_ticks(s);
+        int64_t now = lh_now();
+        if (wait || now - blocked >= LH_BUSY_MAX_MS) {
+            wait = wait ? wait : 1;
+            blocked = now;
+        }
+        bool got = xQueueReceive(s_q, &ev, wait) == pdTRUE;
         if (got && ev.gen != s->gen) {
             free(ev.data);
             continue;

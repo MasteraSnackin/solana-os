@@ -4,11 +4,18 @@
 //   lua list | run <id> | rm <id> [file] | mem | sums <id> | install <id>
 //   lua put <id> <file> begin|<base64>|end
 //   lua recv <id> <file> <bytes> <sha256>
+//   lua aot <id> | aotkey
 //
-// <file> is main.lua, app.json or a bundled path (docs/LUA_API.md
-// "Console"). Writing or removing any of them deletes the store's compiled
-// code (code.bin), which would no longer match: the app then runs from its
-// source. Nothing here can write code.bin. put copies a file a line at a time: begin starts it, each
+// aotkey is one word: "aot key" would be "aot <id>" for an app whose id is
+// "key" (ids are 3 to 24 characters of a-z, 0-9 and -).
+//
+// <file> is main.lua, app.json, app.wasm (a C app's module, docs/C_API.md)
+// or a bundled path (docs/LUA_API.md "Console"). Writing or removing any of
+// them deletes the store's compiled code (code.bin) and a C app's native
+// code (app.aot), which would no longer match: the app then runs from its
+// source or its app.wasm. Nothing here can write code.bin or app.aot (native
+// code comes only from the store installer, checked against the store's
+// SHA-256). put copies a file a line at a time: begin starts it, each
 // base64 line appends to it, end checks it and moves it into place. recv
 // takes a whole file in one stream after its line, a block at a time when
 // the badge asks for it, so the card is never written while the UART
@@ -22,11 +29,15 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "esp_timer.h"
 #include "mbedtls/base64.h"
 #include "psa/crypto.h"
 #include "core/console.h"
+#include "cJSON.h"
+#include "core/os_api.h"
 #include "core/os_cmd.h"
 #include "core/os_data.h"
+#include "lua_aot.h"
 #include "lua_install.h"
 #include "lua_priv.h"
 
@@ -66,20 +77,24 @@ static int cmd_list(void)
                 strlcat(perms, lua_perm_name(b), sizeof(perms));
             }
         }
-        printf("%-24s %-10s %-20s %s%s%s\n", p->id, p->version, p->name, perms,
-               p->temp ? "  temp" : "", lua_pkg_expired(p) ? " (expired)" : "");
+        printf("%-24s %-10s %-20s %s%s%s%s\n", p->id, p->version, p->name, perms,
+               p->lang == LUA_PKG_LANG_C ? "  C" : "", p->temp ? "  temp" : "", lua_pkg_expired(p) ? " (expired)" : "");
     }
     free(pkgs);
     return n < 0;
 }
 
-// The store's compiled code no longer matches the app's files.
+// The store's compiled code (a Lua app's code.bin, a C app's app.aot) no
+// longer matches the app's files.
 static void drop_code(const char *id)
 {
     char rel[64], path[160];
-    lua_pkg_rel(rel, sizeof(rel), id, "code.bin");
-    os_data_path(path, sizeof(path), rel);
-    unlink(path);
+    static const char *const files[] = {"code.bin", "app.aot"};
+    for (int i = 0; i < 2; i++) {
+        lua_pkg_rel(rel, sizeof(rel), id, files[i]);
+        os_data_path(path, sizeof(path), rel);
+        unlink(path);
+    }
 }
 
 // Removes the file, then the folders inside files/ it leaves empty.
@@ -137,28 +152,59 @@ static void print_code(const lh_code_stat_t *c)
     }
 }
 
+// A C app's heap is its Lua state's and WAMR's together (module, instance,
+// linear memory), so the "Lua heap" figures count both.
+static void print_wasm(const lh_wasm_stat_t *w)
+{
+    if (!w->c) {
+        return;
+    }
+    printf("  C app: %s, %u bytes; linear memory %u bytes (peak %u)\n", w->aot ? "app.aot (native)"
+           : "app.wasm (interpreted)", (unsigned)w->module_size, (unsigned)w->mem_size, (unsigned)w->mem_peak);
+    if (w->aot) {
+        printf("  run in place from flash slot %d%s; launch: signature %u us, slot %u us\n"
+               "  most native time in one callback %u us (cap %d ms)\n", w->slot,
+               w->copied ? " (copied in at launch)" : "", (unsigned)w->sig_us, (unsigned)w->map_us,
+               (unsigned)w->native_peak_us, LW_AOT_CALLBACK_MS);
+    } else {
+        printf("  most wasm instructions in one callback %u (cap %d)\n", (unsigned)w->steps_peak,
+               LUA_HOST_WASM_STEPS_MAX);
+    }
+}
+
 static int cmd_mem(void)
 {
     lh_t *s = lh_cur;
     if (s && s->L) {
-        printf("running %s: %u bytes of Lua heap (peak %u, cap %u, in %s)\n", s->pkg.id, (unsigned)s->mem,
-               (unsigned)s->mem_peak, (unsigned)s->heap_max, s->psram ? "PSRAM" : "SRAM");
-        print_code(&s->code_stat);
+        printf("running %s: %u bytes of %s heap (peak %u, cap %u, in %s)\n", s->pkg.id, (unsigned)s->mem,
+               s->wasm_stat.c ? "app" : "Lua", (unsigned)s->mem_peak, (unsigned)s->heap_max,
+               s->psram ? "PSRAM" : "SRAM");
+        if (s->wasm_stat.c) {
+            print_wasm(&s->wasm_stat);
+        } else {
+            print_code(&s->code_stat);
+        }
     }
     if (!lh_stats.id[0]) {
         printf("no app has finished yet\n");
         return 0;
     }
-    printf("last run %s: Lua heap peak %u bytes (cap %u), %u left after close\n"
-           "  most instructions in one callback %u (cap %d)\n"
+    bool c = lh_stats.wasm.c;
+    printf("last run %s: %s heap peak %u bytes (cap %u), %u left after close\n"
+           "  most %s in one callback %u (cap %d)\n"
            "  lua task stack never used %u bytes\n"
            "  SRAM free at launch %u\n"
            "  last error: %s\n",
-           lh_stats.id, (unsigned)lh_stats.mem_peak, (unsigned)lua_host_heap_max(), (unsigned)lh_stats.mem_end,
+           lh_stats.id, c ? "app" : "Lua", (unsigned)lh_stats.mem_peak, (unsigned)lua_host_heap_max(),
+           (unsigned)lh_stats.mem_end, c ? "host steps (copies, output, fs, crypto, canvas)" : "instructions",
            (unsigned)lh_stats.steps_peak, LUA_HOST_STEPS_MAX, (unsigned)lh_stats.stack_free,
            (unsigned)lh_stats.heap_before, lh_stats.err[0] ? lh_stats.err : "none");
-    print_code(&(lh_code_stat_t){ .size = lh_stats.code_size, .slot = lh_stats.code_slot,
-                                  .copied = lh_stats.code_copied });
+    if (lh_stats.wasm.c) {
+        print_wasm(&lh_stats.wasm);
+    } else {
+        print_code(&(lh_code_stat_t){ .size = lh_stats.code_size, .slot = lh_stats.code_slot,
+                                      .copied = lh_stats.code_copied });
+    }
     return 0;
 }
 
@@ -192,7 +238,7 @@ static int cmd_put(const char *id, const char *file, const char *arg)
     char rel[128], part[176], path[160];
     size_t max;
     if (!lua_pkg_file_rel(rel, sizeof(rel), id, file, &max)) {
-        printf("usage: lua put <id> <main.lua|app.json|bundled path> begin|<base64>|end\n");
+        printf("usage: lua put <id> <main.lua|app.json|app.wasm|bundled path> begin|<base64>|end\n");
         return 1;
     }
     const char *why = refusal(id);
@@ -374,7 +420,7 @@ static int cmd_recv(const char *id, const char *file, const char *bytes, const c
     char *end;
     long n = strtol(bytes, &end, 10);
     if (!lua_pkg_file_rel(rel, sizeof(rel), id, file, NULL) || end == bytes || *end || n < 0 || !parse_sha(sha, want)) {
-        printf("usage: lua recv <id> <main.lua|app.json|bundled path> <bytes> <sha256>\n");
+        printf("usage: lua recv <id> <main.lua|app.json|app.wasm|bundled path> <bytes> <sha256>\n");
         return 1;
     }
     const char *why = receive(id, file, n, want);
@@ -452,7 +498,7 @@ static int cmd_sums(const char *id)
         printf("sums: no microSD card\n");
         return 1;
     }
-    int n = sum_file(id, "main.lua") + sum_file(id, "app.json");
+    int n = sum_file(id, "main.lua") + sum_file(id, "app.json") + sum_file(id, "app.wasm");
     s_sub[0] = 0;
     n += sum_dir(id, 1);
     printf("sums: %d files\n", n);
@@ -468,6 +514,139 @@ static int cmd_install(const char *id)
         return 1;
     }
     printf("installing %s from the App Store (the log and a toast tell how it went)\n", id);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// aot: why a C app runs app.aot or app.wasm (lua_aot.h). Reads and verifies,
+// never writes app.aot: native code comes only from the store installer.
+
+// OS task (os_api's callbacks run there): cache the key, say how it went.
+static void aot_key_answered(int status, const char *body, void *ctx)
+{
+    (void)ctx;
+    uint8_t key[32];
+    char hex[9];
+    if (lw_aot_key_answer(status, body) && lw_aot_key(key)) {
+        lua_pkg_hex(hex, key, 4);
+        printf("aotkey: cached %s...\n", hex);
+    } else {
+        printf("aotkey: the server sent no key (HTTP %d)\n", status);
+    }
+}
+
+static int cmd_aot_key(void)
+{
+    esp_err_t err = os_api_call("GET", "/api/device/aotkey", NULL, 256, aot_key_answered, os_api_token());
+    if (err != ESP_OK) {
+        printf("aotkey: %s\n", err == ESP_ERR_INVALID_STATE ? "offline (Wi-Fi on, and a registered badge)"
+               : "the server queue is full; try again");
+        return 1;
+    }
+    printf("aotkey: asking the server\n");
+    return 0;
+}
+
+static int cmd_aot(const char *id)
+{
+    char rel[64], path[160], hex[65];
+    lua_pkg_t *pkg = malloc(sizeof(*pkg));  // ~400 bytes: the console's stack is small
+    if (!lua_pkg_valid_id(id) || !os_data_ready() || !pkg || !lua_pkg_load(id, pkg)) {
+        printf("aot %s: %s\n", id, !os_data_ready() ? "no microSD card" : !pkg ? "not enough memory"
+               : "no such app installed");
+        free(pkg);
+        return 1;
+    }
+    if (pkg->lang != LUA_PKG_LANG_C) {
+        printf("aot %s: a Lua app (native code is for C apps)\n", id);
+        free(pkg);
+        return 1;
+    }
+    // The manifest's code.aot as the store wrote it, whatever its target
+    // (lua_pkg_parse keeps only this build's).
+    lua_pkg_rel(rel, sizeof(rel), id, "app.json");
+    char *json = os_data_read(rel, LUA_PKG_JSON_MAX, NULL);
+    cJSON *m = json ? cJSON_Parse(json) : NULL;
+    free(json);
+    const cJSON *aot = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(m, "code"), "aot");
+    const cJSON *target = cJSON_GetObjectItemCaseSensitive(aot, "target");
+    const cJSON *sig = cJSON_GetObjectItemCaseSensitive(aot, "sig");
+    char shown[48];
+    lua_pkg_plain(shown, sizeof(shown), cJSON_IsString(target) ? target->valuestring : "");
+    bool ours = cJSON_IsString(target) && !strcmp(target->valuestring, LW_AOT_TARGET);
+    printf("aot %s (%s):\n  this build's target: %s\n", id, pkg->version, LW_AOT_TARGET);
+    if (!aot) {
+        printf("  manifest's target:   none (the store sent no native code)\n");
+    } else {
+        printf("  manifest's target:   %s (%s)\n", shown[0] ? shown : "?", ours ? "this build's" : "another build's");
+    }
+    uint8_t key[32];
+    bool has_key = lw_aot_key(key);
+    if (has_key) {
+        lua_pkg_hex(hex, key, 4);
+        printf("  store's key:         cached, %s...\n", hex);
+    } else {
+        printf("  store's key:         not cached (lua aotkey fetches it)\n");
+    }
+    // A launch the cached key couldn't vouch for asks the server again, once
+    // per boot (lua_aot.h).
+    int64_t at;
+    uint8_t refresh = lw_aot_key_refresh_state(&at);
+    if (refresh != LW_KEY_REFRESH_NONE) {
+        long ago = refresh == LW_KEY_REFRESH_ASKED ? 0 : (long)((esp_timer_get_time() - at) / 1000000);
+        printf("  key refresh:         %s", refresh == LW_KEY_REFRESH_ASKED ? "asked the server, no answer yet"
+               : refresh == LW_KEY_REFRESH_NEW ? "refreshed: the server sent a new key"
+               : refresh == LW_KEY_REFRESH_SAME ? "refreshed: the server sent the same key"
+               : "the server sent no key");
+        if (refresh != LW_KEY_REFRESH_ASKED) {
+            printf(" %ld s ago", ago);
+        }
+        printf(" (after a launch without a key that verified)\n");
+    }
+    const char *verdict = !aot ? "none" : !ours ? "not checked (another target)"
+                          : !pkg->aot ? (cJSON_IsString(sig) ? "unreadable in app.json" : "none in app.json")
+                          : !has_key ? "not checked (no key)"
+                          : lw_aot_sig_ok(key, pkg->aot_sha, pkg->aot_sig) ? "verifies" : "doesn't verify";
+    printf("  signature:           %s\n", verdict);
+    cJSON_Delete(m);
+    // The file itself: at launch its bytes are hashed again through the slot
+    // (lua_xip.c), so a file that isn't what was signed never runs.
+    long size = -1;
+    uint8_t sha[32];
+    lua_pkg_rel(rel, sizeof(rel), id, "app.aot");
+    os_data_path(path, sizeof(path), rel);
+    bool hashed = lua_pkg_sha256_file(path, sha, &size);
+    bool same = hashed && pkg->aot && size == pkg->aot_size && !memcmp(sha, pkg->aot_sha, 32);
+    if (hashed) {
+        printf("  app.aot:             %ld bytes on the card, %s; %s\n", size,
+               size <= LUA_XIP_MAX ? "fits a flash slot" : "too big for a flash slot",
+               !pkg->aot ? "nothing signed to compare" : same ? "the signed SHA-256" : "NOT the signed SHA-256");
+    } else if (pkg->aot) {
+        printf("  app.aot:             not on the card; the manifest says %ld bytes, %s\n", (long)pkg->aot_size,
+               pkg->aot_size <= LUA_XIP_MAX ? "fits a flash slot" : "too big for a flash slot");
+    } else {
+        printf("  app.aot:             not on the card\n");
+    }
+    const char *no = lw_aot_refusal(pkg, path, sizeof(path), &size, NULL);
+    struct stat st;
+    lua_pkg_rel(rel, sizeof(rel), id, "app.wasm");
+    os_data_path(path, sizeof(path), rel);
+    bool wasm = stat(path, &st) == 0;
+    if (!no && !same) {
+        // A slot found by the signed SHA-256 is used without reading the card
+        // (lua_xip.c), and hashed: what runs is the signed code either way.
+        printf("  runs:                app.aot's signed code if a flash slot still holds it (checked at launch); "
+               "else %s: the file on the card isn't what the store signed\n",
+               wasm ? "app.wasm, interpreted" : "nothing (no app.wasm)");
+    } else if (!no) {
+        printf("  runs:                app.aot, native code run in place\n");
+    } else if (wasm) {
+        printf("  runs:                app.wasm, interpreted: %s\n",
+               no[0] ? no : !aot ? "no native code from the store" : "no signed native code for this build");
+    } else {
+        printf("  runs:                nothing: %s, and there is no app.wasm\n", no[0] ? no : "no native code");
+    }
+    free(pkg);
     return 0;
 }
 
@@ -492,14 +671,18 @@ static int cmd_lua(int argc, char **argv)
         return cmd_sums(argv[2]);
     } else if (!strcmp(sub, "install") && argc == 3) {
         return cmd_install(argv[2]);
+    } else if (!strcmp(sub, "aotkey") && argc == 2) {
+        return cmd_aot_key();
+    } else if (!strcmp(sub, "aot") && argc == 3) {
+        return cmd_aot(argv[2]);
     }
     printf("usage: lua [list|run <id>|rm <id> [file]|mem|sums <id>|install <id>|put <id> <file> begin|<base64>|end"
-           "|recv <id> <file> <bytes> <sha256>]\n");
+           "|recv <id> <file> <bytes> <sha256>|aot <id>|aotkey]\n");
     return 1;
 }
 
 void lh_cmd_register(void)
 {
-    os_cmd_register("lua", "lua [list|run|rm <id> [file]|mem|sums|install <id>|put <id> <file> ...|recv <id> <file> <bytes> <sha256>]",
+    os_cmd_register("lua", "lua [list|run|rm <id> [file]|mem|sums|install <id>|put <id> <file> ...|recv <id> <file> <bytes> <sha256>|aot <id>|aotkey]",
                     cmd_lua);
 }
