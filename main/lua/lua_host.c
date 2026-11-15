@@ -708,11 +708,7 @@ static void wake_fire(void *arg)
 static void wake_at(lh_t *s, int64_t ms)
 {
     if (!s_wake) {
-        const esp_timer_create_args_t args = { .callback = wake_fire, .name = "lhwake" };
-        if (esp_timer_create(&args, &s_wake) != ESP_OK) {
-            s_wake = NULL;
-            return;
-        }
+        return;                             // made at boot (lua_host_init)
     }
     s_wake_gen = s->gen;
     esp_timer_stop(s_wake);
@@ -1083,6 +1079,12 @@ void lua_host_init(void)
     lh_mx = xSemaphoreCreateMutex();
     s_done = xSemaphoreCreateBinary();
     s_q = xQueueCreate(LH_QUEUE_LEN, sizeof(lh_ev_t));
+    // sys.tick's wake-up timer: made here, not at the first app that asks, so it
+    // never lands in the middle of the heap an app left behind (CLAUDE.md rule 7).
+    const esp_timer_create_args_t wake = { .callback = wake_fire, .name = "lhwake" };
+    if (esp_timer_create(&wake, &s_wake) != ESP_OK) {
+        s_wake = NULL;
+    }
     lua_install_init();
     lh_cmd_register();
     lua_svc_init();

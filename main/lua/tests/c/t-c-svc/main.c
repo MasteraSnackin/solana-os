@@ -5,7 +5,7 @@
 // and proves the screen and spending aren't there. Lines start "t-c-svc".
 #include "../tlib.h"
 
-static int s_ticks, s_msgs;
+static int s_ticks, s_msgs, s_svc;  // s_svc: this instance is the service
 
 // The value at idx as JSON text (json.encode), for the log.
 static void say_json(const char *prefix, int idx)
@@ -70,6 +70,7 @@ __attribute__((export_name("on_service"))) void on_service(void)
 
 __attribute__((export_name("on_service_start"))) void on_service_start(void)
 {
+    s_svc = 1;
     say("t-c-svc svc: started");
     static const char *const nils[] = {"ui", "led", "wifi", "ble", "lamps.spend", "lamps.transfer", "items.grant",
                                        "mesh.channel", "sys.keys", "service.start"};
@@ -82,6 +83,15 @@ __attribute__((export_name("on_service_start"))) void on_service_start(void)
         sos_pop(1);
     }
     check(bad == 0, "t-c-svc svc: the screen, spending and the radio's channel are nil");
+    // Calling one fails like any call of nothing (C_API.md "service"): BADGE_ERR in badge.h.
+    G("lamps.spend");
+    sos_push_int(1);
+    int32_t rc = sos_call(1, 0);
+    char err[96];
+    sos_to_str(-1, err, sizeof(err));
+    check(rc != 0, "t-c-svc svc: calling lamps.spend fails");
+    say(err);
+    sos_pop(sos_top());
     check(G("service.status") == SOS_FN, "t-c-svc svc: service.status is there");
     sos_pop(1);
 }
@@ -89,6 +99,13 @@ __attribute__((export_name("on_service_start"))) void on_service_start(void)
 __attribute__((export_name("on_tick"))) void on_tick(int32_t ms)
 {
     s_ticks++;
+    // The buttons never reach a service (svc-run.ts holds some down meanwhile).
+    if (s_svc) {
+        int keys = sos_keys();
+        if (keys) say_int("t-c-svc svc: FAIL read the buttons ", keys);
+        static unsigned short px[16] __attribute__((aligned(64)));
+        if (sos_frame(px, 4, 4, 0, 0, 4, 4, 0) != -1) say("t-c-svc svc: FAIL drew a frame");
+    }
     G("service.status");
     char line[32];
     fmt_int(line, "C ticks ", s_ticks);

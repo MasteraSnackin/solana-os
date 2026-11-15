@@ -177,6 +177,13 @@ lv_display_t *bsp_display_start(void)
         // ui_frame's colour buffers are in PSRAM: the DMA reads them there, as
         // 6.0.1 did on its own. Without it master's spi_master copies each one
         // into an SRAM bounce buffer (bsp_display_frame's no-copy path, 2.3.0).
+        // A frame's DMA may still be reading PSRAM when another task writes the
+        // flash (PSRAM is unreachable with the cache off). While an app can draw,
+        // the only flash writes are NVS commits (settings, Wi-Fi, the server link,
+        // Collaborator): an update holds the screen and a store-code slot is copied
+        // before its app runs. Measured on a prototype (2.3.0): 1 200 frames back to
+        // back under 16 NVS commits, no DMA error, hang or restart; at worst one
+        // frame could show wrong pixels until the next (tests/c/t-c-fstress).
         .flags.psram_dma_direct = 1,
     };
     esp_lcd_panel_io_handle_t io;

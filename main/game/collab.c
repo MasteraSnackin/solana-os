@@ -102,6 +102,7 @@ static lv_image_dsc_t s_img_dsc;
 static uint16_t *s_img_px;
 static void *s_img_tok;
 static volatile bool s_img_busy;
+static char s_img_next[65];              // a new image asked for while a decode reads the file: fetched after it
 
 // The mesh task's ring (s_rx_mux).
 static portMUX_TYPE s_rx_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -206,10 +207,7 @@ static void led_apply(void)
 {
     bool want = s_led_p[0] && strcmp(s_led_p, "off") && os_current() == &app_collab_screen;
     if (!s_led_timer) {
-        const esp_timer_create_args_t a = { .callback = led_frame, .name = "collab_led" };
-        if (esp_timer_create(&a, &s_led_timer) != ESP_OK) {
-            return;
-        }
+        return;                             // made at boot (collab_init)
     }
     esp_timer_stop(s_led_timer);
     if (want) {
@@ -248,6 +246,8 @@ static void img_free(void)
     memset(&s_img_dsc, 0, sizeof(s_img_dsc));
 }
 
+static void img_fetch(const char *sha);
+
 static void img_ready(void *arg)
 {
     decoded_t *d = arg;
@@ -271,6 +271,15 @@ static void img_ready(void *arg)
     }
     s_info.show_rev++;
     free(d);
+    if (s_img_next[0]) {
+        char next[sizeof(s_img_next)];
+        strlcpy(next, s_img_next, sizeof(next));
+        s_img_next[0] = 0;
+        s_img_sha[0] = 0;                   // so img_fetch doesn't take it for the one it has
+        if (s_show.k == COLLAB_SHOW_IMAGE) {
+            img_fetch(next);
+        }
+    }
 }
 
 static void decode_task(void *arg)
@@ -344,6 +353,14 @@ static void img_fetch(const char *sha)
 {
     if (!strcmp(sha, s_img_sha) && (s_show.img || s_img_tok || s_img_busy)) {
         s_show.img = s_img_px ? &s_img_dsc : NULL;
+        return;
+    }
+    if (s_img_busy) {
+        // decode_task still reads cache/collab.png: a download now would rewrite it
+        // under the reader. This one waits; img_ready fetches it (and drops the old).
+        strlcpy(s_img_next, sha, sizeof(s_img_next));
+        strlcpy(s_img_sha, sha, sizeof(s_img_sha));
+        img_free();
         return;
     }
     os_api_cancel(s_img_tok);
@@ -429,6 +446,7 @@ static void session_drop(void)
     s_img_tok = NULL;
     img_free();
     s_img_sha[0] = 0;
+    s_img_next[0] = 0;
     memset(&s_show, 0, sizeof(s_show));
     s_info.show_rev++;
     changed();
@@ -468,6 +486,7 @@ static void apply_show(const cJSON *show)
         s_img_tok = NULL;
         img_free();
         s_img_sha[0] = 0;
+        s_img_next[0] = 0;
     }
     s_info.show_rev++;
 }
@@ -1075,10 +1094,6 @@ static bool svc_start(void *ctx, const char **why)
         os_wifi_set_enabled(true);
     }
     os_api_prewarm();
-    if (!s_timer) {
-        const esp_timer_create_args_t a = { .callback = tick_timer, .name = "collab" };
-        esp_timer_create(&a, &s_timer);
-    }
     if (s_timer) {
         esp_timer_start_periodic(s_timer, TICK_MS * 1000);
     }
@@ -1247,6 +1262,16 @@ void collab_init(void)
     s_info.rate_live = 1;
     s_info.rate_minutes = 10;
     s_info.rate_take = 2;
+    // Both timers made at boot, not when Collaborator is first turned on or the
+    // screen first lights the LEDs: long-lived things made mid-run split the heap.
+    const esp_timer_create_args_t tick = { .callback = tick_timer, .name = "collab" };
+    if (esp_timer_create(&tick, &s_timer) != ESP_OK) {
+        s_timer = NULL;
+    }
+    const esp_timer_create_args_t led = { .callback = led_frame, .name = "collab_led" };
+    if (esp_timer_create(&led, &s_led_timer) != ESP_OK) {
+        s_led_timer = NULL;
+    }
     os_service_register(&s_def);
     os_mesh_subscribe(OS_MESH_APP, on_mesh, NULL);
     os_cmd_register("collab", "collab [status|on yes|off|end|sync|lend on|off] - Collaborator (2.3.0)", cmd_collab);

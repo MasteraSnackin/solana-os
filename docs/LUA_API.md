@@ -1746,7 +1746,11 @@ only the app on the screen can, with the owner there.
 - An error in the service stops it and its message becomes the status (`Failed:
   service.lua:12: attempt to index a nil value`, cut to the 48 characters Services
   shows; the console has all of it); `on_stop` still runs after a script error, not
-  after a limit. Three failures in a row turn off starting at boot. `print` goes to the
+  after a limit. Three failures in a row turn off starting at boot. A start counts as done
+  after a minute of running: if the badge restarts before (a crash in the service's start,
+  or the power), the next boot skips it (`Skipped: the badge restarted as it started`),
+  and three such restarts in a row turn starting at boot off (`Off: it kept restarting the
+  badge`), so a service can never keep a badge in a restart loop. `print` goes to the
   console tagged `[<app id>:svc]`, charged like a C app's output (32 instructions a
   byte).
 - An update stops the service while the files change and starts the new version if it

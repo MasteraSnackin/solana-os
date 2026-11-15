@@ -328,6 +328,13 @@ Collaborator), on 2.2.0's ESP-IDF master.
   `OS_PEER_STATION` (Lua `mesh.nearby()` kind `"station"`), two holders of keep-Wi-Fi, the
   radio kept awake while anyone needs it; `os_service_def_t.mark` (a status-bar symbol) and
   `os_service_mark()`; `os_held()`, `os_last_key_ms()`.
+- **From the review**: a C app's `files_read` with a bad name pointer stops the app (it
+  could restart the badge, and from a service's start on every boot); a service whose start
+  never finished (the badge restarted under it) is skipped at the next boot and turned off
+  after three; a C service reads no buttons (`sys_keys` 0) and draws no frame (-1), the
+  rest of what it can't use returns `BADGE_ERR` (C_API.md "service"); the services' mesh
+  handler copies what it needs under its lock; a Collaborator image arriving during a
+  decode waits for it; `sys.tick`'s timer and Collaborator's two are made at boot.
 
 ## 2.2.0 (unreleased)
 

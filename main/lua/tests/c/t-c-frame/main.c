@@ -73,6 +73,12 @@ SOS_EXPORT(on_start) void on_start(void)
     rd("data.bin", 0, buf, 10);
 #elif CASE == 8     // a frame of 1024 x 1024 pixels: 2 MB the app doesn't have
     sos_frame(px, 1024, 1024, 0, 0, 320, 218, 0);
+#elif CASE == 9     // the name outside the app's memory, nothing to read (len 0)
+    sos_file_read((const char *)0x7ffffff0, 32, 0, buf, 0);
+#elif CASE == 10    // the name outside the app's memory, a read
+    sos_file_read((const char *)0x7ffffff0, 8, 0, buf, 10);
+#elif CASE == 11    // the name straddles the end of the app's memory
+    sos_file_read((const char *)(__builtin_wasm_memory_size(0) * 65536 - 4), 16, 0, buf, 0);
 #endif
     say("still running");
 }

@@ -849,7 +849,10 @@ whole destination must be inside the app area.
   (`tests/c/t-c-fbench`, the prototype HYQ5VS, interpreted), sending frame after frame, each
   160 x 144 frame took 9.2 ms without a copy (the SPI wire at 40 MHz: the next frame waits
   for the last), 15.0 ms with one and 31.4 ms scaled to 240 x 216; `lua mem` counted every
-  unscaled big-endian frame as sent without a copy.
+  unscaled big-endian frame as sent without a copy. The DMA reads PSRAM, which is out of
+  reach while the badge writes its flash; the only writes while an app draws are small
+  settings commits, and 1 200 frames under 16 of them showed no error, hang or restart
+  (`tests/c/t-c-fstress`): at worst a frame could show wrong pixels until the next one.
 - **The UI on top**: while your `ui_confirm` or `ui_input`, the badge's own confirm, the
   keyboard or the bridge panel is open, `ui_frame` shows nothing and returns 0; while a
   toast shows, only the rows above it are drawn. The UI also paints over the frame whenever
@@ -1187,9 +1190,14 @@ A C app's service is a second instance of the same module, with its own linear m
 started at `on_service_start` instead of `on_start` (after `_initialize`). Nothing of the
 app's instance is shared: the two talk by messages and through `storage`. The Lua
 reference's rules hold as written: the owner's first yes, starting at boot, what stops
-it, what it may call (in C, the functions of the modules it lists; the others return
-`BADGE_ERR` with `badge_error()` saying `"not in a service"`, and `ui_*` too), and the
-limits.
+it, what it may call, and the limits. In C, one rule for what a service can't use:
+
+- the functions of the modules the Lua reference leaves out (`ui_*`, `led_*`, `wifi_*`,
+  `ble_*`, spending, ...) return `BADGE_ERR`, and `badge_error()` says
+  `"attempt to call a nil value"`: their module isn't there;
+- the screen and the buttons answer as if there were none: `ui_frame` returns -1 (not
+  drawn) and `sys_keys()` returns 0 (nothing held), whatever the owner is pressing in
+  another app; a service never reads the keys.
 
 ```c
 // In the app (on_start / on_key / ...):

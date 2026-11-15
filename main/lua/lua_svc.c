@@ -61,6 +61,7 @@ static const char *TAG = "svc";
 #define SVC_BOOT_DELAY_MS   10000       // after lua_svc_init: the launcher, Wi-Fi and the server link first
 #define SVC_BOOT_GAP_MS     1000        // one service a second
 #define SVC_FAILS_MAX       3           // failures in a row: no more starting at boot
+#define SVC_SETTLED_MS      60000       // a start counts as done once the service ran this long (or ended)
 #define SVC_SRAM_START      (64 * 1024) // malloc-able SRAM a start needs (os_mem_sram_malloc_free)
 #define SVC_SRAM_LOW        (40 * 1024) // ... below this the newest one stops (the app's UI floor is 32 KB)
 #define SVC_PSRAM_LOW       (LUA_HOST_PSRAM_RESERVE + 256 * 1024)  // the app on screen keeps its 512 KB first
@@ -88,6 +89,9 @@ typedef struct {
     uint8_t fails;
     bool failed;                        // its last run ended on an error or a limit
     bool resume;                        // stopped by the system (battery, a C app): start again when it can
+    bool starting;                      // a start not yet seen to finish (services.json): set before it runs,
+                                        // cleared after SVC_SETTLED_MS or at its end; still set at boot =
+                                        // the badge restarted mid-start (a crash): that boot skips it
     char status[OS_SERVICE_STATUS_MAX + 1];  // why it isn't running ("" = never ran)
 } known_t;
 
@@ -199,6 +203,9 @@ static void known_save(void)
             cJSON_AddBoolToObject(e, "allowed", k->allowed);
             cJSON_AddBoolToObject(e, "boot", k->boot);
             cJSON_AddNumberToObject(e, "fails", k->fails);
+            if (k->starting) {
+                cJSON_AddBoolToObject(e, "starting", true);
+            }
             cJSON_AddStringToObject(e, "ver", k->ver);
         }
     }
@@ -248,6 +255,7 @@ static void known_load(void)
             k->boot = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(e, "boot"));
             const cJSON *f = cJSON_GetObjectItemCaseSensitive(e, "fails");
             k->fails = cJSON_IsNumber(f) && f->valueint > 0 ? (uint8_t)(f->valueint > 9 ? 9 : f->valueint) : 0;
+            k->starting = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(e, "starting"));
             known_pkg(k, p);
         }
         xSemaphoreGive(s_mx);
@@ -563,6 +571,7 @@ static const char *start(const char *id, uint32_t req_gen)
         k->failed = false;
         k->resume = false;
         k->status[0] = 0;
+        k->starting = true;                 // on the card before it runs (known_save below)
         if (!s_task && xTaskCreate(svc_task, "svc", SVC_STACK, NULL, SVC_PRIO, &s_task) != pdPASS) {
             s_task = NULL;
             s_slot[i] = NULL;
@@ -574,6 +583,9 @@ static const char *start(const char *id, uint32_t req_gen)
     free(nw);
     free(p);
     if (!why) {
+        // The attempt is on the card before the service's code runs: if the badge
+        // restarts in the middle (a crash in its start), the next boot knows.
+        known_save();
         reply(req_gen, NULL);               // it was running already
         wake_task();
         checks_arm();
@@ -1391,6 +1403,7 @@ static void svc_end(struct lh_svc *sv)
     uint32_t gen = sv->req_gen;
     known_t *k = known_find(sv->id);
     if (k) {
+        k->starting = false;                // it ended: the badge didn't restart under it
         switch (kind) {
         case STOP_OWNER:
             k->allowed = false;
@@ -1458,13 +1471,18 @@ static void svc_mesh(os_mesh_type_t type, const os_mesh_peer_t *from, const char
     bool app_has_it = lh_mesh_app_is(id);
     char *text = NULL;
     lh_ev_t ev = { 0 };
+    char me[sizeof(((lh_t *)0)->mesh_me)] = "";
     xSemaphoreTake(s_mx, portMAX_DELAY);
     struct lh_svc *sv = slot_find(id);
     lh_t *s = sv && sv->state == SV_RUNNING && !sv->stop ? sv->s : NULL;
     bool ok = s && (s->pkg.perms & LUA_PERM_MESH) && sv->ev_n < LH_SVC_EVENTS;
+    if (ok) {
+        // Copied under the lock: svc_end may free the state once it's given back. `s`
+        // below is only compared with the slot's state again, never read.
+        strlcpy(me, s->mesh_me, sizeof(me));
+    }
     xSemaphoreGive(s_mx);
     if (ok) {
-        const char *me = s->mesh_me;        // set before it ran, never changed after
         bool to_me = me[0] && !strcmp(to->valuestring, me);
         bool mine = to_me || !strcmp(to->valuestring, "*") || !me[0];
         bool is_meet = !d && to_me && cJSON_IsObject(meet) && !app_has_it;
@@ -1647,7 +1665,20 @@ static void checks(void *arg)
     if (newest) {
         strlcpy(newest_id, newest->id, sizeof(newest_id));
     }
+    // A service that has run SVC_SETTLED_MS got through its start.
+    bool settled = false;
+    for (int i = 0; i < LUA_SVC_MAX; i++) {
+        struct lh_svc *sv = s_slot[i];
+        known_t *k = sv && sv->state == SV_RUNNING && lh_now() - sv->started >= SVC_SETTLED_MS ? known_find(sv->id) : NULL;
+        if (k && k->starting) {
+            k->starting = false;
+            settled = true;
+        }
+    }
     xSemaphoreGive(s_mx);
+    if (settled) {
+        known_save();
+    }
 
     int mv = bsp_battery_mv();
     bool usb = mv < 0 || mv > 4300;
@@ -1726,10 +1757,30 @@ static void boot_next(void *arg)
         char id[LUA_PKG_ID_MAX + 1] = "";
         xSemaphoreTake(s_mx, portMAX_DELAY);
         known_t *k = s_known ? &s_known[i] : NULL;
+        bool crashed = false;
         if (k && k->id[0] && k->allowed && k->boot) {
-            strlcpy(id, k->id, sizeof(id));
+            if (k->starting) {
+                // Its last start never finished: the badge restarted under it (a crash in
+                // its start, or the power). Not now; N in a row turn starting at boot off,
+                // so a service that crashes the badge can't keep it in a restart loop.
+                crashed = true;
+                k->starting = false;
+                if (++k->fails >= SVC_FAILS_MAX) {
+                    k->boot = false;
+                    strlcpy(k->status, "Off: it kept restarting the badge", sizeof(k->status));
+                } else {
+                    strlcpy(k->status, "Skipped: the badge restarted as it started", sizeof(k->status));
+                }
+            } else {
+                strlcpy(id, k->id, sizeof(id));
+            }
         }
         xSemaphoreGive(s_mx);
+        if (crashed) {
+            known_save();
+            ESP_LOGW(TAG, "boot: %s skipped: the badge restarted during its last start", k->id);
+            continue;
+        }
         if (!id[0]) {
             continue;
         }

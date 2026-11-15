@@ -93,6 +93,17 @@ const svcLine = async (id: string) => (await svcList()).find((l) => l.startsWith
 for (const id of ['t-svc', 't-svc-a', 't-svc-b', 't-svc-limits', 't-svc-mesh']) {
     put(id, join(here, id));
 }
+// A badge that restarted while these two services were starting (a crash in their
+// start): the boot ~10 s in must skip both, and turn the one on its third such
+// restart off (lua_svc.c boot_next). Written before that boot runs.
+put('t-svc-boot', join(here, 't-svc-boot'));
+put('t-svc-boot2', join(here, 't-svc-boot'));
+mod.FS.writeFile('/sdcard/hh/apps/t-svc-boot2/app.json', readFileSync(join(here, 't-svc-boot/app.json'), 'utf8').replace('"t-svc-boot"', '"t-svc-boot2"'));
+mod.FS.writeFile('/sdcard/hh/services.json', JSON.stringify({
+    't-svc-boot': { allowed: true, boot: true, fails: 0, starting: true, ver: '1.0.0' },
+    't-svc-boot2': { allowed: true, boot: true, fails: 2, starting: true, ver: '1.0.0' },
+}));
+const bootMark = lines.length;
 const cOut = join(here, 'c/out/t-c-svc');
 const haveC = existsSync(join(cOut, 'app.wasm'));
 if (haveC) put('t-c-svc', cOut);
@@ -227,7 +238,13 @@ if (haveC) {
     cmd('open home');
     ok(!!(await waitFor(/t-c-svc svc: started/, 5000, mark)), 'C: the service instance started at on_service_start once the app closed');
     ok(!!(await waitFor(/ok t-c-svc svc: the screen, spending and the radio's channel are nil/, 3000, mark)), 'C: forbidden modules are nil');
+    const callErr = since(mark).find((l) => /\[t-c-svc\] (?!ok |FAIL )/.test(l) && /nil/.test(l)) ?? '';
+    ok(!!(await waitFor(/ok t-c-svc svc: calling lamps.spend fails/, 3000, mark)) && /attempt to call a nil value/.test(callErr), `C: calling a missing module fails as a call of nothing (${callErr})`);
+    // Buttons held while the service ticks (at the launcher): it must read none, draw nothing.
+    mod.ccall('emu_buttons_set', null, ['number'], [0x3f]);
     await sleep(2500);
+    mod.ccall('emu_buttons_set', null, ['number'], [0]);
+    ok(!since(mark).some((l) => /t-c-svc svc: FAIL/.test(l)), 'C: a service reads no buttons (sos_keys 0) and draws no frame (-1)');
     line = await svcLine('t-c-svc');
     ok(/ on /.test(line) && /C ticks \d+/.test(line), `C: running with the app closed (${line})`);
     // A C app opened while a C service runs: the service pauses, then comes back.
@@ -249,6 +266,14 @@ if (haveC) {
 }
 
 // 6. Removal forgets it
+// The boot's crash bookkeeping (set up at the start).
+ok(!since(bootMark).some((l) => /t-svc-boot2?:svc started/.test(l)), 'boot: services whose last start never finished are not started');
+ok((await svcLine('t-svc-boot')).includes('Skipped: the badge restarted as it started'), `boot: skipped once (${await svcLine('t-svc-boot')})`);
+ok((await svcLine('t-svc-boot2')).includes('Off: it kept restarting the badge'), `boot: off after the third (${await svcLine('t-svc-boot2')})`);
+const sj = JSON.parse(new TextDecoder().decode(mod.FS.readFile('/sdcard/hh/services.json')));
+ok(sj['t-svc-boot'].fails === 1 && !sj['t-svc-boot'].starting && sj['t-svc-boot'].boot === true, `services.json: one more failure, no attempt pending (${JSON.stringify(sj['t-svc-boot'])})`);
+ok(sj['t-svc-boot2'].boot === false, 'services.json: starting at boot off');
+
 cmd('svc stop app:t-svc');
 await sleep(1500);
 cmd('lua rm t-svc');

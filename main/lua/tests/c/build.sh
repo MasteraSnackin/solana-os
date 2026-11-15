@@ -40,9 +40,10 @@ cc t-c-import "$here/t-c-import/main.c"
 cc t-c-abi "$here/t-c-abi/main.c"
 cc t-c-svc "$here/t-c-svc/main.c"
 cc t-c-fbench "$here/t-c-fbench/main.c"   # ui_frame timings on a badge (C_API.md "Heavy apps")
+cc t-c-fstress "$here/t-c-fstress/main.c"  # frames while the flash is written (on a badge)
 # ui_frame and files_read with hostile arguments (2.3.0): the checks, then misuse.
 cc t-c-frame "$here/t-c-frame/main.c" -DCASE=0
-frames=(pointer side flags big buffer name noperm huge)
+frames=(pointer side flags big buffer name noperm huge name0 nameread namestraddle)
 for i in "${!frames[@]}"; do
     cc "t-c-fr-${frames[$i]}" "$here/t-c-frame/main.c" -DCASE=$((i + 1))
     sed "s/\"t-c-frame\"/\"t-c-fr-${frames[$i]}\"/" "$here/t-c-frame/app.json" > "$out/t-c-fr-${frames[$i]}/app.json"

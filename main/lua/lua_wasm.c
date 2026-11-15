@@ -1105,7 +1105,7 @@ static void n_frame(wasm_exec_env_t env, uint64_t *a)
         return;
     }
     lh_t *s = w->s;
-    if (!s->area || x < 0 || y < 0 || dw <= 0 || dh <= 0 || (int64_t)x + dw > OS_ROOT_W ||
+    if (s->svc || !s->area || x < 0 || y < 0 || dw <= 0 || dh <= 0 || (int64_t)x + dw > OS_ROOT_W ||
         (int64_t)y + dh > OS_ROOT_H) {
         return;                             // -1: not inside the app area
     }
@@ -1168,9 +1168,14 @@ static void n_file_read(wasm_exec_env_t env, uint64_t *a)
         RET_I32(-1);
         return;
     }
+    // Every pointer checked before use: a bad one has trapped and is NULL (a NULL name
+    // with len 0 reached memcpy and restarted the badge, a C service on every boot).
     const char *name = lw_mem(w, "files_read", np, nl);
-    void *dst = name ? lw_mem(w, "files_read", bp, len) : NULL;
-    if (!dst && len) {
+    if (!name) {
+        return;
+    }
+    void *dst = len ? lw_mem(w, "files_read", bp, len) : NULL;
+    if (len && !dst) {
         return;
     }
     char copy[LH_FILES_NAME_MAX + 6];
@@ -1184,14 +1189,16 @@ static void n_file_read(wasm_exec_env_t env, uint64_t *a)
     RET_I32(n);
 }
 
-// sys.keys()'s set as bits: nothing while a dialog has the keys.
+// sys.keys()'s set as bits: nothing while a dialog has the keys, and never in a
+// service (C_API.md "service"): the owner is using another app, maybe typing a
+// Wi-Fi password, and a service has no screen to read keys for.
 static void n_keys(wasm_exec_env_t env, uint64_t *a)
 {
     (void)env;
     lua_State *L;
     lw_t *w = begin(&L);
     uint32_t bits = 0;
-    if (w && !w->s->modal && !w->s->kb && !os_confirm_open() && !os_overlay()) {
+    if (w && !w->s->svc && !w->s->modal && !w->s->kb && !os_confirm_open() && !os_overlay()) {
         uint32_t pressed = bsp_buttons_get();
         for (int k = 0; k < (int)(sizeof(s_keys) / sizeof(s_keys[0])); k++) {
             bits |= pressed & os_key_button(k) ? 1u << k : 0;

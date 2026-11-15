@@ -96,6 +96,7 @@ const expect: Record<string, Expect> = {
     // ui_frame and files_read (2.3.0): every check answers, misuse stops the app.
     't-c-frame': { noError: true, oks: 25, print: [/\] done$/, /\] still running$/] },
     // ui_frame timings (numbers for a badge; the emulator only shows it runs).
+    't-c-fstress': { noError: true, print: [/\] t-c-fstress frames shown: 200$/], wait: 5000 },
     't-c-fbench': { noError: true, print: [/\] t-c-fbench shown of 20: 20$/, /\] done$/], wait: 4000 },
     't-c-fr-pointer': { title: 'App error', error: /sos_frame: the pointer 0x7ffffff0 \(1024 bytes\) is outside the app's memory/ },
     't-c-fr-side': { title: 'App error', error: /sos_frame: 2000 x 1 pixels, 1 to 1024 a side/ },
@@ -105,6 +106,10 @@ const expect: Record<string, Expect> = {
     't-c-fr-name': { title: 'App error', error: /files_read: the pointer 0x7ffffff0 \(32 bytes\) is outside the app's memory/ },
     't-c-fr-noperm': { title: 'App error', error: /files_read: add the "files" permission to app\.json/ },
     't-c-fr-huge': { title: 'App error', error: /sos_frame: the pointer 0x[0-9a-f]+ \(2097152 bytes\) is outside the app's memory/ },
+    // A bad name pointer stops the app, whatever the length to read (it used to restart the badge with 0).
+    't-c-fr-name0': { title: 'App error', error: /files_read: the pointer 0x7ffffff0 \(32 bytes\) is outside the app's memory/ },
+    't-c-fr-nameread': { title: 'App error', error: /files_read: the pointer 0x7ffffff0 \(8 bytes\) is outside the app's memory/ },
+    't-c-fr-namestraddle': { title: 'App error', error: /files_read: the pointer 0x[0-9a-f]+ \(16 bytes\) is outside the app's memory/ },
     't-c-abi': { title: 'App error', error: /needs a newer Solana OS \(its C ABI is 99, this badge's 1\)/ },
     't-c-f-loop': { title: 'App took too long', error: /Over 2000000 wasm instructions in one callback/, wait: 3000 },
     't-c-f-loopcb': { title: 'App took too long', error: /Over 2000000 wasm instructions in one callback/, wait: 3000 },
