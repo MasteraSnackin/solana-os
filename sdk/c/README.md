@@ -17,6 +17,8 @@ sdk/c/
   toolchain/             the store's pinned versions and flags: versions, cflags,
                          ldflags, wamrcflags, imports
   examples/              six complete apps, and build.sh to build them all
+  bench/                 the same workloads as a C app and a Lua app, and run.py to
+                         time them on a badge (docs/C_API.md "Speed and limits")
   tests/                 api/ (every function of badge.h, compiled), libc/ (wasi-libc
                          on WAMR), host/ (what badge.h's functions return, checked on a
                          real host: the emulator or a badge), mock-host.ts (runs an

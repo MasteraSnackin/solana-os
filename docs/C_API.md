@@ -26,13 +26,15 @@ bring existing C code to the badge (a parser, a codec, game logic).
 Choose Lua for everything else: it is shorter to write, the store shows reviewers less
 code, and most badge apps spend their time waiting for keys and the network, where C
 gains nothing. Each call into the API from C goes through the same Lua host a Lua app
-uses, so an app made mostly of API calls (labels, lists, `http`) is no faster in C. On a
-badge the cheapest API call took 4 µs from native code and 7 µs interpreted, and setting a
-label's text 176 µs and 248 µs: the time is the API's, not the language's.
+uses, plus a bridge, so an app made mostly of API calls (labels, lists, `http`) is no
+faster in C, and can be slower: on a badge the cheapest API call took 4 µs from native
+code and 7 µs interpreted, but setting a label's text took 357 µs from native C, 625 µs
+interpreted and 181 µs from Lua ("Speed and limits: C against Lua").
 
 C is fast only in its native form, which only a store install brings (see "What runs
 where"). Everywhere else (the emulator, Try in emulator, Run on badge) the badge
-interprets the WebAssembly, and there C ran *slower* than the same work in Lua.
+interprets the WebAssembly, and there C computes at about Lua's speed: faster where it
+works on its own memory (copying, drawing into its own frame), slower in API calls.
 
 | | Lua app | C app |
 |---|---|---|
@@ -213,33 +215,160 @@ Measured on a prototype badge (ESP32-C5 rev 1.2, Solana OS 2.2.0, USB power, Wi-
 | The starfield example: drawing one frame | 7 ms | 33 ms |
 | The starfield example: frames a second | 19.2 to 19.8 (the screen is the limit) | 12.6 to 13.2 |
 
-Earlier, on the same badge (Solana OS 2.1.0 with a test build of WAMR 2.4.5), with a
-synthetic test module (clang `-O2`, no libc), times in ms:
+How fast each form is, workload by workload, against Lua and against the same C built
+into the firmware: "Speed and limits: C against Lua" below.
 
-| Benchmark | C compiled into the firmware | Native (`app.aot`) | Interpreted (`app.wasm`) | Lua |
-|---|---|---|---|---|
-| Mandelbrot 320 × 240, fixed point, 32 iterations | 27.4 | 36.8 | 3 111 | 1 292 |
-| Mandelbrot with floats (software floating point) | 903 | 1 169 | 3 691 | |
-| Sieve of 64 K, 4 times (in PSRAM) | 645 | 642 | 3 298 | 2 650 |
-| SHA-256 of 16 KB | 5.8 | 11.4 | 410 | |
-
-The native column used wamrc with run-in-place flags like those in `wamrcflags`, the interpreted one the interpreter the
-badge runs (WAMR's classic interpreter, with instruction counting). The native form ran at
-1.0 to 2.0 times the time of C built into the firmware. On integer work it was 36 to 85
-times faster than the interpreter; where the time went to software floating point or to
-PSRAM, 3 to 5 times. Interpreted, the same work took longer than in Lua.
-
-On 2.2.0 the interpreter ran a plain loop at about 4 500 WebAssembly instructions a
-millisecond, so its 2 000 000 a callback are about 0.45 s of such a loop. Code heavier in
-memory accesses and calls runs fewer a millisecond (the benchmarks above ran 2 170 to
-2 865 on the 2.1.0 test build), so it takes longer to reach the count. The
-emulator runs the same interpreter and counts the same instructions: `lua mem` there prints
-the most a callback of your app used ("most wasm instructions in one callback"), which is
-what a badge would count.
+The interpreter ran a plain loop at about 4 500 WebAssembly instructions a millisecond,
+and the benchmark's workloads at 3 100 to 6 500, so its 2 000 000 a callback are 0.3 to
+0.65 s of work. The emulator runs the same interpreter and counts the same instructions
+(far faster than a badge, so its times don't carry over): `lua mem` there prints the most
+a callback of your app used ("most wasm instructions in one callback"), which is what a
+badge would count.
 
 For an author that means: test the logic and the UI in the emulator or with Run on badge,
 interpreted; to see how fast the app really is, install it from the store (an unlisted
 app is enough), and check with `lua mem` on the badge that it ran `app.aot (native)`.
+
+## Speed and limits: C against Lua
+
+The benchmark in `sdk/c/bench/` does the same work as a C app and as a Lua app, both
+printing their results on the console, and `sdk/c/bench/run.py` drives them and prints
+the table, so anyone can run it again (its README says how). Each workload adds up a
+checksum, and every column below got the same one. Four columns:
+
+- **C in the firmware**: the benchmark's C (`kernels.c`) compiled into a test build of
+  the firmware with GCC 15 at `-O2` and run from a console command, its data in PSRAM
+  like an app's. This is "native" to compare against; at the firmware's own `-Os` it ran
+  within 5 % of `-O2` on every workload but the 80 × 54 frame (20 % slower).
+- **C app, native**: the same C built by the store's toolchain (`app.aot`, the flags in
+  `wamrcflags`), run in place from a flash slot.
+- **C app, interpreted**: the same app's `app.wasm`.
+- **Lua app**: the same work in Lua, written as a careful Lua programmer would (locals,
+  plain arrays, methods looked up once).
+
+Measured on HYQ5VS, a prototype badge (ESP32-C5 rev 1.2), on USB power with Wi-Fi off,
+running a test build of Solana OS 2.2.0 that also takes a native file over the console,
+signed by the server's own signing code with a test key (the released build takes native
+code from the store only). A second pass with Wi-Fi joined gave numbers within 3 % of
+these for about half the cells and within 10 % for all but two Lua rows that draw on a
+canvas (the 320 × 216 frame, 28 %, and the game, 18 %). Times are the work's own: C reads
+the microsecond clock, Lua `sys.millis()`, averaged over 3 s of callbacks. Memory is in
+binary units (1 MB = 1 048 576 bytes), as the caps are.
+
+### Speed
+
+Lower is better. "Native ÷ firmware" is how much slower the C app's native form is than
+the same C in the firmware: the measure of "near native". The last two columns are how
+many times the native form is faster than the interpreter and than Lua.
+
+| Workload | C in the firmware | C app, native | C app, interpreted | Lua app | Native ÷ firmware | Interpreted ÷ native | Lua ÷ native |
+|---|---|---|---|---|---|---|---|
+| Mandelbrot 320 × 240, integers (12 fractional bits), ≤ 32 iterations: ms a frame | 50.4 | 62.5 | 5 283 | 5 307 | 1.24 | 85 | 85 |
+| The same with 32-bit floats (Lua's numbers): ms a frame | 1 709 | 2 142 | 5 964 | 6 738 | 1.25 | 2.8 | 3.1 |
+| The same with doubles (C only): ms a frame | 2 714 | 3 228 | 8 031 | | 1.19 | 2.5 | |
+| Sieve of the primes to 4096: ms | 0.24 | 0.30 | 20.7 | 19.5 | 1.24 | 69 | 65 |
+| SHA-256 written in the language: ms per 64 KB | 22.0 | 43.4 | 1 298 | 2 107 | 1.97 | 30 | 49 |
+| SHA-256 through the API (`crypto.sha256`, 1 KB a call): ms per 64 KB | | 51.0 | 73.8 | 9.4 | | 1.4 | 0.19 |
+| Fill a 1 MB buffer in a loop, 32-bit words: ms per MB | 78.8 | 76.9 | 465 | 646 | 0.98 | 6.0 | 8.4 |
+| Copy within it (`memcpy`; Lua `table.move`): ms per MB | 122 | 120 | 128 | 251 | 0.98 | 1.1 | 2.1 |
+| A 320 × 216 frame computed per pixel and shown: ms a frame | 10.5 | 27.5 (10.2 drawing, 17.3 the blit) | 338 | 3 573 | 0.97 | 12 | 130 |
+| The same on an 80 × 54 canvas at 4×: ms a frame | 0.25 | 1.70 (0.60 drawing, 1.1 the blit) | 22.4 | 211 | 2.41 | 13 | 124 |
+| Set a label's text (16 labels): µs a call | | 357 | 625 | 181 | | 1.8 | 0.51 |
+| Replace a list's 20 rows: µs a call | | 2 775 | 3 746 | 1 220 | | 1.35 | 0.44 |
+| A game tick: 256 particles moved, bounced and drawn 2 × 2 on a 160 × 108 canvas at 2×: ms a tick | 2.42 | 7.92 (2.65 the tick, 5.3 the blit) | 30.7 | 20.7 | 1.09 | 3.9 | 2.6 |
+
+C draws into its own RGB565 buffer and shows it with one `ui_canvas_blit`; Lua draws
+with `c:pixel` (the frames) and `c:clear` plus a `c:rect` a particle (the game), the best
+the canvas offers. The firmware column computes the same pixels into PSRAM without showing
+them, so "native ÷ firmware" compares the drawing alone. What reached the screen, in
+frames a second (a tick is every 30 ms, so 33 at most):
+
+| | C app, native | C app, interpreted | Lua app |
+|---|---|---|---|
+| 320 × 216 frame per pixel | 12.7 | 2.0 | about 0.3 |
+| 80 × 54 frame at 4× | 21.6 | 15.7 | 2.3 |
+| The game tick | 19.7 | 13.5 | 15.7 |
+
+A Lua canvas pixel cost 37 to 52 µs (the two passes), most of it the canvas call rather
+than Lua's own 20-odd instructions: that is why Lua's frames are slow, and why its game,
+a few hundred calls a tick, keeps up.
+
+### How much fits in one callback
+
+The budgets differ (Lua: 200 000 VM instructions; interpreted C: 2 000 000 WebAssembly
+instructions; native C: 200 ms of native time, not counting time inside the badge's API;
+any C callback: 3 s), so the same work fits differently. Measured by growing the work 6 %
+a callback until the badge stopped the app (the last size that ran, and its time):
+
+| Work in one callback | C app, native | C app, interpreted | Lua app |
+|---|---|---|---|
+| Mandelbrot rows (integers) | 760 rows, 195 ms | 14 rows, 296 ms | 3 rows, 58 ms |
+| SHA-256 blocks of 64 bytes | 4 990 blocks, 202 ms | 231 blocks, 287 ms | 36 blocks, 72 ms |
+| Label updates | 2 169, 0.70 s | 4 119, 2.5 s | 10 206, 1.8 s |
+| In one 30 ms tick at the measured speed: Mandelbrot rows | 115 | 1.4 | 1.4 |
+
+Each stopped at its own budget: "Native code ran over 200 ms in one callback", "Over
+2000000 wasm instructions in one callback", and Lua's "main.lua:21: Script took too long".
+A label update costs native C about a quarter of its time in native time (the rest is
+the API's, which doesn't count) and Lua about 20 instructions, so one callback can hold the
+screen for 0.7 s (native) to 2.5 s (interpreted) before its budget ends it: spread UI work
+over ticks.
+
+### Near native
+
+The native form ran at 0.97 to 1.25 times the firmware's time on eight of the ten workloads
+the firmware column has, and at 1.97 and 2.41 times on two. Why, workload by workload, and
+what other `wamrc` settings did in the same test build (native time ÷ firmware time; the
+store's settings are unchanged):
+
+| Workload | Store's settings | Plus `+unaligned-scalar-mem` | Bounds checks off (not safe) | Why |
+|---|---|---|---|---|
+| Mandelbrot, integers | 1.24 | 1.22 | 1.23 | No memory traffic and no helpers in the loop: what is left is how LLVM (from WebAssembly) and GCC (from C) laid the loop out |
+| Mandelbrot, floats / doubles | 1.25 / 1.19 | 1.30 / 1.16 | 1.27 / 1.19 | Every float operation is a software helper. Run in place, native code calls each through a table to WAMR's wrapper, which calls the helper: two calls where the firmware makes one |
+| Sieve | 1.24 | 1.25 | 0.81 | A bounds check on every byte it stores |
+| SHA-256 | 1.97 | 1.24 | 1.78 (both: 1.04) | Its 64-word schedule lives in the app's memory, and wamrc can't assume a 32-bit access is aligned, so each one becomes four byte loads or stores |
+| Fill, copy, 320 × 216 frame | 0.97 to 0.98 | 0.96 to 1.01 | 0.97 to 0.98 | PSRAM's speed is the limit for both |
+| 80 × 54 frame | 2.41 | 2.33 | 2.16 (both: 1.95) | The frame stays in the cache, so the loop's code counts: byte stores, bounds checks, and the memory base added to every address |
+| Game tick | 1.09 | 1.00 | 1.03 | Byte stores into the frame |
+
+`+unaligned-scalar-mem` (in `--cpu-features`) lets wamrc use 32-bit loads and stores where
+WebAssembly doesn't promise alignment: native files were 25 % smaller (89 → 67 KB for
+`bench-c`), SHA-256 1.6 times faster, a label update 18 % faster (`badge.h` runs in the
+app too), nothing slower beyond noise. On HYQ5VS a test app wrote and read 32-bit words at
+every offset of 12 KB of its memory (PSRAM) and all came back right; that is not yet tried
+on a production badge (C5 rev 1.0) or across a 64 KB MMU page. Turning bounds checks off
+helps only code dominated by stores and would let a bad pointer restart the badge, so it
+stays on.
+
+### Limits
+
+What each limit allowed, measured with the benchmark apps (same badge and build; the
+rules are in "Limits" above and in [LUA_API.md "Limits"](LUA_API.md#limits)):
+
+| | Lua app | C app |
+|---|---|---|
+| Memory it really got | 5.50 MB of 64 KB strings (5.54 MB counted), then "Out of memory: The app needs more than 6 MB." | 3.94 MB of `malloc` (63 blocks of 64 KB), then `malloc` returned `NULL` at the linear memory's 4 MB maximum, with 4.05 MB counted natively, 4.10 MB interpreted; the app ran on |
+| The badge's SRAM, app open and idle with 17 labels | 17.0 KB (of the 121.5 KB malloc can still get at the launcher) | 17.3 KB native, 17.0 KB interpreted |
+| PSRAM, the same | 48 KB | 122 KB native, 165 KB interpreted (WAMR's instance, the linear memory, and interpreted a copy of the module) |
+| Launch, `lua run` until the app's first line (17 labels built) | 0.26 to 0.27 s | 0.21 to 0.27 s either form; 0.70 s natively the first time, copying its 89 KB into a flash slot |
+| Recursion in one callback (a small function) | 26 127 levels; 32 658 ran out of instructions ("Script took too long") | interpreted 378 levels, 472 stopped with "The app ran out of stack (recursion too deep) (wasm operand stack overflow)"; native 303, 378 stopped with "The app ran out of stack (recursion or callbacks nested too deeply) (native stack overflow)" |
+| UI objects | 128, then "too many UI objects (128)" | the same |
+| Work in one callback | 200 000 instructions: 58 to 72 ms of computing, longer in API calls ("How much fits") | 2 000 000 instructions interpreted (0.3 s of computing), 200 ms native, 3 s whatever it does |
+
+C's linear memory stops at 4 MB, under the 6 MB cap, so a Lua app can hold more. Native C
+recurses least: its calls run on the badge's 12 KB task stack.
+
+### What it means
+
+Native C is near native: within 25 % of C built into the firmware on most work, never
+more than 2.4 times. Against Lua it computes 50 to 130 times faster on integers and
+pixels, 3 times faster with floats (which no FPU makes slow in both: floats cost native C
+34 times its integer time, Lua 1.3 times), and twice as fast at copying memory; through
+the API it is no faster, and setting labels or list rows took it twice Lua's time. So
+choose C for apps that compute per pixel or per sample, and make few API calls in their
+loops; choose Lua for apps that are mostly UI and network. And interpreted C (the
+emulator, Run on badge, a badge without the store's native file) runs at about Lua's
+speed.
 
 ## Lifecycle
 
@@ -291,17 +420,17 @@ crypto), plus:
 
 | | |
 |---|---|
-| Memory | One cap, the Lua app's: 6 MB in PSRAM. It covers the app's linear memory (≤ 4 MB: its data, its 32 KB stack and `malloc`), WAMR's copy of the module (interpreted; native code stays in flash), its instance and its own 32 KB stack, and the Lua state behind the API (labels' text, loaded images, tables you get). `sys_memory()` reports the sum. When the cap would be passed by growing the linear memory, the growth is refused: `malloc` returns `NULL` and the app runs on. Anything else past it stops the app with "Out of memory". Measured in the emulator: the SDK's examples run with 121 to 221 KB in all |
+| Memory | One cap, the Lua app's: 6 MB in PSRAM. It covers the app's linear memory (≤ 4 MB: its data, its 32 KB stack and `malloc`), WAMR's copy of the module (interpreted; native code stays in flash), its instance and its own 32 KB stack, and the Lua state behind the API (labels' text, loaded images, tables you get). `sys_memory()` reports the sum. When the cap would be passed by growing the linear memory, the growth is refused: `malloc` returns `NULL` and the app runs on. Anything else past it stops the app with "Out of memory". Measured in the emulator: the SDK's examples run with 121 to 221 KB in all. On a badge the benchmark got 3.94 MB of `malloc` before the 4 MB maximum ("Speed and limits: C against Lua") |
 | The badge's memory | Measured on a badge (Solana OS 2.2.0, Wi-Fi off): 125.4 KB of SRAM free for `malloc` and 8.36 MB of PSRAM at the launcher; with `hello` running, 110.2 KB and 8.24 MB native, 112.0 KB and 8.22 MB interpreted. Twenty native launches and exits left the free heap (157 KB) and its largest block (96 KB) as they were |
 | CPU, interpreted | 2 000 000 WebAssembly instructions per callback (about 0.45 s of a plain loop on a badge, "What runs where"). A callback's nested calls into the app share it (a list's `on_select` called from inside `on_key`, a C function called through `sos_call`), and so do `_initialize` and `on_start` at launch. `memset`, `memcpy` and `memmove` (WebAssembly's `memory.fill`, `memory.copy` and `memory.init`) cost one instruction per 4 bytes, so a callback moves at most 8 MB with them: on a badge `memset` writes about 12 KB a millisecond and `memmove` about 8 KB, while the interpreter runs 2 200 to 4 500 plain instructions, so 4 bytes take about an instruction's time. Past it: "App took too long". Measured: stuck apps stopped at exactly 2 000 000, with no watchdog warning; a loop of 3.75 MB `memset`s 0.96 s after launch and of `memmove`s 1.27 s (both counting 0.3 s to grow the memory first), of 64 KB `memory.init`s 1.0 s |
 | CPU, native | 200 ms of native time per callback, shared the same way. The app's own code counts, and so do `memset`, `memcpy` and `memmove` (the badge runs them in 4 KB pieces and stops between two); time inside the badge's API functions and while the linear memory grows doesn't (the API's work is bounded by the host's steps, below). Past it: "App took too long". Measured: a plain loop stopped after 204 to 210 ms of native time, a loop calling an API function after 204 to 210 ms, a spinning callback nested inside an API call after 203 to 207 ms, a loop spending its time in the software floating-point helpers after 207 to 295 ms, a loop of 3.75 MB `memset`s or `memmove`s after 200 to 201 ms, of `memory.init`s after 207 ms |
 | Host work | What the API functions do for the app counts against the host's 200 000 steps a callback, as for a Lua app, in both forms: reading files, `crypto`, drawing on a canvas, `ui_canvas_blit`, and the calls themselves. Every call into the badge costs 1 step and `sos_call` 4 more (a Lua call's own instructions); what one copies costs 1 step per 4 bytes (strings in and out: `sos_push_str`, `sos_to_str`, the keys of `sos_get` and `sos_set`); console output (`printf` and `badge_print()`, or Lua's `print` reached through the API) 32 steps a byte, since the console is a 115 200-baud serial line that writes about 11 bytes a millisecond, so a callback prints about 6 KB; `arc4random()` and `getentropy()` 6 steps a byte. Past it: "App took too long". Measured on a badge: a loop pushing 2.5 MB strings stopped at the first one (nothing copied), loops of 1 KB `fd_write`s or `sos_log`s after 6 KB of output, a 64 KB `print` before any of it, and the SDK's API probe (92 checks and their output in one `on_start`) used 119 886 steps |
 | One callback, whatever it does | 3 s of wall-clock time, in both forms. The limits above stop an app long before; this is the backstop for anything they miss. Past it: "App took too long". Measured with those limits raised in a test build: a plain native loop, a native `memset` loop, native and interpreted loops calling the badge, and an interpreted `memset` loop each stopped 3.0 to 3.3 s after the callback began |
-| Stack | 32 KB of the linear memory for C's locals. Interpreted, the function calls themselves use WAMR's 32 KB stack (in the app's heap); native, the badge's 12 KB task stack, shared with the badge's code that calls the app, so deep recursion stops sooner there. Measured with `hello` running: 7.2 KB of the task stack left native, 7.0 KB interpreted; at the deepest nesting of callbacks tested, 2.4 KB native, 3.8 KB interpreted |
+| Stack | 32 KB of the linear memory for C's locals. Interpreted, the function calls themselves use WAMR's 32 KB stack (in the app's heap); native, the badge's 12 KB task stack, shared with the badge's code that calls the app, so deep recursion stops sooner there. Measured with `hello` running: 7.2 KB of the task stack left native, 7.0 KB interpreted; at the deepest nesting of callbacks tested, 2.4 KB native, 3.8 KB interpreted. A small recursive function went 303 levels deep native and 378 interpreted, where Lua went past 26 000 |
 | Module | `app.wasm` ≤ 1.5 MB. The native form was 2.2 to 3.0 times the size of the module for the SDK's examples (`hello`: 21 KB of WebAssembly, 46 KB native); it must fit a 1 MB flash slot, or the store publishes `app.wasm` alone |
 | The stack frame | 64 values per frame (see "The raw ABI"), 1024 kept values (`sos_ref`) at a time |
 | Callbacks waiting | 64 in `badge.h` (timers, server calls, lists, sockets, ...); past that a call fails with "badge.h: more than 64 callbacks waiting" |
-| Numbers | C has 64-bit integers and doubles in its own memory; values crossing into the API are 32-bit integers and 32-bit floats, as in Lua. The badge's CPU has no floating-point unit: floats work, slowly (the Mandelbrot rows of "What runs where"); keep hot loops in integers |
+| Numbers | C has 64-bit integers and doubles in its own memory; values crossing into the API are 32-bit integers and 32-bit floats, as in Lua. The badge's CPU has no floating-point unit: floats work, slowly (a Mandelbrot frame took native C 34 times as long with floats as with integers, "Speed and limits: C against Lua"); keep hot loops in integers |
 
 ### When an app stops
 
@@ -315,7 +444,7 @@ The error screen's title and message, as the serial console also prints them
 | `INT_MIN / -1` | App error | Integer overflow in a division (INT_MIN / -1) (integer overflow) |
 | A float too big for the integer it is converted to | App error | A float too big for an integer (invalid conversion to integer) |
 | Recursion too deep for WAMR's stack (interpreted) | App error | The app ran out of stack (recursion too deep) (wasm operand stack overflow) |
-| The badge task's stack running out (callbacks nested through `sos_call`; native code's own recursion) | App error | Callbacks nested too deeply (native stack overflow) |
+| The badge task's stack running out (callbacks nested through `sos_call`; native code's own recursion) | App error | The app ran out of stack (recursion or callbacks nested too deeply) (native stack overflow) |
 | A function pointer that points nowhere (0, garbage) | App error | The app called a bad function pointer (uninitialized element), or (undefined element) past the end of the function table |
 | A function pointer of the wrong type | App error | The app called a function pointer of the wrong type (indirect call type mismatch) |
 | `abort()`, `__builtin_trap()`, a failed `assert` | App error | The app crashed (unreachable code: abort(), __builtin_trap()) (unreachable) |
@@ -1072,3 +1201,35 @@ store, permissions, test runs, code check, review, allowances and limits. What d
   can be anything. Check lengths before copying, use the buffer sizes `badge.h` asks
   for, and never trust a field's presence: the `badge_field_*` helpers return your
   default when it is missing or of another type.
+
+### What players are told
+
+Native code is where a C app asks for more trust than a Lua app: a Lua app's every step
+goes through the interpreter, while a C app's sandbox rests on the store's compiler and
+the runtime, and the chip has no isolation of its own to fall back on. A flaw there
+would let a C app reach everything on the badge. So players are told, wherever they
+decide to get or run a C app (docs/HHGTS.md "One look" keeps the canonical texts):
+
+- **On the badge**, the App Store's details of a C app and the Apps library's info of an
+  installed one with native code show, under the title *C apps can be more dangerous*:
+  "Lua apps run in an interpreter. A C app runs as native code that only the store's
+  compiler keeps in its sandbox: a flaw there could reach your whole badge." Installing
+  or updating a C app from the App Store first asks the same in the OS's confirm dialog
+  ("Install <name>?", SELECT yes, CANCEL no), once per install; a Lua app never asks.
+  An installed C app without native code for the badge says instead "C app: it runs as
+  WebAssembly in the badge's interpreter, not as native code." (`lua install` on the
+  console doesn't ask: it is a developer's tool.)
+- **On the site**, a C app's page shows the warning above its Buy or Add button: "A Lua
+  app is a script: everything it does goes through the badge's interpreter. A C app from
+  the store runs as native code on the badge's processor, with every memory access
+  bounds-checked by the store's compiler and the same permissions and limits as a Lua
+  app. The chip itself can't isolate it, though: a flaw in the compiler or the runtime
+  would let it reach everything on the badge, its keys and !LAMPs actions included, so
+  get it only if you trust its author." with a link here. The first Buy or Add of a C
+  app in a browser session asks for an explicit "I understand".
+- **Sideloads** (Try in emulator, Run on badge) of someone else's C app run the
+  WebAssembly, so they say: "Here this C app runs as WebAssembly in the badge's
+  interpreter, not as native code, with the same permissions and limits as a Lua app. It
+  is still code someone else wrote: run it only if you trust its author."
+
+The submit form tells authors that players see this.

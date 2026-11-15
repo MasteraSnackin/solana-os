@@ -145,6 +145,10 @@ site changes that came with them live in the parent repository.
   the signed SHA-256, and which form runs and why. `lua aotkey` fetches the key from the
   server now and caches it (one word: `lua aot key` was `lua aot <id>` for an app whose
   id is `key`). Neither ever writes `app.aot`.
+- **The C app warning** (`docs/C_API.md` "What players are told", `main/apps/c_warning.h`):
+  the App Store's details of a C app and the Apps library's info show "C apps can be more
+  dangerous", and installing or updating one asks first in the OS's confirm dialog, once
+  per install (never for a Lua app; `lua install` doesn't ask).
 - **Stopping stuck native code.** An `esp_timer` checks the running callback's native time
   every 10 ms; past 200 ms it sets a flag every import checks on entry and return, and
   when the app's task is preempted inside the module's code it points the task's saved
@@ -165,9 +169,9 @@ site changes that came with them live in the parent repository.
   for 1-4 KB, 290-380 ms for 46-76 KB; later launches map and hash a 46 KB slot in
   3.6-3.8 ms (about 120 ms from `lua run` to the app booted, against about 460 ms the
   first time and 90 ms for the same app interpreted). Through the bridge: the cheapest
-  import 4 us native, 7 us interpreted; a label's text 176 / 248 us; a full 320 x 216
-  canvas `sos_blit` 16.4-16.7 ms either way. The interpreter ran a plain loop at about
-  4 500 wasm instructions a ms. A starfield frame (examples/starfield's drawing, 160 x
+  import 4 us native, 7 us interpreted; a full 320 x 216 canvas `sos_blit` 16.4-16.7 ms
+  either way (17.3 ms in the benchmark below, which also has the label figures). The
+  interpreter ran a plain loop at about 4 500 wasm instructions a ms. A starfield frame (examples/starfield's drawing, 160 x
   108 at 2x) takes 7 ms native, 33 ms interpreted: 19.4 and 12.6-13.2 frames a second
   (the screen is the limit natively). Lua task stack left (of 12 KB): 7.2 KB native and
   7.0 KB interpreted for hello, 2.4 KB native and 3.8 KB interpreted at the deepest
@@ -191,13 +195,31 @@ site changes that came with them live in the parent repository.
   hello and starfield native from their slots, a stuck loop stopped after 206 ms (pass
   1), a changed signature and a changed `app.aot` (its slot doesn't hash to the signed
   SHA-256) run `app.wasm`.
+- **C against Lua, measured** (`sdk/c/bench/`: the same thirteen workloads as a C app
+  and a Lua app with matching checksums, and `run.py`, which drives them over the
+  console; the tables are in `docs/C_API.md` "Speed and limits: C against Lua"). On
+  HYQ5VS (USB, Wi-Fi off, a test build that also took a native file over the console,
+  and with `kernels.c` in the firmware at GCC `-O2` behind a console command, kept out of
+  the tree): the native form ran at 0.97-1.25 times the firmware's time on eight of ten
+  workloads (integer Mandelbrot 62.5 / 50.4 ms a frame), 1.97 on SHA-256 and 2.41 on a
+  frame small enough to stay in the cache (byte-wise 32-bit accesses and bounds checks);
+  interpreted C ran at about Lua's speed on integers (Mandelbrot 5 283 / 5 307 ms) and
+  85 times slower than native; native C was 50-130 times faster than Lua on integer and
+  pixel work, 3.1 with floats, 2.1 copying, and slower than Lua through the API (a
+  label's text 357 us native, 625 interpreted, 181 in Lua). Measured limits: Lua got
+  5.50 MB of strings before "The app needs more than 6 MB", C 3.94 MB of `malloc` before
+  `NULL`; 17 KB of SRAM for an open app in all three; recursion 303 levels native, 378
+  interpreted, over 26 000 in Lua. A second full pass with Wi-Fi joined matched within
+  10 % (two Lua canvas rows 18-28 %). wamrc's `+unaligned-scalar-mem` made native files
+  25 % smaller and SHA-256 1.6 times faster, and misaligned 32-bit accesses worked on
+  this badge; not adopted (it needs a new `AOT_TARGET` and a production badge's check).
 - **What it costs.** About 120 KB of flash (2.1.0's image 2 340 704 bytes, now
   2 463 216). Nothing while no C app runs.
 - **Not measured on a badge yet:** a real store install over the network (fetching the
   key from a server that serves it, then downloading `app.aot`; checked end to end in
-  the emulator against a real test server instead, `server/test/cemu.test.ts`), a C app
-  next to a joined Wi-Fi network and the TLS floor, a production badge (C5 rev 1.0),
-  battery.
+  the emulator against a real test server instead, `server/test/cemu.test.ts`), the TLS
+  floor with a C app open (the benchmark ran a full pass with Wi-Fi joined and the badge
+  registered with its server), a production badge (C5 rev 1.0), battery.
 - **`tools/cc/badge-cc --aot`** refuses a native file a badge can't run in place (not
   `--xip`, or a `.rela.text` code relocation group), so a local build fails where the
   store would.

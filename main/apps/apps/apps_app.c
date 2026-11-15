@@ -21,6 +21,7 @@
 #include "lua/lua_host.h"
 #include "lua/lua_install.h"
 #include "lua/lua_pkg.h"
+#include "apps/c_warning.h"
 
 #define APPS_MAX        40
 #define REMOVE_WAIT_MS  3000
@@ -198,6 +199,12 @@ static void show_info(const lua_pkg_t *p)
         time_left(p, left, sizeof(left));
         snprintf(line, sizeof(line), "From a quest. %s", left);
         ui_label(s_info, &sol_mono_12, COL_ORANGE, line);
+    }
+    if (p->lang == LUA_PKG_LANG_C && p->aot) {
+        c_warning_add(s_info);          // the store gave it native code for this badge
+    } else if (p->lang == LUA_PKG_LANG_C) {
+        lv_obj_t *w = ui_label(s_info, &sol_mono_12, COL_DIM, C_WARN_WASM);
+        lv_obj_set_width(w, lv_pct(100));
     }
     if (p->summary[0]) {
         lv_obj_t *s = ui_label(s_info, &sol_font_14, COL_TEXT, p->summary);

@@ -149,6 +149,9 @@ HOME always returns to the launcher. The screen below the status bar is
 | Crypto | of a callback's 200 000 instructions: a signature check takes 40 000, an on-curve test 5 000, a program-derived address 10 000 (see `crypto` and `solana`) |
 | Numbers | 32-bit integers (they wrap at ±2^31) and 32-bit floats (about 7 digits) |
 
+How fast Lua is and what these limits allow, measured on a badge against the same work in
+a C app: [C_API.md "Speed and limits: C against Lua"](C_API.md#speed-and-limits-c-against-lua).
+
 A runtime error stops the app and shows the message with the line number. CANCEL
 returns to the launcher. `print(...)` goes to the badge's serial console, each line
 tagged `[<app id>] ` and with control characters (CR, ESC, …) shown as `?` (0.5.7: an app can't
