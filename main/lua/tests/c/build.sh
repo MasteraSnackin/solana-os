@@ -38,7 +38,7 @@ cc() {   # cc <id> <src> [defines...]
 cc t-c-api "$here/t-c-api/main.c"
 cc t-c-import "$here/t-c-import/main.c"
 cc t-c-abi "$here/t-c-abi/main.c"
-cases=(loop loopcb trapcb grow luamem index pointer oob unreachable div0 stack indirect fail exit pushfn frame unref nullfn shared unshared nest fspin importloop)
+cases=(loop loopcb trapcb grow luamem index pointer oob unreachable div0 stack indirect fail exit pushfn frame unref nullfn shared unshared nest fspin importloop nres)
 for i in "${!cases[@]}"; do
     cc "t-c-f-${cases[$i]}" "$here/t-c-fail/main.c" -DCASE=$((i + 1)) -Wno-infinite-recursion
 done

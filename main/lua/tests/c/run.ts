@@ -114,6 +114,7 @@ const expect: Record<string, Expect> = {
     't-c-f-pushfn': { title: 'App error', error: /sos_push_fn: no function there \(function 12345\)/ },
     't-c-f-frame': { title: 'App error', error: /more than 64 values in a frame/ },
     't-c-f-unref': { title: 'App error', error: /sos_unref: 77 is not a kept value/ },
+    't-c-f-nres': { title: 'App error', error: /sos_call: 2147483647 results don't fit in a frame/ },
     't-c-f-nullfn': { title: 'App error', error: /bad function pointer|wrong type/ },
     't-c-f-fspin': { title: 'App took too long', error: /Over 2000000 wasm instructions in one callback/, wait: 5000 },
     // Every import costs a host step: a loop of imports meets that budget first.

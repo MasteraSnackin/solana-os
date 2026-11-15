@@ -97,7 +97,10 @@ bool lw_aot_key_save(const char *hex);
 // An answer to GET /api/device/aotkey ({"key": "<64 hex>"}): caches the key.
 // false (and the cached key, if any, kept) when it carries none. Small NVS
 // write: fine on the OS task, where os_api's callbacks run.
-bool lw_aot_key_answer(int status, const char *body);
+// gen is os_cloud_server_gen() from when the request was sent: the key is
+// the server's that was asked, so after `server <url>` an answer still on
+// its way is dropped (false) instead of putting the old store's key back.
+bool lw_aot_key_answer(int status, const char *body, uint32_t gen);
 
 // The store's signature of app.aot with this SHA-256, for this build's
 // target, verifies under key (Ed25519, verify_strict). About 58 ms on a badge.

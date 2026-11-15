@@ -35,6 +35,7 @@
 #include "core/console.h"
 #include "cJSON.h"
 #include "core/os_api.h"
+#include "core/os_cloud.h"
 #include "core/os_cmd.h"
 #include "core/os_data.h"
 #include "lua_aot.h"
@@ -522,12 +523,16 @@ static int cmd_install(const char *id)
 // never writes app.aot: native code comes only from the store installer.
 
 // OS task (os_api's callbacks run there): cache the key, say how it went.
+static uint32_t s_aotkey_gen;       // os_cloud_server_gen() when `lua aotkey` asked
+
 static void aot_key_answered(int status, const char *body, void *ctx)
 {
     (void)ctx;
     uint8_t key[32];
     char hex[9];
-    if (lw_aot_key_answer(status, body) && lw_aot_key(key)) {
+    if (s_aotkey_gen != os_cloud_server_gen()) {
+        printf("aotkey: the server changed meanwhile; ask again\n");
+    } else if (lw_aot_key_answer(status, body, s_aotkey_gen) && lw_aot_key(key)) {
         lua_pkg_hex(hex, key, 4);
         printf("aotkey: cached %s...\n", hex);
     } else {
@@ -537,6 +542,7 @@ static void aot_key_answered(int status, const char *body, void *ctx)
 
 static int cmd_aot_key(void)
 {
+    s_aotkey_gen = os_cloud_server_gen();
     esp_err_t err = os_api_call("GET", "/api/device/aotkey", NULL, 256, aot_key_answered, os_api_token());
     if (err != ESP_OK) {
         printf("aotkey: %s\n", err == ESP_ERR_INVALID_STATE ? "offline (Wi-Fi on, and a registered badge)"

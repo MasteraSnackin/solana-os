@@ -40,6 +40,7 @@
 #include "cJSON.h"
 #include "core/os.h"
 #include "core/os_api.h"
+#include "core/os_cloud.h"
 #include "core/os_data.h"
 #include "lua_aot.h"
 #include "lua_host.h"
@@ -67,6 +68,7 @@ static void *s_ctx;                         // os_api ctx of the download in fli
 static int s_status;
 static char *s_manifest;                    // its X-App-Manifest, decoded
 static bool s_key_saved;                    // GET /api/device/aotkey's answer carried a key
+static uint32_t s_key_gen;                  // os_cloud_server_gen() when it was asked (under the lock)
 
 static void lock(void)
 {
@@ -311,7 +313,7 @@ static void key_answered(int status, const char *body, void *ctx)
     if (ctx == s_ctx) {
         s_ctx = NULL;
         s_status = status;
-        s_key_saved = lw_aot_key_answer(status, body);
+        s_key_saved = lw_aot_key_answer(status, body, s_key_gen);
         xSemaphoreGive(s_answered);
     }
     unlock();
@@ -324,6 +326,7 @@ static bool fetch_key(uint8_t key[32])
     s_ctx = ctx;
     s_status = 0;
     s_key_saved = false;
+    s_key_gen = os_cloud_server_gen();
     unlock();
     xSemaphoreTake(s_answered, 0);
     esp_err_t err;

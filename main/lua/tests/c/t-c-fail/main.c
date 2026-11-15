@@ -170,6 +170,11 @@ SOS_EXPORT(on_start) void on_start(void)
     for (;;) {
         sos_top();
     }
+#elif CASE == 24        // nres: a result count no frame holds (with values below, the sum mustn't wrap)
+    sos_push_int(1);
+    sos_push_int(2);
+    G("pcall");
+    sos_call(0, 0x7fffffff);
 #endif
     say("on_start end");
 }

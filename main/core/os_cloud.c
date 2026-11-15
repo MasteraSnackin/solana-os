@@ -79,6 +79,7 @@ static char s_secret[96];
 static uint8_t s_key[16];
 static char s_owner_tag[9];             // last owner's tag, kept while unclaimed
 static int64_t s_next_ms = -1;          // next hello, -1 = not scheduled
+static volatile uint32_t s_server_gen;  // os_cloud_server_gen()
 static int64_t s_time_off;              // server unix ms - esp_timer ms, 0 = never synced
 static int s_poll_s;                    // last `poll` from the server, 0 = none yet
 
@@ -813,6 +814,7 @@ void os_cloud_set_server(const char *url)
     lock();
     bool changed = strcmp(clean, s_info.server) != 0;
     if (changed) {
+        s_server_gen++;                 // first: answers still on their way are the old server's
         // The ID, secret, mesh key and owner belong to the old server. The
         // owner tag stays: a different account there still means new owner.
         strlcpy(s_info.server, clean, sizeof(s_info.server));
@@ -839,6 +841,11 @@ void os_cloud_set_server(const char *url)
         ESP_LOGI(TAG, "server set to '%s'", clean);
     }
     os_cloud_refresh();
+}
+
+uint32_t os_cloud_server_gen(void)
+{
+    return s_server_gen;
 }
 
 bool os_cloud_bearer(char *out, size_t n)

@@ -857,7 +857,12 @@ static void n_call(wasm_exec_env_t env, uint64_t *a)
                 (int)nargs + 1, top);
         return;
     }
-    if (nres < SOS_MULTRET || top - nargs - 1 + nres > LW_FRAME_MAX) {
+    // What stays below the function is 0..LW_FRAME_MAX; nres is the app's
+    // number, so compare it with the room left, never add it first (with two
+    // values below, INT32_MAX would wrap and pass, and lua_pcall checks no
+    // count in this build).
+    int below = top - nargs - 1;
+    if (nres < SOS_MULTRET || (nres != SOS_MULTRET && nres > LW_FRAME_MAX - below)) {
         lw_trap(w, LW_ERR, "sos_call: %d results don't fit in a frame", (int)nres);
         return;
     }

@@ -11,6 +11,7 @@
 #include "cJSON.h"
 #include "core/ed25519.h"
 #include "core/os_api.h"
+#include "core/os_cloud.h"
 #include "core/os_data.h"
 #include "lua_aot.h"
 #include "lua_pkg.h"
@@ -26,6 +27,7 @@ static const char s_bad_sig[] = "the store's signature doesn't verify";
 // anywhere.
 static volatile uint8_t s_refresh = LW_KEY_REFRESH_NONE;
 static volatile int64_t s_refresh_us;
+static volatile uint32_t s_refresh_gen;     // os_cloud_server_gen() when the refresh was asked
 
 bool lw_aot_key(uint8_t key[32])
 {
@@ -54,12 +56,32 @@ bool lw_aot_key_save(const char *hex)
     return ok;
 }
 
-bool lw_aot_key_answer(int status, const char *body)
+static void key_drop(void)
 {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, NVS_KEY, "");        // as os_cloud.c leaves it for a new server
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+bool lw_aot_key_answer(int status, const char *body, uint32_t gen)
+{
+    if (gen != os_cloud_server_gen()) {
+        return false;                       // asked of the server before this one
+    }
     cJSON *j = status == 200 && body ? cJSON_Parse(body) : NULL;
     const cJSON *k = cJSON_GetObjectItemCaseSensitive(j, "key");
     bool ok = cJSON_IsString(k) && lw_aot_key_save(k->valuestring);
     cJSON_Delete(j);
+    // The server may have changed on another task between the check above
+    // and the save (os_cloud bumps its number first, then clears the key):
+    // whichever order the two ran in, the old server's key must not stay.
+    if (ok && gen != os_cloud_server_gen()) {
+        key_drop();
+        ok = false;
+    }
     return ok;
 }
 
@@ -113,9 +135,13 @@ bool lw_aot_refusal_is_key(const char *why)
 static void refresh_answered(int status, const char *body, void *ctx)
 {
     (void)ctx;
+    if (s_refresh_gen != os_cloud_server_gen()) {
+        s_refresh = LW_KEY_REFRESH_NONE;    // the old server's answer: the new one can still be asked this boot
+        return;
+    }
     uint8_t before[32], after[32];
     bool had = lw_aot_key(before);
-    bool saved = lw_aot_key_answer(status, body) && lw_aot_key(after);
+    bool saved = lw_aot_key_answer(status, body, s_refresh_gen) && lw_aot_key(after);
     s_refresh_us = esp_timer_get_time();
     s_refresh = !saved ? LW_KEY_REFRESH_FAILED
                 : had && !memcmp(before, after, sizeof(after)) ? LW_KEY_REFRESH_SAME : LW_KEY_REFRESH_NEW;
@@ -126,6 +152,7 @@ void lw_aot_key_refresh(void)
     if (s_refresh != LW_KEY_REFRESH_NONE || !os_api_online()) {
         return;                             // asked already this boot, or offline (a later launch may ask)
     }
+    s_refresh_gen = os_cloud_server_gen();
     if (os_api_call("GET", "/api/device/aotkey", NULL, 256, refresh_answered, os_api_token()) == ESP_OK) {
         s_refresh = LW_KEY_REFRESH_ASKED;
     }
