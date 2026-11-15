@@ -8,6 +8,9 @@ site changes that came with them live in the parent repository.
 
 ## 2.3.0 (unreleased)
 
+Background services, with the first two built on them (Mailbox and Collaborator), on
+ESP-IDF master.
+
 - **Background services** (`main/core/os_service.h`, the parent repo's docs/HHGTS.md
   "Background services"). One registry of everything that runs while its app is closed:
   built-in services register at boot (id, name, status line, state, start/stop, whether
@@ -40,6 +43,25 @@ site changes that came with them live in the parent repository.
   `on_mail` (while the app is open, and when Mailbox opens the app on its mail); C:
   `mail_send`, `mail_count`, `mail_item`, `mail_get`, `mail_arg`, the `on_mail` export.
   `tests/t-mail`.
+- **Collaborator** (`collab`, Green, after Services; `main/game/collab.c`, `main/apps/collab/`;
+  the parent repo's docs/HHGTS.md "Collaborator", server/API.md "Collaborator", docs/MESH.md
+  "Collaborator stations"). The owner lends the badge to the event: off by default, turned on
+  in its app after the OS's own consent dialog, then a built-in background service that starts
+  at boot until turned off. While on it syncs with the server every 30 s (live, a trickle of
+  !LAMPs the server decides); an admin may take it over: APP messages sent from a **station**
+  id the server gives (its own HELLO, `k:"s"`, next to the badge's, never the owner's id or
+  key), what nearby badges send to the station forwarded back, and, when the owner lends the
+  screen, a card, QR code, image (downloaded to the card), colour or countdown and an LED
+  pattern on the hidden takeover screen, shown only when the badge is idle and never over an
+  install, update, trade, swap or confirm. HOME or CANCEL there ends the takeover (forfeited);
+  the status bar's green eye shows whenever it's taken over. Ends under 15 % battery off USB.
+  Console: `collab [status|on yes|off|end|sync|lend on|off]`. `os_mesh_station()`,
+  `OS_PEER_STATION` (Lua `mesh.nearby()` kind `"station"`), two holders of keep-Wi-Fi, the
+  radio kept awake while anyone needs it; `os_service_def_t.mark` (a status-bar symbol) and
+  `os_service_mark()`; `os_held()`, `os_last_key_ms()`.
+
+**The platform: ESP-IDF master.**
+
 - **Built with ESP-IDF master** (was 6.0.1), pinned to commit `4109c8923a5`
   (v6.1-dev-9359, 2026-11-12, `IDF_VERSION` 6.3.0) in `esp-idf.commit`: the top
   `CMakeLists.txt` stops a build on any other commit of ESP-IDF (`SOLANA_OS_IDF_UNPINNED=1`
@@ -69,23 +91,6 @@ site changes that came with them live in the parent repository.
   on 6.0.1 (measured on 4ZT2BX, My Badge open: 146.6 KB free with Wi-Fi joined, 156.3 KB
   off; 6.0.1: 150.4 / 160.0 KB).
 - `os_http`'s per-connection log line also gives what the handshake took from SRAM.
-
-- **Collaborator** (`collab`, Green, after Services; `main/game/collab.c`, `main/apps/collab/`;
-  the parent repo's docs/HHGTS.md "Collaborator", server/API.md "Collaborator", docs/MESH.md
-  "Collaborator stations"). The owner lends the badge to the event: off by default, turned on
-  in its app after the OS's own consent dialog, then a built-in background service that starts
-  at boot until turned off. While on it syncs with the server every 30 s (live, a trickle of
-  !LAMPs the server decides); an admin may take it over: APP messages sent from a **station**
-  id the server gives (its own HELLO, `k:"s"`, next to the badge's, never the owner's id or
-  key), what nearby badges send to the station forwarded back, and, when the owner lends the
-  screen, a card, QR code, image (downloaded to the card), colour or countdown and an LED
-  pattern on the hidden takeover screen, shown only when the badge is idle and never over an
-  install, update, trade, swap or confirm. HOME or CANCEL there ends the takeover (forfeited);
-  the status bar's green eye shows whenever it's taken over. Ends under 15 % battery off USB.
-  Console: `collab [status|on yes|off|end|sync|lend on|off]`. `os_mesh_station()`,
-  `OS_PEER_STATION` (Lua `mesh.nearby()` kind `"station"`), two holders of keep-Wi-Fi, the
-  radio kept awake while anyone needs it; `os_service_def_t.mark` (a status-bar symbol) and
-  `os_service_mark()`; `os_held()`, `os_last_key_ms()`.
 
 ## 2.2.0 (unreleased)
 

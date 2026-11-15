@@ -966,9 +966,9 @@ the interpreter (the SHA-256 row of "What runs where").
 
 ```c
 int mail_send(const char *to, const char *title, const char *text, const char *data_json);
-                                           // to a badge id: BADGE_OK when queued; data_json NULL or a JSON object
+                                           // to a badge id: 0 when queued; data_json NULL or a JSON object
 int mail_count(void);                      // this app's mail on the badge (<= 50), newest first
-int mail_item(int i, mail_t *out);         // the i-th (0-based): BADGE_OK, or BADGE_ERR past the end
+int mail_item(int i, mail_t *out);         // the i-th (0-based): 0, or BADGE_ERR past the end
 //   mail_t { int32_t id, at, exp, read; char from[8], by[25], title[33], text[201], data[129]; }
 int mail_get(int32_t id, mail_t *out);     // one by id
 void on_mail(void);                        // export: badge_arg(1) is the mail (a table, as Lua's mail.get)

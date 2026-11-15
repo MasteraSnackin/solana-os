@@ -73,7 +73,11 @@ if [ -x "$fw/tools/cc/badge-cc" ] && [ -x "$tc/wasi-sdk/bin/clang" ]; then
     mkdir -p "$out/host-probe"
     "$fw/tools/cc/badge-cc" "$fw/sdk/c/tests/host" -o "$out/host-probe/app.wasm" -q
     cp "$fw/sdk/c/tests/host/app.json" "$out/host-probe/app.json"
+    # badge.h's mail wrappers (Mailbox, 2.3.0) on a badge: lua recv + lua run, like tests/t-mail.
+    mkdir -p "$out/t-c-mail"
+    "$fw/tools/cc/badge-cc" "$here/t-c-mail" -o "$out/t-c-mail/app.wasm" -q
+    cp "$here/t-c-mail/app.json" "$out/t-c-mail/app.json"
 else
-    echo "no SDK toolchain (tools/cc/fetch.sh): t-c-libc, t-c-bench and host-probe skipped"
+    echo "no SDK toolchain (tools/cc/fetch.sh): t-c-libc, t-c-bench, host-probe and t-c-mail skipped"
 fi
 ls "$out" | wc -l | xargs echo "apps built:"

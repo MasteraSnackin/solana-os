@@ -2010,7 +2010,7 @@ static inline void badge__mail(badge_val m, mail_t *out, int full)
 }
 
 // Queues a notification for the owner of badge `to`, who must have this app
-// too (the server checks): BADGE_OK, or BADGE_ERR and badge_error() ("bad id",
+// too (the server checks): 0, or BADGE_ERR and badge_error() ("bad id",
 // "title: 1-32 printable ASCII", "not linked", "full", "busy" ...). data_json:
 // NULL or a JSON object of <= 128 bytes.
 static inline int mail_send(const char *to, const char *title, const char *text, const char *data_json)
@@ -2038,7 +2038,7 @@ static inline int mail_count(void)
     return n;
 }
 
-// The i-th (0-based) of mail_count()'s: BADGE_OK, or BADGE_ERR past the end. No text or data.
+// The i-th (0-based) of mail_count()'s: 0, or BADGE_ERR past the end. No text or data.
 static inline int mail_item(int i, mail_t *out)
 {
     badge__fn("mail.list");
@@ -2058,7 +2058,7 @@ static inline int mail_item(int i, mail_t *out)
     return ok ? 0 : BADGE_ERR;
 }
 
-// One of this app's messages in full, by id: BADGE_OK, or BADGE_ERR when it's gone.
+// One of this app's messages in full, by id: 0, or BADGE_ERR when it's gone.
 static inline int mail_get(int32_t id, mail_t *out)
 {
     badge__fn("mail.get");
