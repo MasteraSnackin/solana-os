@@ -61,6 +61,7 @@ typedef struct lw {
     // stdout and stderr, a line at a time
     char line[LW_LINE_MAX];
     size_t line_len;
+    uint32_t frames, frames_direct; // ui_frame calls that drew, and how many went without a copy
     NativeSymbol *natives;          // the import tables WAMR holds (and sorts) while it runs
     uint32_t n_natives;
     // Exports the host calls (NULL: the app didn't define it)

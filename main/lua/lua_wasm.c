@@ -77,6 +77,7 @@
 #include "esp_timer.h"
 #include "bsp.h"
 #include "core/os_data.h"
+#include "core/os.h"
 #include "core/os_keys.h"
 #include "wasm.h"                       // WASMModule: whether app.wasm has a start function
 #include "lua_aot.h"
@@ -1069,6 +1070,120 @@ static void n_blit(wasm_exec_env_t env, uint64_t *a)
     }
 }
 
+// ui_frame (C_API.md "Frames straight to the screen"): w x h RGB565 pixels of
+// the app's memory to the panel past LVGL, scaled to dw x dh at (x, y) of the
+// app area (bsp_display_frame). 1 shown, 0 not (a dialog, the keyboard or the
+// OS's panel is over the app: LVGL has the screen), -1 a frame outside the
+// app area. A toast keeps its rows: the frame's part above it is drawn.
+#define LW_FRAME_SRC_MAX    1024        // a side of the app's frame
+#define LW_FRAME_BE         1           // SOS_FRAME_BE: big-endian pixels
+#define LW_FRAME_PX_STEP    16          // host steps: 1 per pixel copied, as a blit
+#define LW_FRAME_DMA_STEP   256         // ... 1 per pixel the DMA reads where it is
+
+static void n_frame(wasm_exec_env_t env, uint64_t *a)
+{
+    (void)env;
+    lua_State *L;
+    lw_t *w = begin(&L);
+    uint32_t addr = ARG_U32(0);
+    int32_t fw = ARG_I32(1), fh = ARG_I32(2), x = ARG_I32(3), y = ARG_I32(4), dw = ARG_I32(5), dh = ARG_I32(6);
+    uint32_t flags = ARG_U32(7);
+    RET_I32(-1);
+    if (!w) {
+        return;
+    }
+    if (fw <= 0 || fh <= 0 || fw > LW_FRAME_SRC_MAX || fh > LW_FRAME_SRC_MAX) {
+        lw_trap(w, LW_ERR, "sos_frame: %d x %d pixels, 1 to %d a side", (int)fw, (int)fh, LW_FRAME_SRC_MAX);
+        return;
+    }
+    if (flags & ~(uint32_t)LW_FRAME_BE) {
+        lw_trap(w, LW_ERR, "sos_frame: unknown flags 0x%x", (unsigned)flags);
+        return;
+    }
+    const uint16_t *px = lw_mem(w, "sos_frame", addr, (uint32_t)(fw * fh * 2));
+    if (!px) {
+        return;
+    }
+    lh_t *s = w->s;
+    if (!s->area || x < 0 || y < 0 || dw <= 0 || dh <= 0 || (int64_t)x + dw > OS_ROOT_W ||
+        (int64_t)y + dh > OS_ROOT_H) {
+        return;                             // -1: not inside the app area
+    }
+    if (s->modal || s->kb || os_confirm_open() || os_overlay() || s->failed) {
+        RET_I32(0);
+        return;
+    }
+    lv_area_t area;
+    lv_obj_get_coords(s->area, &area);
+    int sx = area.x1 + x, sy = area.y1 + y, h = fh, dhh = dh;
+    int t0, t1;
+    if (os_toast_rows(&t0, &t1) && t0 < sy + dh && t1 >= sy) {
+        dhh = t0 - sy;                      // the rows above the toast
+        if (dhh <= 0) {
+            RET_I32(0);
+            return;
+        }
+        h = (int)((int64_t)dhh * fh / dh);
+        if (h <= 0) {
+            RET_I32(0);
+            return;
+        }
+    }
+    bool be = flags & LW_FRAME_BE;
+    bool direct = be && dw == fw && dhh == h;
+    if (!lw_charge(w, direct ? (uint32_t)(fw * h) / LW_FRAME_DMA_STEP : (uint32_t)(dw * dhh) / LW_FRAME_PX_STEP)) {
+        return;
+    }
+    if (bsp_display_frame(px, fw, fw, h, sx, sy, dw, dhh, be) != ESP_OK) {
+        lw_trap(w, LW_MEM, "not enough memory");
+        return;
+    }
+    w->frames++;
+    w->frames_direct += bsp_display_frame_direct();
+    RET_I32(1);
+}
+
+// files_read (C_API.md "files"): up to len bytes of a file of the app's
+// folder from off, straight into the app's memory. The bytes read (0 at the
+// end), or -1 when there's no such file or the card failed.
+static void n_file_read(wasm_exec_env_t env, uint64_t *a)
+{
+    (void)env;
+    lua_State *L;
+    lw_t *w = begin(&L);
+    uint32_t np = ARG_U32(0), nl = ARG_U32(1), off = ARG_U32(2), bp = ARG_U32(3), len = ARG_U32(4);
+    RET_I32(-1);
+    if (!w) {
+        return;
+    }
+    if (!(w->s->pkg.perms & LUA_PERM_FILES)) {
+        lw_trap(w, LW_ERR, "files_read: add the \"files\" permission to app.json");
+        return;
+    }
+    if (len > LH_FILES_READ_MAX) {
+        lw_trap(w, LW_ERR, "files_read: %u bytes, at most %d per read", (unsigned)len, LH_FILES_READ_MAX);
+        return;
+    }
+    if (nl > LH_FILES_NAME_MAX + 5) {
+        RET_I32(-1);
+        return;
+    }
+    const char *name = lw_mem(w, "files_read", np, nl);
+    void *dst = name ? lw_mem(w, "files_read", bp, len) : NULL;
+    if (!dst && len) {
+        return;
+    }
+    char copy[LH_FILES_NAME_MAX + 6];
+    memcpy(copy, name, nl);                 // the app can't change it under the check
+    unsigned steps = 0;
+    const char *err;
+    long n = lh_files_read_into(w->s, copy, nl, off, dst, len, &steps, &err);
+    if (!lw_charge(w, steps)) {
+        return;
+    }
+    RET_I32(n);
+}
+
 // sys.keys()'s set as bits: nothing while a dialog has the keys.
 static void n_keys(wasm_exec_env_t env, uint64_t *a)
 {
@@ -1166,6 +1281,8 @@ static const NativeSymbol s_badge[] = {
     {"unref", n_unref, "(i)", NULL},
     {"push_ref", n_push_ref, "(i)i", NULL},
     {"blit", n_blit, "(iiiiii)i", NULL},
+    {"frame", n_frame, "(iiiiiiii)i", NULL},
+    {"file_read", n_file_read, "(iiiii)i", NULL},
     {"keys", n_keys, "()i", NULL},
     {"millis", n_millis, "()i", NULL},
     {"log", n_log, "(ii)", NULL},
@@ -1221,6 +1338,11 @@ void lw_import_out(lw_t *w)
 bool lw_port_slow(bool begin)
 {
     lw_t *w = lw_cur;
+    if (begin) {
+        // memory.grow may move the linear memory: a frame the panel still
+        // reads from it (ui_frame without a copy) finishes first.
+        bsp_display_frame_wait();
+    }
     if (begin && w && w->clk.kill) {
         return false;                       // stopping: memory.grow answers -1, and the app stops at once
     }
@@ -1265,6 +1387,8 @@ static void update_stats(lw_t *w)
     wasm_memory_inst_t m = wasm_runtime_get_default_memory(w->inst);
     uint64_t size = m ? wasm_memory_get_cur_page_count(m) * wasm_memory_get_bytes_per_page(m) : 0;
     w->s->wasm_stat.mem_size = (uint32_t)size;
+    w->s->wasm_stat.frames = w->frames;
+    w->s->wasm_stat.frames_direct = w->frames_direct;
     if (size > w->s->wasm_stat.mem_peak) {
         w->s->wasm_stat.mem_peak = (uint32_t)size;
     }

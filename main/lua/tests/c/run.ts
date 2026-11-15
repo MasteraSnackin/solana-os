@@ -93,6 +93,16 @@ const expect: Record<string, Expect> = {
     't-c-api': { noError: true, keys: ['down', 'select', 'right'], print: [/on_start done/, /\] done$/, /\] on_exit$/] },
     't-c-libc': { noError: true, print: [/\] printf 42 str 3\.14 ff$/, /\] done$/, /\] stderr line$/] },
     't-c-import': { title: 'App error', error: /env\.launch_rockets, which the badge doesn't have/ },
+    // ui_frame and files_read (2.3.0): every check answers, misuse stops the app.
+    't-c-frame': { noError: true, oks: 25, print: [/\] done$/, /\] still running$/] },
+    't-c-fr-pointer': { title: 'App error', error: /sos_frame: the pointer 0x7ffffff0 \(1024 bytes\) is outside the app's memory/ },
+    't-c-fr-side': { title: 'App error', error: /sos_frame: 2000 x 1 pixels, 1 to 1024 a side/ },
+    't-c-fr-flags': { title: 'App error', error: /sos_frame: unknown flags 0x80/ },
+    't-c-fr-big': { title: 'App error', error: /files_read: 300000 bytes, at most 262144 per read/ },
+    't-c-fr-buffer': { title: 'App error', error: /files_read: the pointer 0x7ffff000 \(2048 bytes\) is outside the app's memory/ },
+    't-c-fr-name': { title: 'App error', error: /files_read: the pointer 0x7ffffff0 \(32 bytes\) is outside the app's memory/ },
+    't-c-fr-noperm': { title: 'App error', error: /files_read: add the "files" permission to app\.json/ },
+    't-c-fr-huge': { title: 'App error', error: /sos_frame: the pointer 0x[0-9a-f]+ \(2097152 bytes\) is outside the app's memory/ },
     't-c-abi': { title: 'App error', error: /needs a newer Solana OS \(its C ABI is 99, this badge's 1\)/ },
     't-c-f-loop': { title: 'App took too long', error: /Over 2000000 wasm instructions in one callback/, wait: 3000 },
     't-c-f-loopcb': { title: 'App took too long', error: /Over 2000000 wasm instructions in one callback/, wait: 3000 },
@@ -170,6 +180,11 @@ for (const id of ids) {
     mod.FS.mkdirTree(`/sdcard/hh/apps/${id}`);
     mod.FS.writeFile(`/sdcard/hh/apps/${id}/app.json`, readFileSync(sources[id].json));
     mod.FS.writeFile(`/sdcard/hh/apps/${id}/app.wasm`, readFileSync(sources[id].wasm));
+    if (id.startsWith('t-c-fr') || id === 't-c-frame') {
+        // files_read's tests read data.bin from the app's folder (LUA_API.md "files").
+        mod.FS.mkdirTree(`/sdcard/hh/files/${id}`);
+        mod.FS.writeFile(`/sdcard/hh/files/${id}/data.bin`, Uint8Array.from({ length: 1000 }, (_, i) => i % 251));
+    }
     const mark = lines.length;
     cmd(`lua run ${id}`);
     await sleep(want.wait ?? 1500);

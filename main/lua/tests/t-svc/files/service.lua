@@ -7,12 +7,13 @@ print("t-svc:svc boot, heap " .. sys.memory().used .. " of " .. sys.memory().max
 -- nil in a service.
 local forbidden = {
   "ui", "led", "wifi", "ble", "ws", "quest",
-  "sys.keys", "sys.exit",
+  "sys.keys", "sys.exit", "sys.tick",
   "lamps.spend", "lamps.transfer", "lamps.deposit", "lamps.award",
   "items.grant", "items.update", "items.remove",
   "mesh.channel", "mesh.scan", "mesh.pause", "mesh.resume", "mesh.bridge", "mesh.info",
   "service.start", "service.running",
   "mail.send",                        -- only the app on screen mails (LUA_API.md "mail")
+  "files.write", "files.remove",      -- ... and writes the owner's files (LUA_API.md "files")
   "load", "dofile", "loadfile",
 }
 local bad = {}
@@ -33,7 +34,7 @@ print("t-svc:svc forbidden: " .. (#bad == 0 and "all nil" or ("FAIL " .. table.c
 local allowed = {"timer.every", "storage.set", "fs.read", "json.encode", "crypto.sha256", "solana.encode",
   "lamps.balance", "items.list", "items.all", "mesh.send", "mesh.nearby", "mesh.meet", "mesh.meets",
   "sys.millis", "sys.memory", "badge.id", "service.send", "service.status", "service.notify", "service.stop", "require",
-  "mail.list", "mail.get"}
+  "mail.list", "mail.get", "files.dir", "files.list", "files.size", "files.read"}
 local missing = {}
 for _, path in ipairs(allowed) do
   local v = _G

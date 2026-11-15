@@ -992,6 +992,7 @@ static void svc_libs(lua_State *L)
     lh_open_fs(L);
     lh_open_crypto(L);
     lh_open_mail(L);                        // mail: the reads only (LUA_API.md "service" and "mail")
+    lh_open_files(L);                       // files: the reads only (LUA_API.md "service" and "files")
     static const char *const sys[] = {"millis", "time", "battery", "memory", NULL};
     static const char *const lamps[] = {"balance", NULL};
     static const char *const items[] = {"list", "all", NULL};
@@ -1004,6 +1005,8 @@ static void svc_libs(lua_State *L)
     keep(L, "mesh", mesh);
     static const char *const mail[] = {"list", "get", NULL};
     keep(L, "mail", mail);
+    static const char *const files[] = {"dir", "list", "size", "read", NULL};
+    keep(L, "files", files);
     static const char *const none[] = {"ui", "led", "wifi", "ble", "ws", "quest", NULL};
     for (int i = 0; none[i]; i++) {
         lua_pushnil(L);
@@ -1123,6 +1126,7 @@ static void close_state(lh_t *s, bool on_stop)
         s->L = NULL;
     }
     lh_fs_close(s);
+    lh_files_close(s);
     lw_close(s);
 }
 
@@ -1339,6 +1343,7 @@ static void round_of(struct lh_svc *sv)
         lh_storage_flush(s, false);
     }
     lh_fs_close(s);
+    lh_files_close(s);                      // the files module's cached one too: the card takes 5
 }
 
 static int64_t next_due(struct lh_svc *sv)

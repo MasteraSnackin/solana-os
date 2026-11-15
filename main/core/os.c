@@ -223,6 +223,19 @@ static void toast_show(const char *msg)
     s_toast_until = now_ms() + TOAST_MS;
 }
 
+bool os_toast_rows(int *y0, int *y1)
+{
+    if (!s_toast || lv_obj_is_hidden(s_toast)) {
+        return false;
+    }
+    lv_area_t a;
+    lv_obj_update_layout(s_toast);
+    lv_obj_get_coords(s_toast, &a);
+    *y0 = a.y1;
+    *y1 = a.y2;
+    return true;
+}
+
 static void toast_posted(void *arg)
 {
     toast_show(arg);
@@ -564,9 +577,23 @@ static void capture_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     if (s_capturing) {
         int w = lv_area_get_width(area);
         static unsigned char b64[BOARD_LCD_H_RES * 2 * 4 / 3 + 8];
+        // A C app's frame went to the panel past LVGL (bsp_display_frame):
+        // the shot shows it as the panel did, over what LVGL has there.
+        int fx, fy, fw, fh;
+        const uint16_t *frame = bsp_display_frame_last(&fx, &fy, &fw, &fh);
+        static uint16_t row[BOARD_LCD_H_RES];
         for (int y = area->y1; y <= area->y2; y++) {
             size_t n = 0;
-            mbedtls_base64_encode(b64, sizeof(b64), &n, px + (y - area->y1) * w * 2, w * 2);
+            const uint8_t *line = px + (y - area->y1) * w * 2;
+            if (frame && y >= fy && y < fy + fh && area->x1 < fx + fw && area->x2 >= fx) {
+                memcpy(row, line, (size_t)w * 2);
+                for (int x = fx > area->x1 ? fx : area->x1; x < fx + fw && x <= area->x2; x++) {
+                    uint16_t v = frame[(y - fy) * fw + (x - fx)];
+                    row[x - area->x1] = (uint16_t)(v << 8 | v >> 8);
+                }
+                line = (const uint8_t *)row;
+            }
+            mbedtls_base64_encode(b64, sizeof(b64), &n, line, w * 2);
             b64[n] = 0;
             printf("SHOT %d %d %d %s\n", (int)area->x1, y, w, b64);
         }

@@ -110,7 +110,7 @@ const openAndAllow = async (id: string, re: RegExp) => {
 let mark = lines.length;
 const started = await openAndAllow('t-svc', /t-svc start: true/);
 ok(!!started, 't-svc: service.start answered true after the owner allowed it');
-ok(!!(await waitFor(/t-svc:svc forbidden: all nil/, 3000, mark)), 'service: ui, led, wifi, ble, ws, quest, spending, channel, mail.send are nil');
+ok(!!(await waitFor(/t-svc:svc forbidden: all nil/, 3000, mark)), 'service: ui, led, wifi, ble, ws, quest, spending, channel, sys.tick, mail.send, file writes are nil');
 ok(!!(await waitFor(/t-svc:svc allowed: all there/, 3000, mark)), 'service: the allowed modules are there');
 ok(!!(await waitFor(/t-svc second start: .*still waiting/, 3000, mark)), 'app: a second start while one waits is refused');
 ok(!!(await waitFor(/t-svc big send: message over 1 KB/, 3000, mark)), 'app: service.send over 1 KB refused');

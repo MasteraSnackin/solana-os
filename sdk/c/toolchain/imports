@@ -31,6 +31,8 @@ badge.ref
 badge.unref
 badge.push_ref
 badge.blit
+badge.frame
+badge.file_read
 badge.keys
 badge.millis
 badge.log

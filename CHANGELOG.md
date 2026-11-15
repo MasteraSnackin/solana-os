@@ -232,6 +232,34 @@ Collaborator), on 2.2.0's ESP-IDF master.
   `bun main/lua/tests/c/run.ts`, headless in the emulator), and
   `server/test/cemu.test.ts` (the emulated badge against a real test server: publish,
   install with the key fetched and the signature verified, run, `lua aot`, tampering).
+- **Heavy C apps and emulators**, measured on a production badge (4YGWAV, ESP32-C5 rev 1.0)
+  on ESP-IDF 6.0.1, before the move to master; the tables are in `docs/C_API.md` "Heavy
+  apps and emulators".
+- **`ui_frame` / `sos_frame`**: a C app's RGB565 frame straight to the screen's SPI DMA,
+  past LVGL (`bsp_display_frame`), returning while the screen still takes it. An unscaled
+  big-endian frame in a 64-byte-aligned buffer goes with no copy (1.0 to 1.4 ms for
+  160 x 144, against 6.5 to 6.9 copied and 17.3 ms for a 320 x 216 `ui_canvas_blit`);
+  others are converted (scaled, nearest) into a PSRAM buffer kept until the app exits.
+  Nothing while a dialog, the keyboard or the OS panel is up; only the rows above a toast.
+  The linear memory is 64-byte aligned (`lua_wasm_port.c`) and `memory.grow` waits for a
+  frame in flight, as the app's exit does, so the DMA never reads memory that moved.
+  Screenshots show copied frames.
+- **`files`** (permission `files`, Lua and C): the app's own folder `hh/files/<id>/` for
+  files the owner copies there (read-only) and its saves in `save/` (1 MB a file, 32
+  files); names, never paths. C reads go straight into the app's memory
+  (`sos_file_read`). The console takes them: `lua recv <id> files/<name> ...` (32 MB).
+  Wiped with `/sdcard/hh` by a reset or a new owner. A background service reads them
+  (`files.dir`, `list`, `size`, `read`) but doesn't write; only the app does.
+- **`sys.tick(ms)` / `sys_tick()`**: on_tick's period, 16 to 1000 ms; an app that sets it
+  is woken by a one-shot timer, so 16 ms is 16, not the scheduler's 20. A service keeps its
+  1 s tick: `sys.tick` is nil there.
+- **`sdk/c/examples/gameboy`**: a Game Boy / Game Boy Color emulator (Walnut-CGB 1.2.4,
+  MIT): native, real homebrew runs at 56 to 60 emulated fps and 45 to 56 shown; games
+  that never idle at 23 to 35 (double speed 14 to 18); interpreted it is unplayable (one
+  frame over 3 s). GBA: no (SkyEmu's core, 0.7 fps as an app, 2.6 in the firmware).
+- **`wamrc +unaligned-scalar-mem` stays off**: on the production badge it made an
+  emulator 1.7 times slower (faster on the prototype). Bounds checks cost an emulator
+  about 30 %; they stay on.
 - **Background services** (`main/core/os_service.h`, the parent repo's docs/HHGTS.md
   "Background services"). One registry of everything that runs while its app is closed:
   built-in services register at boot (id, name, status line, state, start/stop, whether

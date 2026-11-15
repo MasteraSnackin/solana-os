@@ -45,9 +45,10 @@ typedef enum {
     LUA_PERM_BLE = 1 << 9,
     LUA_PERM_MAIL = 1 << 10,       // Mailbox (2.3.0)
     LUA_PERM_BACKGROUND = 1 << 11,  // a service.lua that runs while the app is closed (2.3.0)
+    LUA_PERM_FILES = 1 << 12,       // 2.3.0: the app's folder on the card (lua_files.c)
 } lua_perm_t;
 
-#define LUA_PERM_COUNT  12
+#define LUA_PERM_COUNT  13
 
 typedef struct {
     char id[LUA_PKG_ID_MAX + 1];

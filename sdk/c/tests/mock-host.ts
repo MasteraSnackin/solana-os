@@ -222,6 +222,12 @@ const api: Record<string, V> = {
   'storage.get': fn((a) => (want(a, 's', 'storage.get'), [store.get(str(a[0])) ?? NIL])),
   'storage.set': fn((a) => (want(a, 's *', 'storage.set'), store.set(str(a[0]), a[1]), [])),
   'storage.remove': fn((a) => (want(a, 's', 'storage.remove'), store.delete(str(a[0])), [])),
+  'sys.tick': fn((a) => (want(a, 'i', 'sys.tick'), [i(30)])),
+  'files.dir': fn((a) => (want(a, '', 'files.dir'), [s('hh/files/app/')])),
+  'files.size': fn((a) => (want(a, 's', 'files.size'), [i(32768)])),
+  'files.list': fn((a) => (want(a, '', 'files.list'), [tbl([tbl({ name: 'game.gb', size: 32768 }), tbl({ name: 'save/game.sav', size: 8192 })])])),
+  'files.write': fn((a) => (want(a, 's i s', 'files.write'), [b(true)])),
+  'files.remove': fn((a) => (want(a, 's', 'files.remove'), [b(true)])),
   'fs.exists': fn((a) => (want(a, 's', 'fs.exists'), [b(true)])),
   'fs.size': fn((a) => (want(a, 's', 'fs.size'), [i(9)])),
   'fs.read': fn((a) => (want(a, 's i? i?', 'fs.read'), str(a[0]) === 'missing' ? [NIL, s('not found')] : [s('file data')])),
@@ -579,6 +585,21 @@ const badgeImports = {
     blits++;
     return v.t === 7 && v.v.kind === 'canvas' ? 0 : -1;
   },
+  frame: (px: number, w: number, h: number, x: number, y: number, dw: number, dh: number, flags: number) => {
+    if (w < 1 || h < 1 || w > 1024 || h > 1024) bug(`sos_frame: ${w} x ${h} pixels`);
+    if (flags & ~1) bug(`sos_frame: unknown flags ${flags}`);
+    bytes(px >>> 0, w * h * 2);
+    frameCalls++;
+    return x < 0 || y < 0 || dw < 1 || dh < 1 || x + dw > 320 || y + dh > 218 ? -1 : 1;
+  },
+  file_read: (np: number, nl: number, off: number, buf: number, len: number) => {
+    if (len >>> 0 > 256 * 1024) bug(`sos_file_read: ${len >>> 0} bytes`);
+    cstr(np, nl);
+    bytes(buf >>> 0, len >>> 0);
+    const size = 32768, n = Math.max(0, Math.min(len >>> 0, size - (off >>> 0)));
+    new Uint8Array(mem.buffer, buf >>> 0, n).fill(0);
+    return n;
+  },
   keys: () => heldKeys,
   millis: () => (millis += 30),
   log: (p: number, n: number) => out(`[app] ${cstr(p, n)}`),
@@ -590,6 +611,7 @@ const badgeImports = {
 let millis = 0;
 let heldKeys = 0;
 let blits = 0;
+let frameCalls = 0;
 let delivered = 0;
 const out = (l: string) => quiet || console.log(l);
 
@@ -699,6 +721,6 @@ if (ex.on_exit) run('on_exit', () => ex.on_exit());
 if (stdoutBuf) out(`[stdout] ${stdoutBuf}`);
 
 const used = [...callsByName.keys()].length;
-console.log(`mock-host: ${file}: ${calls} API calls (${used} functions), ${delivered} callbacks delivered, ${blits} blits, ${refs.size} refs held at exit${unknownNames.size ? `, unknown names: ${[...unknownNames].join(' ')}` : ''}`);
+console.log(`mock-host: ${file}: ${calls} API calls (${used} functions), ${delivered} callbacks delivered, ${blits} blits, ${frameCalls} frames, ${refs.size} refs held at exit${unknownNames.size ? `, unknown names: ${[...unknownNames].join(' ')}` : ''}`);
 for (const p of problems) console.log(`mock-host: PROBLEM: ${p}`);
 process.exit(problems.length ? 1 : 0);

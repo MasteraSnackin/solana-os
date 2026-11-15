@@ -35,6 +35,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_lvgl_port.h"
+#include "bsp.h"
 #include "core/os_api.h"
 #include "core/os_cloud.h"
 #include "core/os_data.h"
@@ -315,7 +316,11 @@ static void close_state(lh_t *s)
         }
     }
     lh_fs_close(s);
+    lh_files_close(s);
     lh_code_close(s);                       // nothing points into it now
+    // A frame the panel may still be reading from the app's memory
+    // (ui_frame), before that memory goes with WAMR.
+    bsp_display_frame_end();
     lw_close(s);                            // a C app's module and WAMR, after the state that called it
 }
 
@@ -534,6 +539,7 @@ static int boot(lua_State *L)
     lh_open_ws(L);
     lh_open_ble(L);
     lh_open_fs(L);
+    lh_open_files(L);
     lh_open_crypto(L);
     lh_open_mail(L);
     lh_open_service(L);
@@ -669,8 +675,8 @@ static void run_events(lh_t *s, const lh_ev_t *ev)
     }
     int64_t now = lh_now();
     if (s->L && !s->failed && now >= s->next_tick) {
-        int64_t ms = now - s->next_tick + LH_TICK_MS;
-        s->next_tick = now + LH_TICK_MS;
+        int64_t ms = now - s->next_tick + s->tick_ms;
+        s->next_tick = now + s->tick_ms;
         lh_callback(s, tick_cb, (void *)(intptr_t)ms);
     }
     if (s->L && !s->failed) {
@@ -683,6 +689,34 @@ static void run_events(lh_t *s, const lh_ev_t *ev)
         s->exit_req = false;
         os_launch(&os_launcher);
     }
+}
+
+// sys.tick: the RTOS sleeps in whole 10 ms ticks, so a 16 ms period would
+// come out as 20. An app that set its period is woken by this one-shot timer
+// at the right millisecond instead (the queue wait, rounded up, is the
+// fallback). Made at the first sys.tick app and kept.
+static esp_timer_handle_t s_wake;
+static volatile uint32_t s_wake_gen;
+
+static void wake_fire(void *arg)
+{
+    (void)arg;
+    lh_ev_t ev = { .kind = LH_EV_WAKE, .gen = s_wake_gen };
+    lh_post(&ev);
+}
+
+static void wake_at(lh_t *s, int64_t ms)
+{
+    if (!s_wake) {
+        const esp_timer_create_args_t args = { .callback = wake_fire, .name = "lhwake" };
+        if (esp_timer_create(&args, &s_wake) != ESP_OK) {
+            s_wake = NULL;
+            return;
+        }
+    }
+    s_wake_gen = s->gen;
+    esp_timer_stop(s_wake);
+    esp_timer_start_once(s_wake, (uint64_t)ms * 1000);
 }
 
 static TickType_t wait_ticks(lh_t *s)
@@ -704,6 +738,9 @@ static TickType_t wait_ticks(lh_t *s)
     }
     if (ms > LH_MAX_WAIT_MS) {
         ms = LH_MAX_WAIT_MS;
+    }
+    if (s->tick_set && wake == s->next_tick && ms % portTICK_PERIOD_MS) {
+        wake_at(s, ms);
     }
     return (ms + portTICK_PERIOD_MS - 1) / portTICK_PERIOD_MS;
 }
@@ -809,6 +846,7 @@ static void lua_task(void *arg)
         }
     }
     free(rd);
+    lh_files_prepare(s);
     // How the code runs: a C app's app.aot (native, from a flash slot) or
     // app.wasm (WAMR's interpreter); a Lua app's code.bin (run in place) or
     // main.lua compiled on the badge.
@@ -827,7 +865,7 @@ static void lua_task(void *arg)
         } else if (rc != LUA_OK) {
             fail(s, rc, NULL);
         } else {
-            s->next_tick = lh_now() + LH_TICK_MS;
+            s->next_tick = lh_now() + s->tick_ms;
             lh_callback(s, run_main, NULL);
             if (s->L && !s->failed) {
                 lh_mail_opened(s);      // opened from Mailbox on a message: on_mail gets it
@@ -914,6 +952,7 @@ static void host_enter(lv_obj_t *root)
     s->modal_ref = s->store_ref = s->scan_ref = s->svc_start_ref = LUA_NOREF;
     s->steps_max = LUA_HOST_STEPS_MAX;
     strlcpy(s->tag, pkg.id, sizeof(s->tag));
+    s->tick_ms = LH_TICK_MS;
     lh_ble_init(s);
     s->loading = ui_label(area, &sol_font_14, COL_DIM, "Starting...");
     lv_obj_center(s->loading);

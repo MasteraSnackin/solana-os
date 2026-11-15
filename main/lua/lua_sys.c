@@ -217,6 +217,26 @@ static int l_millis(lua_State *L)
     return 1;
 }
 
+// sys.tick(ms): on_tick's period from now on, LH_TICK_MIN_MS..1000 (2.3.0);
+// returns the one before. Periods off the RTOS's 10 ms tick are woken by a
+// timer (lua_host.c), so a game asking 16 ms gets 16, not 20.
+static int l_tick(lua_State *L)
+{
+    lh_t *s = lh_get(L);
+    int before = s->tick_ms;
+    if (!lua_isnoneornil(L, 1)) {
+        lua_Integer ms = luaL_checkinteger(L, 1);
+        luaL_argcheck(L, ms >= LH_TICK_MIN_MS && ms <= 1000, 1, "16 to 1000 ms");
+        s->tick_ms = (int)ms;
+        s->tick_set = true;
+        if (s->next_tick > lh_now() + ms) {
+            s->next_tick = lh_now() + ms;
+        }
+    }
+    lua_pushinteger(L, before);
+    return 1;
+}
+
 static int l_time(lua_State *L)
 {
     int64_t ms = os_cloud_time_ms();
@@ -590,7 +610,7 @@ void lh_open_sys(lua_State *L)
     static const luaL_Reg timer[] = {{"after", l_after}, {"every", l_every}, {"cancel", l_cancel}, {NULL, NULL}};
     static const luaL_Reg sys[] = {
         {"millis", l_millis}, {"time", l_time}, {"battery", l_battery}, {"keys", l_keys}, {"memory", l_memory},
-        {"exit", l_exit}, {NULL, NULL},
+        {"exit", l_exit}, {"tick", l_tick}, {NULL, NULL},
     };
     static const luaL_Reg badge[] = {
         {"id", l_badge_id}, {"owner", l_badge_owner}, {"online", l_badge_online}, {NULL, NULL},

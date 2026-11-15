@@ -72,6 +72,8 @@ extern "C" {
 // A pixel for sos_blit()/ui_canvas_blit(): RGB565, as the screen stores it.
 #define RGB565(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | (((b) & 0xFF) >> 3)))
 #define RGB565_HEX(hex) RGB565(((hex) >> 16) & 0xFF, ((hex) >> 8) & 0xFF, (hex) & 0xFF)
+// The same pixel big-endian, the screen's own byte order (ui_frame with UI_FRAME_BE).
+#define RGB565_BE(px) ((uint16_t)((((px) & 0xFF) << 8) | (((px) >> 8) & 0xFF)))
 
 // on_key()'s keys and sys_keys()'s bits.
 #define KEY_UP SOS_KEY_UP
@@ -1258,6 +1260,22 @@ static inline int32_t ui_canvas_get(ui_obj c, int x, int y)
     return badge__call_int(3, -1);
 }
 
+// A whole frame straight to the screen, past the UI (sos_frame): w x h RGB565
+// pixels scaled to dw x dh at (x, y) of the app area. UI_FRAME_BE: the pixels
+// are big-endian (RGB565_BE()), which lets an unscaled frame in a 64-byte-aligned
+// buffer go to the screen without a copy. 1 shown, 0 hidden (a dialog or the
+// badge's panel is over the app), BADGE_ERR outside the app area.
+#define UI_FRAME_BE SOS_FRAME_BE
+static inline int ui_frame(const uint16_t *px, int w, int h, int x, int y, int dw, int dh, int flags)
+{
+    int32_t r = sos_frame(px, w, h, x, y, dw, dh, (uint32_t)flags);
+    if (r < 0) {
+        badge__seterr("the frame is outside the app area");
+        return BADGE_ERR;
+    }
+    return r;
+}
+
 // w x h RGB565 pixels from your memory onto the canvas at (x, y), clipped:
 // the fast way to draw a whole frame (sos_blit). 0, or BADGE_ERR.
 static inline int ui_canvas_blit(ui_obj c, const uint16_t *px, int x, int y, int w, int h)
@@ -1470,6 +1488,16 @@ static inline int sys_memory(int32_t *used, int32_t *max)
     return 0;
 }
 
+// on_tick's period from now on, 16..1000 ms (the default is 30): a game that
+// wants every 16.7 ms frame asks 16 or 17. Returns the period before, or
+// BADGE_ERR. (sys.tick, Solana OS 2.3.0)
+static inline int32_t sys_tick(int32_t ms)
+{
+    badge__fn("sys.tick");
+    sos_push_int(ms);
+    return badge__call_int(1, BADGE_ERR);
+}
+
 static inline void sys_exit(void) // closes the app after this callback
 {
     badge__fn("sys.exit");
@@ -1568,6 +1596,80 @@ static inline int storage_remove(const char *key)
     badge__fn("storage.remove");
     sos_push_cstr(key);
     return badge__call_ok(1);
+}
+
+// ============================================================================
+// files (permission "files", Solana OS 2.3.0): the app's own folder on the
+// card, hh/files/<app id>/: files the badge's owner copied there (read-only)
+// and the app's saves in save/ ("save/<name>", read and write)
+// ============================================================================
+
+// The folder as the owner sees it on the card: "hh/files/<id>/".
+static inline int32_t files_dir(char *buf, uint32_t cap)
+{
+    badge__fn("files.dir");
+    return badge__call_str(0, buf, cap);
+}
+
+static inline int32_t files_size(const char *name) // bytes, or -1
+{
+    badge__fn("files.size");
+    sos_push_cstr(name);
+    return badge__call_int(1, -1);
+}
+
+// Up to len (<= 256 KB) bytes from offset into buf, straight into your memory
+// (no copy on the way): how many (0 at the end), or BADGE_ERR (no such file,
+// or the card failed).
+static inline int32_t files_read(const char *name, uint32_t offset, void *buf, uint32_t len)
+{
+    int32_t n = sos_file_read(name, badge__len(name), offset, buf, len);
+    if (n < 0) {
+        badge__seterr("can't read it (no such file?)");
+        return BADGE_ERR;
+    }
+    return n;
+}
+
+// Writes len (<= 256 KB) bytes at offset of "save/<name>" (offset at most its
+// size; a new file from 0): 0, or BADGE_ERR ("a save file is at most 1 MB",
+// "at most 32 files in save/", ...).
+static inline int files_write(const char *name, uint32_t offset, const void *data, uint32_t len)
+{
+    badge__fn("files.write");
+    sos_push_cstr(name);
+    sos_push_int((int32_t)offset);
+    badge__push_bytes(data, len);
+    return badge__call_ok(3);
+}
+
+static inline int files_remove(const char *name) // a save only; 1 removed
+{
+    badge__fn("files.remove");
+    sos_push_cstr(name);
+    return badge__call_bool(1);
+}
+
+// Calls fn(user, name, size) for each file, the owner's first, then the saves
+// ("save/<name>"), at most 128. Returns how many, or BADGE_ERR.
+static inline int32_t files_list(void (*fn)(void *user, const char *name, int32_t size), void *user)
+{
+    badge__fn("files.list");
+    if (badge__call(0, 1)) {
+        return BADGE_ERR;
+    }
+    badge_val t = badge_top();
+    int32_t n = (int32_t)badge_len(t);
+    for (int32_t i = 0; i < n; i++) {
+        char name[80];
+        badge_val v = badge_push_index(t, i);
+        badge_field_str(v, "name", name, sizeof name);
+        int32_t size = badge_field_int(v, "size", 0);
+        sos_pop(1);
+        fn(user, name, size);
+    }
+    sos_pop(1);
+    return n;
 }
 
 // ============================================================================
