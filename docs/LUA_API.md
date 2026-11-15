@@ -83,7 +83,7 @@ The manifest, as the badge stores it:
   "icon": "play",                   // one of the icon names below
   "accent": "14F195",               // hex colour, no '#'
   "category": "games",              // games | tools | social | quests | demos
-  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc
+  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc background
   "hosts": ["api.example.com"],     // what `http` and `ws` may call (only with the `http` permission)
   "files": 2,                       // bundled files (the store fills it in)
   "filesSize": 5120,                // their bytes together
@@ -117,7 +117,13 @@ function on_meet(from, data) -- another badge asks for a signed meet (needs "mes
 end                          -- return a table to sign it ("Meets")
 function on_exit()           -- the app is closing (HOME, CANCEL, sys.exit, error)
 end
+function on_service(msg)     -- the app's own background service sent msg (needs "background", 2.3.0)
+end
 ```
+
+An app with the `background` permission can also leave a **service** running after it
+closes: `service.lua`, a separate script with its own callbacks (see
+["`service`"](#service-permission-background-solana-os-230)).
 
 Up, down, left, right and CANCEL auto-repeat while held (`rep` true: after 400 ms, then
 every 90 ms); SELECT doesn't. One key repeats at a time, the last one pressed; when it's
@@ -147,6 +153,7 @@ HOME always returns to the launcher. The screen below the status bar is
 | RPC | 30 calls a minute per badge (6 of them `sendTransaction`), ≤ 2 KB of params, ≤ about 3.5 KB of answer, 6 s to answer |
 | WebSocket | one at a time, 20 opens a minute per badge, ≤ 4 KB per message either way, 8 waiting to go |
 | Crypto | of a callback's 200 000 instructions: a signature check takes 40 000, an on-curve test 5 000, a program-derived address 10 000 (see `crypto` and `solana`) |
+| Background | a service (`background`, 2.3.0): 1 MB of heap, 100 000 instructions per callback and 2 000 000 a minute, a tick a second, 3 services on a badge at once (see "`service`") |
 | Numbers | 32-bit integers (they wrap at ±2^31) and 32-bit floats (about 7 digits) |
 
 How fast Lua is and what these limits allow, measured on a badge against the same work in
@@ -1596,6 +1603,119 @@ rpc.call("getAccountInfo", {solana.encode(proposal), {encoding = "base64", dataS
     label:text(r.value and "Proposal 12 exists" or "No proposal 12 yet")
   end)
 ```
+
+### `service` (permission `background`, Solana OS 2.3.0)
+
+A service keeps part of your app running while the app is closed: it answers other
+badges over the mesh, polls your server, counts something, and tells the owner when
+there is news. It is a separate script, **`service.lua`** at the top of your app's
+folder, run in a fresh Lua state of its own: nothing of the app's UI or globals stays
+alive, and the app and its service talk by messages and through `storage`.
+
+```
+pinger/
+  main.lua              the app: its screen, and service.start()
+  service.lua           the service: no screen, runs in the background
+  lib/proto.lua         modules both can require
+  app.json              "permissions": ["background", "mesh"]
+```
+
+**In the app** (`main.lua`):
+
+```lua
+service.start(function(ok, err) end)  -- start it; the first time the badge asks the owner:
+                                      -- cb(true) | cb(false, "denied") | cb(false, "full")
+                                      -- (3 already running) | cb(false, "low battery") | ...
+service.stop()                        -- stop it; it won't start at boot either
+service.running()                     -- true while it runs
+service.send(value)                   -- to the service's on_message (JSON-encodable, ≤ 1 KB);
+                                      -- false when it isn't running or 8 are waiting
+function on_service(msg) end          -- the service sent msg while the app is open
+```
+
+**In the service** (`service.lua`): the top-level chunk runs once when it starts, then
+these globals are called when defined:
+
+```lua
+function on_tick(ms) end              -- every 1000 ms; ms since the last tick
+function on_message(msg) end          -- the app sent msg (service.send in main.lua)
+function on_mesh(from, msg) end       -- as in an app (needs "mesh"), while the radio is on the mesh channel
+function on_meet(from, data) end      -- as in an app (needs "mesh"); return a table to sign
+function on_stop() end                -- it is being stopped: save what you need (100 000 instructions, 1 s)
+
+service.send(value)                   -- to the app's on_service, only while the app is open: false otherwise
+service.status("3 new pings")         -- the line Services shows (≤ 48 printable ASCII; "" = "Running")
+service.notify("Ping from 7K2Q9M", {led = 0x14F195})  -- a toast "<App>: Ping from 7K2Q9M",
+                                      -- optional LED flash; one every 10 s, else false
+service.stop()                        -- end itself (starts at boot no more, until the app starts it again)
+```
+
+**What a service may use**: `timer` (4 timers, ≥ 1000 ms), `storage` (the app's own,
+shared with the app: both see each other's writes at once), `fs` and `require`, `json`,
+`sys.millis`/`time`/`battery`/`memory`, `badge`, `crypto` and `solana`, and with their
+permissions `mesh` (`send`, `peers`, `meet`, `meets`; not `channel`, `scan`, `pause`,
+`bridge`), `http` and `rpc` (one call waiting at a time; `"offline"` while the badge is),
+and the reads `lamps.balance`, `items.list`, `items.all`, `profile.me`, `profile.get`.
+Everything else is `nil` in a service: `ui`, `led` (a notice can flash), `sys.keys`,
+`sys.exit`, `wifi`, `ble`, `ws`, `quest`, and everything that spends or changes:
+`lamps.spend`, `transfer`, `deposit`, `award`, `items.grant`, `update`, `remove`. A
+service can never spend: only the app on the screen can, with the owner's confirm.
+
+**Lifecycle.**
+
+- `service.start()` works only from the app on the screen. The first time, the badge asks
+  the owner in its own dialog, which no app can answer: "Let <App> run in the
+  background? It keeps running after you close it and after a restart, until you stop it
+  in Services." SELECT allows it, CANCEL is `"denied"`. The answer is kept; the dialog
+  comes back only after the owner stopped the service in Services, or when an update of
+  the app asks for `background` for the first time.
+- It keeps running when the app closes, and starts again about 10 s after the badge
+  boots, until it's stopped: by the owner (Services, `svc stop`), by `service.stop()`
+  from either side, by removing the app, or when a quest app expires.
+- The app and its service can run at once; each gets its own callbacks. A message to
+  the side that isn't there is dropped (`service.send` returns false): keep state in
+  `storage`.
+- An error in the service stops it and its message becomes the status (`Failed:
+  service.lua:12: attempt to index a nil value`); three failures in a row turn off
+  starting at boot. `print` goes to the console tagged `[<app id>:svc]`.
+- An update stops the service while the files change and starts the new version if it
+  was running. Below 15 % battery (not on USB) services stop (`Stopped: battery low`)
+  and start at the next boot or on USB. When the badge runs low on memory the most
+  recently started service stops first (`Stopped: the badge was low on memory`).
+
+**Limits.**
+
+| | |
+|---|---|
+| Services | 3 app services running on a badge at once (`"full"` past that). Each costs about 2 KB of the badge's SRAM; they share one 12 KB task |
+| Memory | 1 MB of Lua heap each, in PSRAM ("Out of memory: The service needs more than 1 MB."). `sys.memory()` reports it |
+| CPU | 100 000 instructions per callback ("Service took too long"), and 2 000 000 a minute in all (about 0.7 s of the badge's processor a minute, 1 %): past it the service stops with `Stopped: used too much of the processor` |
+| Tick | `on_tick` every 1000 ms; timers ≥ 1000 ms, 4 at a time |
+| Events | 8 waiting per service (mesh messages, app messages, network answers); mesh messages past that are dropped |
+| Messages | `service.send` ≤ 1 KB of JSON either way, 8 waiting |
+| Notices | one every 10 s, ≤ 80 characters |
+| Radio | a service never moves the radio. It hears the mesh only while the radio is on the mesh channel anyway (Wi-Fi off, or joined on the mesh channel, MESH.md "Which channels"); it never suspends Wi-Fi, keeps it awake or turns it on |
+| Battery | none of its own beyond the CPU above: the radio listens anyway. A service ticking once a second that does little costs too little to measure |
+
+Badges below 2.3.0 have no `service`: the store refuses `background` apps to them
+(server/API.md "Background apps").
+
+**How the badge runs it** (what Solana OS implements; you don't need it to write one):
+
+- One "svc" task (12 KB stack, below the app's "lua" task in priority) runs every
+  service's callbacks one at a time, round robin, without the screen's lock (no UI). Each
+  service is a `lua_State` with its own allocator capped at 1 MB in PSRAM, an event
+  queue of 8, its timers and its share of the minute's budget. Starting one needs PSRAM
+  and 64 KB of SRAM free for malloc.
+- `/sdcard/hh/services.json` remembers the owner's answers:
+  `{"<app id>": {"allowed": true, "boot": true, "fails": 0, "ver": "1.2.0"}}`. A
+  missing or broken file means nothing is allowed. Services that were running when the
+  badge restarted start ~10 s after boot, one a second.
+- In the Services app (`os_service.h`) an app service is `app:<app id>`, named after the
+  app, with its Lua heap as its memory; the owner's stop there turns `allowed` off.
+- Stopping calls `on_stop` (100 000 instructions, 1 s), then closes the state; a service
+  stuck in a callback is ended by its instruction budget. A stop never waits on the
+  service.
 
 ### Build on the badge, sign on a phone
 

@@ -6,6 +6,24 @@ update only to a newer one. Dates are commit dates. The contracts these builds
 implement (`docs/LUA_API.md`, `docs/MESH.md`, `server/API.md`) and the server and
 site changes that came with them live in the parent repository.
 
+## 2.3.0 (unreleased)
+
+- **Background services** (`main/core/os_service.h`, the parent repo's docs/HHGTS.md
+  "Background services"). One registry of everything that runs while its app is closed:
+  built-in services register at boot (id, name, status line, state, start/stop, whether
+  the owner may stop it, start at boot remembered in NVS `svc/<id>`, an unread count), and
+  app services (`background` permission, `docs/LUA_API.md` "service", `docs/C_API.md`
+  "service") will show up through one provider hook from the Lua host. The mesh, X Dex
+  swaps, Trade invites, the quest relay and the server link are listed (always on).
+  `os_service_notify()` is the one way a service tells the owner something (a toast
+  `<Service>: <text>`, an optional LED flash, one every 10 s); the status bar shows a bell
+  and the count while any service has something unread.
+- **Services** (`services`, Purple, after Apps): the list, each service's status, memory and
+  start-at-boot, stop (after a confirm) and start. Console: `svc [list|start|stop|boot|test]`;
+  `svc test on` and a restart register a test-only service. Measured on a prototype: opening
+  and closing Services five times left the largest block as it was (98 304 B); the free heap
+  moved by what the console's history costs per command (~40 B).
+
 ## 2.2.0 (unreleased)
 
 - **C apps.** Store apps written in C (`docs/C_API.md`; the SDK in `sdk/c/`): the store

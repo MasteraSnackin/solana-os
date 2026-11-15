@@ -186,6 +186,7 @@ void game_init(void)
     trade_init();
     quests_init();
     beacon_init();
+    game_services_init();
     os_mesh_subscribe(OS_MESH_XDEX, on_mesh, NULL);
     os_mesh_subscribe(OS_MESH_TRADE, on_mesh, NULL);
     os_mesh_subscribe(OS_MESH_RELAY_RESP, on_mesh, NULL);
