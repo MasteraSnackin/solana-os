@@ -766,7 +766,9 @@ static void on_sync(int status, const char *body, void *ctx)
         }
         cJSON_Delete(e);
         cJSON_Delete(j);
-        if (s_info.phase != COLLAB_WAITING) {
+        // A takeover goes on through a Wi-Fi blip (the server's grace decides), so
+        // the owner keeps seeing it: only a badge without one is "waiting".
+        if (!s_sid && s_info.phase != COLLAB_WAITING) {
             s_info.phase = COLLAB_WAITING;
             s_info.live_since = 0;
         }
@@ -880,7 +882,7 @@ static void sync_now(void)
         s_tok = tok;
     } else {
         s_next_sync = game_now_ms() + (os_api_online() ? 2000 : RETRY_MS);
-        if (!os_api_online() && s_info.phase != COLLAB_WAITING) {
+        if (!os_api_online() && !s_sid && s_info.phase != COLLAB_WAITING) {
             s_info.phase = COLLAB_WAITING;
             s_info.live_since = 0;
             strlcpy(s_info.why, "Waiting for Wi-Fi", sizeof(s_info.why));
@@ -962,8 +964,13 @@ static void tick(void *arg)
         return;
     }
     int64_t now = game_now_ms();
-    bool usb;
-    int batt = battery(&usb);
+    static int64_t batt_at;
+    bool usb = true;
+    int batt = -1;
+    if (now - batt_at >= 5000) {                // the ADC every 5 s is plenty
+        batt_at = now;
+        batt = battery(&usb);
+    }
     if (!usb && batt >= 0 && batt < BATT_MIN) {
         ESP_LOGW(TAG, "battery %d %%: Collaborator ends", batt);
         if (s_sid) {
@@ -1112,7 +1119,7 @@ static void svc_stop(void *ctx)
 
 static const char *svc_mark(void *ctx)
 {
-    return s_info.phase == COLLAB_TAKEN ? LV_SYMBOL_EYE_OPEN : NULL;
+    return s_sid ? LV_SYMBOL_EYE_OPEN : NULL;     // whenever a takeover runs, whatever else
 }
 
 static const os_service_def_t s_def = {
