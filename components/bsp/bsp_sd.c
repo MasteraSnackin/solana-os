@@ -66,7 +66,7 @@ esp_err_t bsp_spi_bus_init(void)
         return ESP_OK;
     }
     // Deselect both devices before the first clock edge on the bus. A plain
-    // output, not gpio_config(): since ESP-IDF master (2.3.0) gpio_config()
+    // output, not gpio_config(): since ESP-IDF master (2.2.0) gpio_config()
     // reserves an output pin, and esp_lcd and sdspi claim these CS pins later
     // (a "conflict" warning each time, and the reservation outlives us).
     drive_high(BOARD_LCD_CS);

@@ -27,7 +27,7 @@
 #define OS_MEM_SRAM_MALLOC  (MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT)
 
 // Read that figure through os_mem_sram_malloc_free()/_min(), not
-// heap_caps_get_free_size(OS_MEM_SRAM_MALLOC). ESP-IDF master (2.3.0, esp-idf
+// heap_caps_get_free_size(OS_MEM_SRAM_MALLOC). ESP-IDF master (2.2.0, esp-idf
 // 90a275f29ac) gives the pool MALLOC_CAP_DEFAULT at its lowest priority:
 // malloc() still reaches it only once PSRAM is full too, but the caps query
 // now counts it, and no caps tell it from the rest of the SRAM. So the pool's

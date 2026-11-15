@@ -296,7 +296,7 @@ esp_err_t os_http_request(const char *method, const char *url, const char *beare
     if (fresh && err == ESP_OK) {
         // Once per connection: what the handshake cost.
         // With PSRAM the second figure is the SRAM, which a handshake should
-        // barely touch (2.3.0: told the two apart).
+        // barely touch (2.2.0: told the two apart).
         ESP_LOGI(TAG, "connected to %s: heap %u before, %u at the low point (-%u); sram -%u", s_origin,
                  (unsigned)free0, (unsigned)low, (unsigned)(free0 - low), (unsigned)(sram0 - sram_low));
     }
