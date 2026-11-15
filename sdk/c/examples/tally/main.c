@@ -3,6 +3,7 @@
 // text with storage_get_json/storage_set_json.
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "badge.h"
 
@@ -11,14 +12,29 @@ static int32_t count;
 static int32_t history[5]; // the last saved counts, newest first
 static int nhistory;
 
+// Adds s to the text in buf (cap bytes, len of them used), cut to fit, and
+// returns the new length. The room left is worked out from lengths that were
+// checked, never from what snprintf says it would have written.
+static size_t add(char *buf, size_t cap, size_t len, const char *s)
+{
+    size_t n = strlen(s);
+    if (n > cap - 1 - len) {
+        n = cap - 1 - len;
+    }
+    memcpy(buf + len, s, n);
+    buf[len + n] = 0;
+    return len + n;
+}
+
 static void show(void)
 {
-    char text[64];
+    char text[64], num[16];
     snprintf(text, sizeof text, "%ld", (long)count);
     ui_label_text(count_label, text);
-    int n = snprintf(text, sizeof text, "Saved before:");
-    for (int i = 0; i < nhistory && n < (int)sizeof text; i++) {
-        n += snprintf(text + n, sizeof text - (size_t)n, " %ld", (long)history[i]);
+    size_t len = add(text, sizeof text, 0, "Saved before:");
+    for (int i = 0; i < nhistory; i++) {
+        snprintf(num, sizeof num, " %ld", (long)history[i]);
+        len = add(text, sizeof text, len, num);
     }
     ui_label_text(log_label, nhistory ? text : "Nothing saved before");
 }
@@ -45,12 +61,14 @@ static void load_history(void)
 
 static void save(void)
 {
-    char json[128];
-    int n = snprintf(json, sizeof json, "[%ld", (long)count);
+    char json[128], num[16];
+    snprintf(num, sizeof num, "[%ld", (long)count);
+    size_t len = add(json, sizeof json, 0, num);
     for (int i = 0; i < nhistory && i < 4; i++) {
-        n += snprintf(json + n, sizeof json - (size_t)n, ",%ld", (long)history[i]);
+        snprintf(num, sizeof num, ",%ld", (long)history[i]);
+        len = add(json, sizeof json, len, num);
     }
-    snprintf(json + n, sizeof json - (size_t)n, "]");
+    add(json, sizeof json, len, "]");
     storage_set_int("count", count);
     if (storage_set_json("history", json) < 0) {
         ui_toast(badge_error());
