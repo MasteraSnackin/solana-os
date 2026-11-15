@@ -1070,7 +1070,8 @@ int lamps_award(int32_t amount, const char *reason, lamps_fn cb, void *user);
 ```
 
 Spending, transfers and deposits show the badge's own confirmation, which no app can
-answer. `lamps_award` pays nothing until the app has an award allowance
+answer. `lamps_award` pays nothing until the app has an award allowance, which you
+ask for when you publish: the submit page's "!LAMPs allowance" field
 ([LUA_API.md "Develop and publish"](LUA_API.md#develop-and-publish)).
 
 ### `items` (permission `items`, [Lua](LUA_API.md#items-permission-items))
