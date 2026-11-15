@@ -30,7 +30,7 @@ check" and "Checklist for AI agents" at the end before you answer.
   quest goes live the moment it's saved with `"active": true`, with no firmware update.
   Saved with `"active": false` it isn't live: only the people testing it can play it
   (see "Testing a quest").
-- A quest is given by a **character** (Pip Thumbwell, Dr. Hexa Strain, ...). Characters
+- A quest is given by a **character** (made in `/admin/characters`; this guide's examples use two made-up ones, Ada Example and Cy Example). Characters
   live on **beacons**: always-on ESP32 boards around the venue, or badges running their
   Beacon app. One character can be on several beacons; a beacon plays one character at a time.
 - A player opens **Quests** on their badge near a beacon. The badge talks to the beacon
@@ -48,7 +48,7 @@ check" and "Checklist for AI agents" at the end before you answer.
 What players see:
 
 - On the badge: the dialog screen (who's talking, the quest title, the text, the options),
-  toasts like `Got: Pip's towel` and `+50 !LAMPs`, LED flashes, and a quest log with each
+  toasts like `Got: Sealed parcel` and `+50 !LAMPs`, LED flashes, and a quest log with each
   active quest's current step and any countdown.
 - On a beacon with a screen and speaker: the character's animated sprite, and the
   dialog line spoken aloud in the character's voice.
@@ -61,16 +61,16 @@ A quest is one JSON object, a `QuestDef` (the comments mark what goes there; rea
 
 ```jsonc
 {
-  "id": "towel-run",
-  "title": "The Towel Run",
-  "summary": "Carry a fresh towel from Pip to Captain Slot before the clock runs out.",
-  "giver": "pip",
+  "id": "example-delivery",
+  "title": "The Example Delivery",
+  "summary": "Carry a sealed parcel from Ada Example to Cy Example before the clock runs out.",
+  "giver": "ada-example",
   "requires": [],
   "repeatable": false,
   "active": true,
   "intro": [ /* the offer conversation: DialogNode[] */ ],
   "steps": [ /* what the player does, in order: Step[] */ ],
-  "reward": { "lamps": 50, "pages": ["always-bring-a-towel"] }
+  "reward": { "lamps": 50, "pages": ["beacons"] }
 }
 ```
 
@@ -96,10 +96,10 @@ list and moves along options.
 ```json
 {
   "id": "start",
-  "text": "Oh, hello! Captain Slot lost his towel again. Could you run this one over?",
+  "text": "Oh, hello! Cy Example is waiting for this parcel. Could you run it over?",
   "options": [
     { "label": "Hand it over", "action": "accept" },
-    { "label": "Why a towel?", "next": "why" },
+    { "label": "What's in it?", "next": "why" },
     { "label": "Not now", "action": "decline" }
   ]
 }
@@ -128,9 +128,10 @@ What an option does:
 After `accept` or `complete` without `next`, the character carries straight on with
 anything else the player now has to do **at this same character** (a `talk`, `deliver`
 or `pay` step here shows its dialog, a `visit` here completes), or else says what's next:
-`Next: Bring the towel to Captain Slot (Captain Slot)` or `Quest complete: The Towel Run`.
-That's why the Towel Run's first step is a `talk` at the giver: accepting flows straight
-into "here's the towel".
+`Next: Deliver the parcel (Cy Example)` (the character's name is added when the step's
+title doesn't already say it) or `Quest complete: The Example Delivery`. That's why the
+example's first step is a `talk` at the giver: accepting flows straight into "here's the
+parcel".
 
 Within one conversation only the first `accept` or `complete` counts; later ones in the
 same conversation are ignored. A conversation also ends when the player walks away: the
@@ -143,7 +144,7 @@ Every step has:
 | Field | Required | Rules |
 |---|---|---|
 | `id` | yes | `a-z 0-9 -`, ≤ 32 chars, unique in the quest. Shows in the admin funnel |
-| `title` | yes | ≤ 48 chars. The quest log line: write it as an instruction ("Bring the towel to Captain Slot") |
+| `title` | yes | ≤ 48 chars. The quest log line: write it as an instruction ("Bring the parcel to Cy Example") |
 | `type` | yes | one of the seven below |
 | `at` | for `talk`, `visit`, `deliver`, `pay` | A character id: the step happens at that character's beacons |
 | `checkpoint` | no | `true`: reaching this step saves progress here |
@@ -202,7 +203,7 @@ needs at least one.
 | Key | Value | Effect |
 |---|---|---|
 | `give` | ItemSpec | Puts an item in the player's inventory (toast `Got: <name>`) |
-| `take` | `{ "kind": "towel" }` | Removes one item of that kind (this quest's own first) |
+| `take` | `{ "kind": "parcel" }` | Removes one item of that kind (this quest's own first) |
 | `lamps` | 1-100,000 | Pays !LAMPs (once per run, see below) |
 | `page` | a Guide page id | Adds a copy of that page (once per run) |
 | `grantApp` | `{ "id": "virus-lab", "ttl": 7200 }` | Gives the player a temporary quest app for `ttl` seconds (60 to 30 days) |
@@ -211,7 +212,7 @@ needs at least one.
 An **ItemSpec**:
 
 ```json
-{ "kind": "towel", "name": "Pip's towel", "data": { "color": "ACFF9B" }, "tradable": false }
+{ "kind": "parcel", "name": "Sealed parcel", "data": { "color": "ACFF9B" }, "tradable": false }
 ```
 
 | Field | Rules |
@@ -259,7 +260,7 @@ day, all quests together: the rest of a payout over that is dropped ("Daily ques
 limit reached").
 
 Sizing rewards: the welcome is 100 !LAMPs, a Guide Pack costs 100, a category pack 150,
-and X Dex bounties are 10-100 per new person. The seeded quests pay 15-75 !LAMPs, plus a
+and X Dex bounties are 10-100 per new person. A typical quest pays 15-75 !LAMPs, plus a
 page, pack or item. A quest worth 30 minutes of walking is worth about a pack. Pages are
 the collectible: a rare page is a strong reward for a short quest. !LAMPs are a bounty
 (highest balance at the end wins a prize), so keep big payouts for hard quests, and keep
@@ -284,7 +285,7 @@ How to use them:
 - Time limits count from the moment the step became current. The badge and `/quests`
   show the deadline. Tell the player the time in the dialog ("You'll have 15 minutes").
 - Pair a time limit with a checkpoint on the step that starts the clock, so a miss means
-  "go get another towel", not "start the quest over".
+  "go get another parcel", not "start the quest over".
 - Walking away mid-`talk` is a failure only for `talk` steps. Give every `talk` dialog
   a "Not yet" option with `"action": "close"` so players can leave cleanly.
 - Failures are checked when the server next looks at the player (any conversation, the
@@ -292,8 +293,8 @@ How to use them:
 
 ## Quest apps
 
-A quest can lend the player a Lua app for a while with `grantApp` (Patient Zero lends
-Virus Lab for two hours). The badge downloads it through the beacon, so it works with
+A quest can lend the player a Lua app for a while with `grantApp` (for example the
+seeded Virus Lab, for two hours). The badge downloads it through the beacon, so it works with
 Wi-Fi off, and it appears in the player's Apps with its time left.
 
 Rules:
@@ -344,15 +345,10 @@ approve it in `/admin/apps` (store details alone publish at once).
   same panel for QuestMakers. Deleting it in `/admin/beacons` takes the app away again;
   the badge's owner keeps everything either way.
 
-Seeded characters (check `/admin/characters` for the current list):
-
-| id | Name | Title | Colour |
-|---|---|---|---|
-| `pip` | Pip Thumbwell | Hitchhiker at large | `ACFF9B` |
-| `hexa` | Dr. Hexa Strain | Mesh virologist | `EB54BC` |
-| `slot` | Captain Slot | Leader-schedule skipper | `64A8F2` |
-| `lampwick` | Bo Lampwick | Keeper of the !LAMPs | `E8F180` |
-| `whisper` | Madame Whisper | Rumor broker | `FF754A` |
+No characters are seeded: the event's cast is whatever organisers and QuestMakers made in
+`/admin/characters`, so check there for the ids to use in `giver` and `at`. The examples
+in this guide use two made-up characters, `ada-example` (Ada Example) and `cy-example`
+(Cy Example); swap in real ones.
 
 ## Things a quest can reference
 
@@ -404,22 +400,22 @@ matter:
 ## Patterns
 
 **Fetch and deliver (timed).** `talk` at A gives an item (checkpoint) > `deliver` at B
-with a `timeLimit`. Missing the time sends the player back to A for a new item. See
-`towel-run` below.
+with a `timeLimit`. Missing the time sends the player back to A for a new item. The
+full example below is one.
 
 **Scavenger hunt.** A chain of `visit` steps at different characters, each a checkpoint
 with a small `lamps` action and an `led` in that character's colour. Order matters:
-steps happen one at a time. See `proof-of-visit`.
+steps happen one at a time.
 
-**Buy a secret.** One `pay` step whose reward is a rare page. The dialog sells it. See
-`rumor-mill`.
+**Buy a secret.** One `pay` step whose reward is a rare page. The dialog sells it.
 
 **Go meet people.** `collect` with a `count` > `talk` back at the giver. Use a
 `hashMod` filter to make players find a specific crowd ("someone from the blue team").
 
 **Play a minigame.** `talk` gives an item and `grantApp` (checkpoint) > `app` step for
 the first milestone > `item` step on the final state of the item (checkpoint) > `talk`
-to hand it back with a `take` action. See `patient-zero`.
+to hand it back with a `take` action. The seeded quest app `virus-lab` is built for this:
+it mutates a `virus` item's `strain` as badges come near.
 
 **Story arcs.** Chain quests with `requires`: part two shows as `locked` on `/quests`
 until part one is done, which teases it. Give part two to a different character to
@@ -434,7 +430,7 @@ make sure every path can reach the `accept` or `complete` option or an exit.
 
 ## A full example
 
-A new quest for Madame Whisper: hear a rumour, fetch a sealed note from Bo Lampwick
+A follow-up quest from Ada Example: hear a rumour, fetch a sealed note from Cy Example
 within 20 minutes, bring it back unopened. It shows branching, `close`, a checkpoint
 with a time limit, `deliver`, actions and a mixed reward. Like every new quest it's
 saved with `"active": false`: test it, then set it to `true`.
@@ -443,14 +439,14 @@ saved with `"active": false`: test it, then set it to `true`.
 {
   "id": "sealed-note",
   "title": "The Sealed Note",
-  "summary": "Fetch a sealed note from Bo Lampwick for Madame Whisper. Twenty minutes, and don't peek.",
-  "giver": "whisper",
-  "requires": ["rumor-mill"],
+  "summary": "Fetch a sealed note from Cy Example for Ada Example. Twenty minutes, and don't peek.",
+  "giver": "ada-example",
+  "requires": ["example-delivery"],
   "active": false,
   "intro": [
     {
       "id": "start",
-      "text": "You again. Good. Bo Lampwick is holding a note for me, sealed with wax. Fetch it and bring it back unopened. You'll have 20 minutes once he hands it over.",
+      "text": "You again. Good. Cy Example is holding a note for me, sealed with wax. Fetch it and bring it back unopened. You'll have 20 minutes once Cy hands it over.",
       "options": [
         { "label": "I'll fetch it", "action": "accept" },
         { "label": "What's in it?", "next": "what" },
@@ -469,14 +465,14 @@ saved with `"active": false`: test it, then set it to `true`.
   "steps": [
     {
       "id": "get-note",
-      "title": "Collect the note from Bo Lampwick",
+      "title": "Collect the note from Cy Example",
       "type": "talk",
-      "at": "lampwick",
+      "at": "cy-example",
       "checkpoint": true,
       "dialog": [
         {
           "id": "hand",
-          "text": "Whisper sent you? Of course she did. Here, one note, sealed. The clock starts now: 20 minutes to get it to her.",
+          "text": "Ada sent you? Of course. Here, one note, sealed. The clock starts now: 20 minutes to get it back to Ada.",
           "options": [
             { "label": "Take the note", "action": "complete" },
             { "label": "Give me a minute", "action": "close" }
@@ -489,9 +485,9 @@ saved with `"active": false`: test it, then set it to `true`.
     },
     {
       "id": "return-note",
-      "title": "Bring the note to Madame Whisper",
+      "title": "Bring the note to Ada Example",
       "type": "deliver",
-      "at": "whisper",
+      "at": "ada-example",
       "timeLimit": 1200,
       "take": { "kind": "sealed-note" },
       "dialog": [
@@ -518,11 +514,11 @@ saved with `"active": false`: test it, then set it to `true`.
 }
 ```
 
-How it plays, once it's live: Whisper offers it only after `rumor-mill`. Accepting doesn't start a
-conversation at Lampwick, so the badge says `Next: Collect the note from Bo Lampwick`.
-At Lampwick's beacon the `get-note` dialog shows; taking the note saves a checkpoint and
+How it plays, once it's live: Ada offers it only after `example-delivery`. Accepting doesn't
+start a conversation at Cy, so the badge says `Next: Collect the note from Cy Example`.
+At Cy's beacon the `get-note` dialog shows; taking the note saves a checkpoint and
 starts step 2's 20-minute clock. Missing it removes the note and sends the player back
-to Lampwick for a new one. At Whisper, `Here it is` takes the note, completes the
+to Cy for a new one. At Ada, `Here it is` takes the note, completes the
 quest (40 !LAMPs and the Turbine page) and then shows the `thanks` node.
 
 ## Saving and shipping
@@ -554,7 +550,7 @@ version, on your own badge or an emulator signed in as you.
 What's different in a test:
 
 - The quest is offered to you even if its `requires` aren't done, and at its giver it
-  comes before that character's live quests, so you can test with a seeded character.
+  comes before that character's live quests, so you can test with a character that already has a beacon.
   Its title reads `Test: <title>` on the badge, in the quest log and on `/quests`.
 - A test run **pays no !LAMPs** (actions or reward), **pages or packs**, and `pay` steps
   charge nothing. Completing it toasts `Test complete`.
@@ -630,9 +626,10 @@ items one test gives count for your other tests.
 
 When asked to write a quest:
 
-1. Ask for, or use from this guide, the character ids, page ids, pack skus and app ids
-   that exist. Use only those, or say clearly which new character, page or app the
-   organiser must create first.
+1. Ask for the character ids that exist (this guide lists none: they're in
+   `/admin/characters`; `ada-example` and `cy-example` here are made up), and use the
+   page ids, pack skus and app ids from this guide or the ones you're given. Use only
+   those, or say clearly which new character, page or app the organiser must create first.
 2. Output **one JSON object per quest**, valid JSON (no comments, no trailing commas),
    with keys in this order: `id`, `title`, `summary`, `giver`, `requires`, `repeatable`,
    `cooldown`, `active`, `intro`, `steps`, `reward`. Omit optional keys you don't use, but set
