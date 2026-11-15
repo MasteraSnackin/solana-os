@@ -269,6 +269,7 @@ esp_err_t os_http_request(const char *method, const char *url, const char *beare
     }
     lock();
     size_t free0 = heap_caps_get_free_size(os_mem_tls_caps());
+    size_t sram0 = heap_caps_get_free_size(OS_MEM_SRAM);
     heap_caps_monitor_local_minimum_free_size_start();
     bool fresh = !s_open;
     s_hdr = (header_ctx_t){0};
@@ -290,11 +291,14 @@ esp_err_t os_http_request(const char *method, const char *url, const char *beare
     }
     // What this request cost: the heap low-water mark while it ran.
     size_t low = heap_caps_get_minimum_free_size(os_mem_tls_caps());
+    size_t sram_low = heap_caps_get_minimum_free_size(OS_MEM_SRAM);
     heap_caps_monitor_local_minimum_free_size_stop();
     if (fresh && err == ESP_OK) {
         // Once per connection: what the handshake cost.
-        ESP_LOGI(TAG, "connected to %s: heap %u before, %u at the low point (-%u)", s_origin, (unsigned)free0,
-                 (unsigned)low, (unsigned)(free0 - low));
+        // With PSRAM the second figure is the SRAM, which a handshake should
+        // barely touch (2.2.0: told the two apart).
+        ESP_LOGI(TAG, "connected to %s: heap %u before, %u at the low point (-%u); sram -%u", s_origin,
+                 (unsigned)free0, (unsigned)low, (unsigned)(free0 - low), (unsigned)(sram0 - sram_low));
     }
     ESP_LOGD(TAG, "%s %s -> %d (%u B, %s)", method, url, *status, (unsigned)got, fresh ? "new connection" : "reused");
     xSemaphoreGive(s_lock);
