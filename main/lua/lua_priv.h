@@ -47,6 +47,7 @@
 #define LH_TIMER_MAX        8
 #define LH_TIMER_MIN_MS     20
 #define LH_TICK_MS          30          // on_tick period (50 before; whole 10 ms RTOS ticks)
+#define LH_TICK_MIN_MS      16          // sys.tick's shortest (2.3.0): a 60 Hz game's frame
 #define LH_STORAGE_MAX      (16 * 1024) // data.json
 #define LH_STORAGE_SAVE_MS  1000        // storage.set writes at most this often
 #define LH_MESH_PER_S       4
@@ -58,6 +59,11 @@
 #define LH_LED_COUNT        8
 #define LH_FS_READ_MAX      LUA_PKG_FILE_MAX    // fs.read / fs.json per call: a whole file (16 KB before 2.0.0)
 #define LH_FS_LINE_MAX      512         // fs.lines: longer lines come in pieces
+// files (lua_files.c, 2.3.0): the app's folder for the owner's files and its saves
+#define LH_FILES_NAME_MAX   64          // a file's name, without "save/"
+#define LH_FILES_READ_MAX   (256 * 1024)    // per files.read / write / sos_file_read
+#define LH_FILES_SAVE_MAX   (1024 * 1024)   // one save file
+#define LH_FILES_SAVES_MAX  32          // files in save/
 // A C app's console output costs host steps by the byte (sos_log, stdout and
 // stderr, and print reached through sos_call): the console is a blocking UART
 // at 115200 baud, 11 bytes a ms on a badge, so this allows ~6 KB (~0.55 s) a
@@ -181,6 +187,7 @@ typedef struct {
     int slot;                   // app.aot's flash slot, -1 if none
     bool copied;                // ... copied into it at this launch
     uint32_t sig_us, map_us;    // launch: the signature check; the slot (copy,) map and hash
+    uint32_t frames, frames_direct;     // ui_frame: frames drawn, and how many without a copy
 } lh_wasm_stat_t;
 
 typedef struct lh {
@@ -233,11 +240,18 @@ typedef struct lh {
     lh_timer_t timers[LH_TIMER_MAX];
     int timer_seq;
     int64_t next_tick;
+    int tick_ms;                // on_tick's period: LH_TICK_MS, or sys.tick's
+    bool tick_set;              // sys.tick was called: ticks wake on time (lua_host.c)
 
     // fs: the last file read stays open (lua_fs.c)
     FILE *fs_file;
     long fs_size;
     char fs_path[LUA_PKG_PATH_MAX + 1];
+
+    // files: the last file read stays open (lua_files.c)
+    FILE *files_f;
+    long files_size;
+    char files_name[LH_FILES_NAME_MAX + 6];
 
     // storage.*
     int store_ref;
@@ -370,6 +384,14 @@ void lh_storage_flush(lh_t *s, bool force);
 // lua_fs.c: fs and require
 void lh_open_fs(lua_State *L);
 void lh_fs_close(lh_t *s);                              // the cached file, when the app stops
+void lh_open_files(lua_State *L);
+void lh_files_close(lh_t *s);                           // files' cached file, when the app stops
+void lh_files_prepare(lh_t *s);                         // at launch: the folder, for an app with "files"
+int lh_files_kind(const char *p, size_t len);           // 0 not a name, 1 the owner's file, 2 a save
+// A C app's read (sos_file_read): up to len bytes of name from off into dst;
+// the bytes read (0 at the end), or -1 and *err. Adds the host steps it cost to *steps.
+long lh_files_read_into(lh_t *s, const char *name, size_t nlen, uint32_t off, void *dst, uint32_t len,
+                        unsigned *steps, const char **err);
 void lh_fs_check_path(lua_State *L, int idx, char out[LUA_PKG_PATH_MAX + 1]);  // a bundled file's path argument
 FILE *lh_fs_fopen(lh_t *s, const char *rel, long *size);  // a file of the caller's own (not the cache); NULL: none
 

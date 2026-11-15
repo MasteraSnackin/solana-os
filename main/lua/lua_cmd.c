@@ -162,6 +162,10 @@ static void print_wasm(const lh_wasm_stat_t *w)
     }
     printf("  C app: %s, %u bytes; linear memory %u bytes (peak %u)\n", w->aot ? "app.aot (native)"
            : "app.wasm (interpreted)", (unsigned)w->module_size, (unsigned)w->mem_size, (unsigned)w->mem_peak);
+    if (w->frames) {
+        printf("  ui_frame: %u frames, %u of them sent without a copy\n", (unsigned)w->frames,
+               (unsigned)w->frames_direct);
+    }
     if (w->aot) {
         printf("  run in place from flash slot %d%s; launch: signature %u us, slot %u us\n"
                "  most native time in one callback %u us (cap %d ms)\n", w->slot,
@@ -339,11 +343,30 @@ static const char *read_block(char *buf, size_t n)
     return NULL;
 }
 
+// "files/<name>": a file of the app's own folder, hh/files/<id>/ (LUA_API.md
+// "files"), the way a card reader would put it there: a game the owner
+// copies to an emulator, say. rel and its size limit, or false.
+#define OWNER_FILE_MAX  (32L * 1024 * 1024)
+
+static bool owner_file_rel(char *rel, size_t n, const char *id, const char *file)
+{
+    if (strncmp(file, "files/", 6) || !lua_pkg_valid_id(id) || !lh_files_kind(file + 6, strlen(file + 6))) {
+        return false;
+    }
+    snprintf(rel, n, "files/%s/%s", id, file + 6);
+    return true;
+}
+
 static const char *receive(const char *id, const char *file, long bytes, const uint8_t want[32])
 {
     char rel[128], path[160], part[176];
     size_t max;
-    lua_pkg_file_rel(rel, sizeof(rel), id, file, &max);
+    bool owner = owner_file_rel(rel, sizeof(rel), id, file);
+    if (owner) {
+        max = OWNER_FILE_MAX;
+    } else {
+        lua_pkg_file_rel(rel, sizeof(rel), id, file, &max);
+    }
     if (bytes > (long)max) {
         return "too big";
     }
@@ -405,7 +428,10 @@ static const char *receive(const char *id, const char *file, long bytes, const u
     if (!why && memcmp(got, want, 32)) {
         why = "the SHA-256 doesn't match";
     }
-    if (!why) {
+    if (!why && owner) {
+        unlink(path);
+        why = rename(part, path) == 0 ? NULL : "can't write it to the card";
+    } else if (!why) {
         why = finish_file(id, file, part, path);
     }
     if (why) {
@@ -420,8 +446,9 @@ static int cmd_recv(const char *id, const char *file, const char *bytes, const c
     uint8_t want[32];
     char *end;
     long n = strtol(bytes, &end, 10);
-    if (!lua_pkg_file_rel(rel, sizeof(rel), id, file, NULL) || end == bytes || *end || n < 0 || !parse_sha(sha, want)) {
-        printf("usage: lua recv <id> <main.lua|app.json|app.wasm|bundled path> <bytes> <sha256>\n");
+    if ((!lua_pkg_file_rel(rel, sizeof(rel), id, file, NULL) && !owner_file_rel(rel, sizeof(rel), id, file)) ||
+        end == bytes || *end || n < 0 || !parse_sha(sha, want)) {
+        printf("usage: lua recv <id> <main.lua|app.json|app.wasm|bundled path|files/<name>> <bytes> <sha256>\n");
         return 1;
     }
     const char *why = receive(id, file, n, want);

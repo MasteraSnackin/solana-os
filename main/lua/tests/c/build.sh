@@ -38,6 +38,16 @@ cc() {   # cc <id> <src> [defines...]
 cc t-c-api "$here/t-c-api/main.c"
 cc t-c-import "$here/t-c-import/main.c"
 cc t-c-abi "$here/t-c-abi/main.c"
+# ui_frame and files_read with hostile arguments (2.3.0): the checks, then misuse.
+cc t-c-frame "$here/t-c-frame/main.c" -DCASE=0
+frames=(pointer side flags big buffer name noperm huge)
+for i in "${!frames[@]}"; do
+    cc "t-c-fr-${frames[$i]}" "$here/t-c-frame/main.c" -DCASE=$((i + 1))
+    sed "s/\"t-c-frame\"/\"t-c-fr-${frames[$i]}\"/" "$here/t-c-frame/app.json" > "$out/t-c-fr-${frames[$i]}/app.json"
+    if [ "${frames[$i]}" = noperm ]; then
+        sed -i.bak 's/"files"//' "$out/t-c-fr-noperm/app.json" && rm -f "$out/t-c-fr-noperm/app.json.bak"
+    fi
+done
 cases=(loop loopcb trapcb grow luamem index pointer oob unreachable div0 stack indirect fail exit pushfn frame unref nullfn shared unshared nest fspin importloop nres)
 for i in "${!cases[@]}"; do
     cc "t-c-f-${cases[$i]}" "$here/t-c-fail/main.c" -DCASE=$((i + 1)) -Wno-infinite-recursion

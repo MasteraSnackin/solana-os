@@ -83,7 +83,7 @@ The manifest, as the badge stores it:
   "icon": "play",                   // one of the icon names below
   "accent": "14F195",               // hex colour, no '#'
   "category": "games",              // games | tools | social | quests | demos
-  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc
+  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc files
   "hosts": ["api.example.com"],     // what `http` and `ws` may call (only with the `http` permission)
   "files": 2,                       // bundled files (the store fills it in)
   "filesSize": 5120,                // their bytes together
@@ -341,6 +341,7 @@ sys.time()                  -- unix seconds from the server clock, or nil if nev
 sys.battery()               -- percent, or nil on USB / unknown
 sys.keys()                  -- the keys held now, e.g. { up = true, left = true } (0.5.11)
 sys.memory()                -- { used = 18773, max = 6291456 }: the app's Lua heap in bytes (2.0.0)
+sys.tick(16)                -- on_tick every 16 ms from now on (16..1000; 30 by default); returns the old period (2.3.0)
 sys.exit()                  -- close the app
 badge.id()                  -- "7K2Q9M", or nil before the first hello
 badge.owner()               -- "@toly", or nil while unclaimed
@@ -352,6 +353,14 @@ json.encode(value)  json.decode(text)   -- nil plus an error message on bad inpu
 collected) and its cap on this badge: 6 MB with PSRAM, 96 KB on a badge that has none.
 Before 2.0.0 there is no `sys.memory` and the cap is 96 KB, so an app that wants room for
 big caches can ask: `local max = sys.memory and sys.memory().max or 96 * 1024`.
+
+`sys.tick(ms)` sets how often `on_tick` runs, 16 to 1000 ms (Solana OS 2.3.0; 30 ms by
+default): a game that wants every frame of a 60 Hz screen asks 16 or 17 and moves things by
+`ms` as always. An app that set its period is woken at the right millisecond (the badge's
+scheduler otherwise sleeps in 10 ms steps, so 16 would come out as 20). A tick still runs
+only after the last callback ended: when the app's callbacks take longer than the period,
+ticks come as fast as they can, and `ms` says how long it really was. The budgets per
+callback don't change ("Limits").
 
 `sys.keys()` names `up`, `down`, `left`, `right`, `select` and `back` (CANCEL), never HOME,
 and is empty while a dialog has the keys (your `ui.confirm` or `ui.input`, or the badge's own
@@ -419,6 +428,47 @@ the file from flash (see "Compiled by the store"), which costs far less than com
 it; other files (an app copied over the console) compile from the card. Reading also counts toward the instruction budget
 (see Limits): 100 KB costs 25 000 of the 200 000 a callback gets. The file read last
 stays open, so reading on in it (pages, lines) doesn't pay to open it again.
+
+### `files` (permission `files`, Solana OS 2.3.0)
+
+The app's own folder on the badge's microSD card, `hh/files/<app id>/`, for files the
+badge's owner copies there: a game for an emulator, a level pack, a font, a book. Bundled
+files (`fs`) come from the store, are small and are the same on every badge; these are the
+owner's own, can be any size (a few MB), and the app reads them a range at a time. The app
+reads every file in the folder and writes only in its `save/` subfolder:
+
+```lua
+files.dir()                         -- "hh/files/gameboy/": the folder, as the owner sees it on the card
+files.list()                        -- { {name = "Tetris DX.gbc", size = 1048576}, {name = "save/Tetris DX.sav", size = 32768} }
+files.size("Tetris DX.gbc")         -- bytes, or nil if there's no such file
+files.read("Tetris DX.gbc", 16384, 16384)   -- 16 KB from byte 16384 ("" past the end), or nil, "not found"
+files.write("save/Tetris DX.sav", 0, data)  -- true, or nil and why
+files.remove("save/Tetris DX.sav")  -- true if it was there
+```
+
+- **Names**, not paths: one file in the folder, or `save/<name>`. Printable ASCII, at most
+  64 characters, none of `/ \ : * ? " < > |`, not starting with `.` or a space (a Mac's
+  `._` files don't count) nor ending with `.` or a space. Spaces inside are fine. Anything
+  else is an error, so nothing outside the folder can be named. Folders the owner makes
+  inside it are ignored.
+- **Reading**: `files.read(name, offset, length)`, at most 256 KB a call, fewer bytes at the
+  end of the file. `files.list()` gives at most 128 files, the owner's first, then the saves.
+- **Writing**: only `save/<name>`: at most 1 MB a file, 256 KB a call, 32 files in `save/`,
+  and `offset` at most the file's size (no holes; a new file starts at 0). The owner's
+  files are read-only to the app.
+- **Cost**: as `fs`: 500 instructions for each file opened and one per 4 bytes read or
+  written, so one callback reads about 750 KB. The file read last stays open, so paging
+  through it doesn't pay to open it again.
+- **Where it lives**: under `/sdcard/hh`, so a factory reset or a new owner wipes it with
+  the rest of the old owner's data. Removing the app leaves the folder (its saves outlive
+  a reinstall; delete the folder on the card to remove them). The badge makes the folder,
+  with `save/`, the first time an app with the permission starts, so the owner finds it.
+- **Getting files there**: the owner copies them with a card reader (the card is on the
+  badge's back), or over USB with the console: `lua recv <id> files/<name> <bytes> <sha256>`
+  (up to 32 MB; a name without spaces), which Run on badge's tools use.
+
+C apps read with `files_read()` straight into their own memory, with no Lua string on the
+way ([C_API.md "files"](C_API.md#files-permission-files-solana-os-230)).
 
 ### `wifi` (permission `wifi`)
 

@@ -21,11 +21,15 @@
 #include "lua_wasm_port.h"
 
 // Each block carries its size (os_free and os_munmap need it for the count)
-// and starts 8-aligned, which WAMR asks of linear memory (AOT code assumes
-// it) while the badge's heap gives 4: up to 4 bytes of padding, then the
-// header { u32 size, u32 offset from the allocation }, then the block.
+// and starts 64-aligned: WAMR asks 8 of linear memory (AOT code assumes it),
+// and a frame the panel's DMA reads straight from the app's memory
+// (ui_frame, bsp_display_frame) needs whole 64-byte cache lines, so an app's
+// 64-aligned buffer is 64-aligned on the badge too. The badge's heap gives
+// 4: up to 60 bytes of padding, then the header { u32 size, u32 offset from
+// the allocation }, then the block.
 #define HDR     8
-#define SLACK   (HDR + 4)
+#define ALIGN   64
+#define SLACK   (HDR + ALIGN - 4)
 
 static lw_port_realloc_fn s_fn;
 static void *s_ud;
@@ -36,9 +40,9 @@ void lw_port_heap(lw_port_realloc_fn fn, void *ud)
     s_ud = ud;
 }
 
-static uint8_t *align8(uint8_t *p)
+static uint8_t *align_up(uint8_t *p)
 {
-    return (uint8_t *)(((uintptr_t)p + 7) & ~(uintptr_t)7);
+    return (uint8_t *)(((uintptr_t)p + ALIGN - 1) & ~(uintptr_t)(ALIGN - 1));
 }
 
 static void *blk_realloc(void *ptr, size_t nsize)
@@ -53,7 +57,7 @@ static void *blk_realloc(void *ptr, size_t nsize)
     if (!p) {
         return NULL;
     }
-    uint8_t *data = align8(p + HDR);
+    uint8_t *data = align_up(p + HDR);
     if (base && (size_t)(data - p) != off) {
         memmove(data, p + off, old < nsize ? old : nsize);     // the allocator moved it to another alignment
     }

@@ -335,10 +335,12 @@ store's settings are unchanged):
 WebAssembly doesn't promise alignment: native files were 25 % smaller (89 → 67 KB for
 `bench-c`), SHA-256 1.6 times faster, a label update 18 % faster (`badge.h` runs in the
 app too), nothing slower beyond noise. On HYQ5VS a test app wrote and read 32-bit words at
-every offset of 12 KB of its memory (PSRAM) and all came back right; that is not yet tried
-on a production badge (C5 rev 1.0) or across a 64 KB MMU page. Turning bounds checks off
-helps only code dominated by stores and would let a bad pointer restart the badge, so it
-stays on.
+every offset of 12 KB of its memory (PSRAM) and all came back right. **On a production
+badge (4YGWAV, ESP32-C5 rev 1.0) it was the other way round**: the Game Boy core's CPU loop
+took 46.7 ms a frame with it against 27.1 ms without (1.7 times slower; "Heavy apps and
+emulators"), so the store's flags stay without it. Turning bounds checks off would save
+about 30 % in an emulator's loop (18.9 ms there) but would let a bad pointer restart the
+badge, so they stay on.
 
 ### Limits
 
@@ -369,6 +371,140 @@ choose C for apps that compute per pixel or per sample, and make few API calls i
 loops; choose Lua for apps that are mostly UI and network. And interpreted C (the
 emulator, Run on badge, a badge without the store's native file) runs at about Lua's
 speed.
+
+## Heavy apps and emulators
+
+Can a C app emulate a Game Boy, a Game Boy Color, a Game Boy Advance? Measured on a
+production badge (4YGWAV: ESP32-C5 rev 1.0, 240 MHz, no FPU, 8 MB quad PSRAM at 80 MHz;
+USB power, Wi-Fi off), Solana OS 2.3.0 test builds, 2026-11-15:
+
+- **Game Boy and Game Boy Color: yes, for most games, as a store install (native code).**
+  The `gameboy` example (Walnut-CGB, MIT) runs real homebrew at full speed: 56 to 60
+  emulated frames a second (the machine's 59.7) and 45 to 56 of them on the screen. A game
+  that keeps the CPU busy every frame runs at 23 to 35 fps, and one in the Color's double
+  speed at 14 to 18: those don't reach full speed.
+- **Interpreted (Try in emulator, Run on badge, a badge without the native form): no.** One
+  Game Boy frame took over 3 s of the interpreter, the ceiling of a callback: under 0.3 fps.
+- **Game Boy Advance: no.** The only permissively licensed core at hand (SkyEmu's, MIT, an
+  accurate one) ran 0.7 fps with drawing as a C app, and 2 to 2.6 fps even built into the
+  firmware with no sandbox at all. A playable GBA needs about 10 to 25 times that.
+
+### What runs where, frame by frame
+
+The same core and the same glue code (Walnut-CGB 1.2.4, its whole ROM in memory) built
+three ways: into a test firmware with GCC 15 at `-O2` (the chip with no sandbox), as a C
+app's native form (the store's `wamrcflags`), and interpreted. Milliseconds per emulated
+frame; "shown" adds the call that puts it on the screen:
+
+| ROM (all permissively licensed or made for this) | Firmware: CPU only | Firmware: drawn | C app native: CPU only | C app native: drawn | + shown, no copy | + shown, copied | + shown at 1.5x | Interpreted |
+|---|---|---|---|---|---|---|---|---|
+| Busy loop, Game Boy (never halts) | 8.75 | 15.5 | 27.9 | 39.7 | 1.1 | 6.6 | 11.6 | over 3 000 |
+| Busy loop, Game Boy Color double speed | 18.2 | 26.8 | 55.0 | 67.1 | 1.0 | 6.5 | 11.8 | |
+| *Libbet and the Magic Floor* (a game, zlib; runs in Color mode) | 1.21 | 9.4 | 4.9 | 15.4 | 1.4 | 6.9 | 17.0 | |
+| *cgb-acid2* (a still picture, MIT) | 0.82 | 10.3 | 3.5 | 15.8 | 1.0 | 6.6 | 16.1 | |
+
+What reached the screen, frames a second of wall-clock time (60 is full speed):
+
+| ROM | C app native, every frame drawn and shown | Every other frame shown | The `gameboy` example (adaptive: draws the last frame of each tick) |
+|---|---|---|---|
+| Busy loop, Game Boy | 23.3 | 27.8 | |
+| Busy loop, Color double speed | 14.2 | 15.9 | |
+| Libbet | 51.9 | 56.6 | 56 to 60 emulated, 45 to 56 shown (1x); 22 to 28 shown at 1.5x |
+| cgb-acid2 | 54.2 | 58.1 | |
+| A 1 MB MBC5 ROM switching banks every few instructions | | | 21 emulated, 7 shown |
+
+So a C app's native code is 2.5 to 4 times the firmware's for an emulator's CPU loop and
+1.3 to 1.6 times for its drawing, much further from native than the benchmark's 1.0 to 1.25
+("Speed and limits"). Measured, with the same app built with other `wamrc` settings (busy
+Game Boy, CPU only / Libbet, drawn, ms a frame):
+
+| | Busy, CPU | Libbet, drawn |
+|---|---|---|
+| The store's settings | 27.1 | 16.2 |
+| `--cpu-features=+unaligned-scalar-mem` | 46.7 | (5.45 CPU only) |
+| `--size-level=1` / `0` | 27.2 / 27.5 | 16.7 / 16.6 |
+| `--disable-llvm-jump-tables` | byte for byte the same file: run in place, the code has none anyway | |
+| `--bounds-checks=0` (not safe, measured only) | 18.9 | 12.0 |
+
+- **Bounds checks** are about 30 % of the native form's time in an emulator, whose every
+  step reads and writes the emulated machine's memory. They stay: without them a bad
+  pointer restarts the badge.
+- **No jump tables.** Code run in place may not point into its own read-only data (no
+  relocations in the code), so `wamrc --xip` compiles a `switch` as a tree of comparisons,
+  not a table. An emulator's opcode switch is the worst case. The firmware's core built
+  with `-fno-jump-tables` was up to 19 % slower (busy loop, CPU only 10.4 ms against 8.75),
+  so this is part of the gap, not most of it.
+- **The rest** is WebAssembly itself: every function pointer call (the core reads the ROM
+  through one, for every opcode) is a checked indirect call, values are 32-bit locals
+  LLVM can't keep in registers across the checks, and helpers go through a table.
+- **Not the memory**: the core's state in SRAM instead of PSRAM was no faster in the
+  firmware (16.6 ms drawn against 15.5): the cache holds it.
+- **`+unaligned-scalar-mem`** made the production badge 1.7 times slower (rev 1.0 handles
+  misaligned accesses slowly), where the prototype (rev 1.2) was faster: it stays off.
+
+### Game Boy Advance
+
+| SkyEmu's GBA core, ms a frame | Firmware: CPU only | Firmware: drawn | C app native: CPU only | C app native: drawn |
+|---|---|---|---|---|
+| Busy loop (made for this: 128 sprites, a tiled background, never halts) | 126 | 506 | 448 | 1 400 |
+| *240p Test Suite* menu (GPL-2.0, measured only) / a game that waits for VBlank | 16.0 | 386 to 396 | 233 | |
+
+The GBA's CPU runs at 16.8 MHz and its picture is 240 x 160 with four layers and 128
+sprites; this core emulates both a cycle at a time. Even in the firmware it reaches 2 to 8
+fps; in the sandbox 3 to 4 times less, and a drawn frame (1.4 s) is longer than a callback
+may run (the test lifted the limits). What a GBA would need:
+
+- **A core written for speed on this chip**: an ARM interpreter that runs a block of
+  instructions per dispatch and a scanline renderer, like those that run full speed on
+  similar CPUs elsewhere. No permissively licensed one exists today (the fast ones, gpSP
+  and mGBA, are GPL and MPL).
+- **A JIT** (ARM to RISC-V): the fast GBA emulators on ESP32 chips use one. A C app can't:
+  apps get no executable memory, and their native code comes only signed from the store.
+  It would have to be firmware: an emulator built into Solana OS as a service, which
+  is a different product (the OS vouching for a large, complex core) and still tight on a
+  single 240 MHz core whose SRAM (about 90 KB free while an app runs) can't hold the GBA's
+  288 KB of work RAM or a code cache. esp-gbx, the most complete emulator for the
+  ESP32-C5 (Apache-2.0), builds the GBA for the ESP32-P4 and S31 only and the GB/GBC for
+  the C5.
+- **Memory**: a GBA ROM is 4 to 32 MB; a C app's memory stops at 4 MB, so ROM pages come
+  from the card (`files_read`), 16 KB at a time.
+
+Not worth doing on this badge: even a firmware core with a JIT would be at the edge, and
+the sandbox's guarantees (no executable memory, signed code only) are what C apps rest on.
+
+### Writing one
+
+The `gameboy` example (`sdk/c/examples/gameboy/`) is the pattern for any heavy app:
+
+1. **The owner's files** (`"permissions": ["files"]`): the app lists its folder
+   (`files_list`), and reads the game with `files_read` straight into its own memory: whole
+   when it fits (a 1 MB ROM took 0.92 s, 256 KB a tick, with a progress bar), otherwise
+   16 KB banks into a cache as big as memory allows, read as the game asks for them. A
+   cache miss costs a 16 KB read from the card and 4 100 host steps, so a game that switches among more
+   banks than the cache holds can hit the 200 000 host steps of a callback (about 48 misses):
+   make the cache big (the linear memory may grow to 4 MB). Saves go to `save/<game>.sav`
+   (`files_write`), checked every 30 s and at exit.
+2. **Pacing**: `sys_tick(16)`; each tick adds `ms` to an account and emulates whole
+   16.74 ms frames while there is time for one (at most 3), drawing only the last. When the
+   app keeps up, every frame is shown; when it can't, it shows fewer but the game keeps its
+   speed.
+3. **The screen**: render into two 64-byte-aligned big-endian buffers in turn, and
+   `ui_frame` each one unscaled (160 x 144 at (80, 37)): no copy, 1 to 1.4 ms. 1.5x
+   (240 x 216, the app area's height) looks better and costs 11 to 17 ms a shown frame.
+4. **Keys**: the badge has a d-pad, SELECT, CANCEL and HOME, and HOME always leaves. The
+   example reads `sys_keys()` every tick: SELECT is A, CANCEL is B, both at once tapped is
+   START, and held for a second opens its menu (the Game Boy's SELECT, the screen size,
+   save, quit). `on_key` returns 1 so CANCEL doesn't close the app.
+5. **No sound**: the badge has no speaker. The core keeps the sound registers games read
+   and synthesises nothing (`ENABLE_SOUND 0`).
+6. **Memory and launch**: the example takes 86 KB of WebAssembly, 181 KB native (a flash
+   slot holds 1 MB), 0.4 to 1.4 MB of linear memory with the cache, and left 91 KB of SRAM
+   for malloc and 7.4 MB of PSRAM free while running. The first launch copies the native
+   code into a flash slot (0.6 s); later ones check the signature (58 ms).
+
+Test it interpreted only for the menus (it is far too slow there), and install it from the
+store, unlisted is enough, to play. Commercial games are copyrighted: an owner uses the
+example with games they own. The SDK ships no game and no BIOS or boot ROM.
 
 ## Lifecycle
 
@@ -678,6 +814,45 @@ form. One that draws less holds up interpreted: the `starfield` example (220 sta
 160 × 108 frame) drew a frame in 7 ms native and 33 ms interpreted, and ran at 19.4 and
 12.6 to 13.2 frames a second.
 
+#### Frames straight to the screen (Solana OS 2.3.0)
+
+```c
+int ui_frame(const uint16_t *px, int w, int h, int x, int y, int dw, int dh, int flags);
+//   w x h RGB565 pixels, scaled (nearest) to dw x dh at (x, y) of the app area
+//   flags UI_FRAME_BE: big-endian pixels (RGB565_BE(), the screen's own byte order)
+//   1 shown, 0 not shown (a dialog, the keyboard or the badge's panel is over the app),
+//   BADGE_ERR when dw x dh at (x, y) isn't inside the app area (UI_W x UI_H)
+```
+
+A canvas is the UI's: `ui_canvas_blit` copies your frame into it, and the badge's UI
+library redraws it later, through its image path, after your callback has returned, so
+you wait for all of it (17.3 ms for a 320 x 216 frame). `ui_frame` skips the UI: the frame
+goes to the screen's SPI DMA during the call, and the call returns while the screen is
+still taking it, so the next frame is computed meanwhile. 1 to 1024 pixels a side; the
+whole destination must be inside the app area.
+
+- **No copy**: a big-endian frame, unscaled, in a 64-byte-aligned buffer whose size
+  (`w * h * 2`) is a multiple of 64 is read by the DMA straight from your memory. Don't
+  write to it until the next `ui_frame`: draw the next frame into a second buffer
+  (`static uint16_t fb[2][160 * 144] __attribute__((aligned(64)));`). Anything else
+  (little-endian, scaled, unaligned) is converted into a buffer of the badge's first.
+  Measured on a production badge, a 160 x 144 frame cost the app 1.0 to 1.4 ms without a
+  copy, 6.5 to 6.9 ms with one, and 11.6 to 17 ms scaled to 240 x 216 (the DMA of the
+  bigger frame, 20.7 ms at 40 MHz, is then the limit).
+- **The UI on top**: while your `ui_confirm` or `ui_input`, the badge's own confirm, the
+  keyboard or the bridge panel is open, `ui_frame` shows nothing and returns 0; while a
+  toast shows, only the rows above it are drawn. The UI also paints over the frame whenever
+  it redraws something in that area (a label you put there, the toast going away): keep
+  UI objects out of the frame's rectangle, and the next frame paints the area again.
+  `ui_bg(COL_BLACK)` gives the UI's redraws the frame's background.
+- **Pacing**: the screen takes one frame at a time (a 160 x 144 one in 9.2 ms, 240 x 160
+  in 15.4 ms, the whole app area in 27.9 ms); a `ui_frame` while the last one is still on
+  its way waits for it. Ask `sys_tick(16)` for a tick every frame of a 60 Hz game.
+- **Cost**: host steps as a blit, 1 per 16 pixels converted, or 1 per 256 sent with no
+  copy. A screenshot (`shot` on the console) shows a converted frame, not one sent with no
+  copy.
+- **In the emulator** the frame goes into the page's screen, with the same rules.
+
 ### `led` (permission `led`, [Lua](LUA_API.md#led-permission-led))
 
 ```c
@@ -707,6 +882,7 @@ uint32_t sys_keys(void);                   // keys held now: KEY_HELD(sys_keys()
 int32_t sys_time(void);                    // unix seconds from the server's clock, 0 if never synced
 int32_t sys_battery(void);                 // percent, -1 on USB or unknown
 int sys_memory(int32_t *used, int32_t *max);   // the whole app: Lua state and WAMR's share ("Limits")
+int32_t sys_tick(int32_t ms);              // on_tick every ms (16..1000, default 30) from now on; the old period (2.3.0)
 void sys_exit(void);
 int32_t badge_id(char *buf, uint32_t cap);     // "7K2Q9M"; BADGE_ERR before the first hello
 int32_t badge_owner(char *buf, uint32_t cap);  // "@toly"; BADGE_ERR while unclaimed
@@ -753,6 +929,24 @@ longer to get all of it (binary is fine; the NUL after it is extra). `fs_list` a
 `fs_lines` call `fn` for each entry or line before they return. Reading counts toward the
 host's 200 000 steps a callback as in Lua (500 a file opened, 1 per 4 bytes). A missing
 file is `0` from `fs_exists`, `-1` from `fs_size` and `BADGE_ERR` from the others.
+
+### `files` (permission `files`, Solana OS 2.3.0, [Lua](LUA_API.md#files-permission-files-solana-os-230))
+
+```c
+int32_t files_dir(char *buf, uint32_t cap);    // "hh/files/<id>/": the folder, as the owner sees it on the card
+int32_t files_size(const char *name);          // bytes, or -1
+int32_t files_read(const char *name, uint32_t offset, void *buf, uint32_t len);  // <= 256 KB: bytes read, 0 at the end
+int files_write(const char *name, uint32_t offset, const void *data, uint32_t len); // "save/<name>" only
+int files_remove(const char *name);            // a save only
+int32_t files_list(void (*fn)(void *user, const char *name, int32_t size), void *user);
+```
+
+The app's own folder on the card, for files the badge's owner copied there (an emulator's
+games) and the app's saves in `save/`: the rules are the Lua reference's. `files_read`
+reads straight into your memory (`sos_file_read` underneath, no stack and no copy), so
+paging a big file costs only the card (and 4 100 host steps per 16 KB): a 1 MB file was
+read whole, 256 KB a tick, in 0.92 s on a badge. A missing `"files"` permission stops the
+app at the first `files_read` (as a bad pointer does); a read of more than 256 KB too.
 
 ### `wifi` (permission `wifi`, [Lua](LUA_API.md#wifi-permission-wifi))
 
@@ -1029,7 +1223,7 @@ if (sos_call(2, 0) != 0) {                 // failed: the error's text is on top
 | Tables and objects | `sos_get` (a field, or an object's method), `sos_set`, `sos_geti`, `sos_seti` (from 1), `sos_next` |
 | The API | `sos_global` (a dotted name: `"ui.label"`, `"ui.W"`), `sos_call` |
 | Kept values | `sos_ref` (pops and keeps; 1024 at a time), `sos_unref`, `sos_push_ref` |
-| No stack | `sos_blit`, `sos_keys`, `sos_millis`, `sos_log`, `sos_fail`, `sos_host_abi` |
+| No stack | `sos_blit`, `sos_frame` and `sos_file_read` (2.3.0), `sos_keys`, `sos_millis`, `sos_log`, `sos_fail`, `sos_host_abi` |
 
 - **The frame.** Each call into the app has its own frame: `on_start` starts empty, a
   callback starts with its arguments at 1..nargs. Indices are 1-based from the bottom or
@@ -1125,8 +1319,9 @@ void on_exit(void)
 
 More in `sdk/c/examples/`: `hello` (labels, keys, a timer), `starfield` (a game drawn a
 frame at a time with `ui_canvas_blit` and `sys_keys`), `tally` (storage), `sol-price`
-(`http` with a callback), `ping` (`mesh_send` and `on_mesh`) and `sketch` (a canvas and a
-bundled PNG). `sh sdk/c/examples/build.sh` builds them all.
+(`http` with a callback), `ping` (`mesh_send` and `on_mesh`), `sketch` (a canvas and a
+bundled PNG) and `gameboy` (a Game Boy and Game Boy Color emulator: `ui_frame`, `files`,
+`sys_tick`; "Heavy apps and emulators"). `sh sdk/c/examples/build.sh` builds them all.
 
 ## Develop and publish
 

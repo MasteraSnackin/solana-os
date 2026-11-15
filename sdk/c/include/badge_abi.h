@@ -129,6 +129,22 @@ SOS_IMPORT(push_ref) int32_t sos_push_ref(int32_t ref);     // pushes it (nil fo
 // own buffer, then blit. The pixel value 0x0001 is drawn as 0x0000 (black):
 // 0x0001 is the canvas's see-through value, which a blit never writes.
 SOS_IMPORT(blit) int32_t sos_blit(int32_t canvas, const uint16_t *px, int32_t x, int32_t y, int32_t w, int32_t h);
+// w * h RGB565 pixels from the app's memory straight to the screen, past the
+// UI's own drawing, scaled (nearest) to dw * dh at (x, y) of the app area
+// (UI_W x UI_H); the whole frame must fit in it. flags SOS_FRAME_BE: the
+// pixels are big-endian, the screen's own order. 1 shown, 0 not shown (a
+// dialog, the keyboard or the badge's own panel is over the app), -1 outside
+// the app area. Returns while the screen is still taking the frame: an
+// unscaled big-endian frame in a 64-byte-aligned buffer, h * w * 2 a multiple
+// of 64, is read where it is, so draw the next one into another buffer
+// (docs/C_API.md "Frames straight to the screen"). 1 to 1024 pixels a side.
+#define SOS_FRAME_BE 1
+SOS_IMPORT(frame) int32_t sos_frame(const uint16_t *px, int32_t w, int32_t h, int32_t x, int32_t y,
+                                    int32_t dw, int32_t dh, uint32_t flags);
+// Up to len (<= 256 KB) bytes of the file `name` of the app's folder on the
+// card (permission "files") from offset off, into buf: how many (0 at the
+// end), or -1 when there's no such file or the card failed.
+SOS_IMPORT(file_read) int32_t sos_file_read(const char *name, uint32_t nlen, uint32_t off, void *buf, uint32_t len);
 SOS_IMPORT(keys) uint32_t sos_keys(void);       // the keys held now: bit (1 << SOS_KEY_UP) ...
 SOS_IMPORT(millis) uint32_t sos_millis(void);   // ms since the app started
 SOS_IMPORT(log) void sos_log(const char *p, uint32_t len);      // a line on the serial console, as Lua's print

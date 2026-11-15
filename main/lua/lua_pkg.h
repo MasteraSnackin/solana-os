@@ -43,9 +43,10 @@ typedef enum {
     LUA_PERM_HTTP = 1 << 7,
     LUA_PERM_RPC = 1 << 8,
     LUA_PERM_BLE = 1 << 9,
+    LUA_PERM_FILES = 1 << 10,       // 2.3.0: the app's folder on the card (lua_files.c)
 } lua_perm_t;
 
-#define LUA_PERM_COUNT  10
+#define LUA_PERM_COUNT  11
 
 typedef struct {
     char id[LUA_PKG_ID_MAX + 1];

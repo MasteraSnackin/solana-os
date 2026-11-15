@@ -49,6 +49,9 @@ void os_inject_key(os_key_t key);
 // false if the queue is full; then fn is not called.
 bool os_post(void (*fn)(void *arg), void *arg);
 void os_toast(const char *fmt, ...);         // any task
+// The toast's rows on screen while one shows (y0..y1, inclusive), for a C
+// app's frames past LVGL (ui_frame), which keep off them. LVGL locked.
+bool os_toast_rows(int *y0, int *y1);
 // Calls cb once, on the OS task, the first time the battery sense says USB
 // power (over 4.3 V, the status bar's rule; also when there is no battery
 // sense), now if it already does. One callback at a time; any task.
