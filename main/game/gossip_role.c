@@ -78,7 +78,7 @@ typedef struct {
     char st[ST_MAX][GOSSIP_ADDR_MAX + 1];
     int nst;
     int boost;
-    int bpm, beats;
+    int bpm, beats, min;            // the boss: RoleState.boss (min = bossMinVoters)
     char spam[GOSSIP_ADDR_MAX + 1];
     char *tally;                    // the server's tally as JSON text, or NULL
     bool on_air;
@@ -694,7 +694,7 @@ static void role_start(int64_t now)
     role_hello(now);
     gr_app_session(R.sid);
     if (R.ro == 'z') {
-        gr_boss_start(R.sid, R.bpm, R.beats, R.since);
+        gr_boss_start(R.sid, R.bpm, R.beats, R.min, R.since);
     }
     char t[96];
     snprintf(t, sizeof(t), "you are on the air as %s", role_name(R.ro));
@@ -847,6 +847,7 @@ static void apply_session(const cJSON *s, int64_t now)
     const cJSON *boss = cJSON_GetObjectItemCaseSensitive(s, "boss");
     R.bpm = gr_jint(boss, "bpm", 30, 240, 100);
     R.beats = gr_jint(boss, "beats", 1, 2000, 300);
+    R.min = gr_jint(boss, "min", 1, 160, 3);
     const char *spam = game_jstr(boss, "spam");
     strlcpy(R.spam, gr_addr_ok(spam) ? spam : "", sizeof(R.spam));
     free(R.tally);
@@ -950,7 +951,8 @@ void gossip_role_sync_fill(cJSON *body, int room)
             for (int i = 0; i < R.nblock; i++) {
                 cJSON *e = cJSON_CreateObject();
                 cJSON_AddStringToObject(e, "p", R.block[i].p);
-                cJSON_AddStringToObject(e, "by", R.block[i].by);
+                // The owner's own program: its own badge id (the server reads "by" as a badge id).
+                cJSON_AddStringToObject(e, "by", R.block[i].by[0] ? R.block[i].by : s_me);
                 cJSON_AddItemToArray(b, e);
             }
         }
@@ -1147,6 +1149,7 @@ char *gossip_role_state_json(void)
             cJSON *b = cJSON_AddObjectToObject(o, "boss");
             cJSON_AddNumberToObject(b, "bpm", R.bpm);
             cJSON_AddNumberToObject(b, "beats", R.beats);
+            cJSON_AddNumberToObject(b, "min", R.min);
             cJSON_AddStringToObject(b, "spam", R.spam);
         }
         if (R.ro == 'l') {
@@ -1280,7 +1283,9 @@ static void test_hello_parse(void *arg)
 static void test_on_hello(os_mesh_type_t type, const os_mesh_peer_t *from, const char *json, void *ctx)
 {
     size_t n = strlen(json);
-    if (!s_test || from->kind != OS_PEER_STATION || n > 232 || !strstr(json, "\"ro\"")) {
+    // While the node service runs it hands every role HELLO over itself (gossip.c's
+    // subscriber): test mode only stands in for it when gossip is off.
+    if (!s_test || gossip_on() || from->kind != OS_PEER_STATION || n > 232 || !strstr(json, "\"ro\"")) {
         return;
     }
     thello_t *t = malloc(sizeof(thello_t) + n + 1);
@@ -1478,12 +1483,9 @@ static int cmd_grole(int argc, char **argv)
         } else if (!strcmp(what, "flood") && argc > 4) {
             flood_start(argv[3], atoi(argv[4]), argc > 5 ? atoi(argv[5]) : 10);
             return 0;
-        } else if (!strcmp(what, "lead") && argc > 3) {
-            os_setting_set(OS_SET_LEADER, atoi(argv[3]) ? 1 : 0);
-            gossip_role_setting_changed();
         } else {
             printf("grole test [on [<unix ms>]|off|class <c|->|spam [<addr>]|real <id>...|sync [<json>|none|fail]|"
-                   "close <dBm>|flood <role> <per s> [<s>]|lead 0|1]\n");
+                   "close <dBm>|flood <role> <per s> [<s>]]\n");
             return 1;
         }
         print_state();

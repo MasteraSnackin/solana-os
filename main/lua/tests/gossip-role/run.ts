@@ -535,13 +535,18 @@ async function fanin(A: Emu, real: Emu[]) {
 	};
 	const crock = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 	const results: string[] = [];
-	for (const [n, every] of [
-		[10, 2000],
-		[18, 2000],
-		[40, 2000],
-		[100, 2000],
-		[18, 500]
-	] as [number, number][]) {
+	let wide100 = -1;
+	// `off`: os_mesh's senders table off (`mesh senders off`): the 20-entry peer table's rule
+	// alone, as before 2.4.0's fix (MESH.md "Senders heard").
+	for (const [n, every, off] of [
+		[10, 2000, false],
+		[18, 2000, false],
+		[40, 2000, false],
+		[100, 2000, true],
+		[100, 2000, false],
+		[18, 500, false]
+	] as [number, number, boolean][]) {
+		await A.run(`mesh senders ${off ? 'off' : 'on'}`, /senders heard/);
 		const voters = Array.from({ length: n }, (_, i) => ({
 			id: `V${crock[(i >> 10) & 31]}${crock[(i >> 5) & 31]}${crock[i & 31]}${crock[(n >> 5) & 31]}${crock[n & 31]}`,
 			mac: `0a${randomBytes(4).toString('hex')}${(i % 24).toString(16).padStart(2, '0')}`,
@@ -600,7 +605,8 @@ async function fanin(A: Emu, real: Emu[]) {
 		await sleep(500);
 		const refused = A.lines.slice(mm).find((l) => /refused:/.test(l))?.trim() ?? '';
 		const ms = refused;
-		const line = `${n} voters, one vote each per ${every / 1000} s (${((n * 1000) / every).toFixed(1)} msg/s): sent ${sent}, the boss took ${rxVote} (${((100 * rxVote) / sent).toFixed(1)} %), ring drops ${drops}, voters seen ${vin?.[2] ?? '?'} (recent ${vin?.[1] ?? '?'}); mesh ${refused}`;
+		if (n === 100 && !off) wide100 = (100 * rxVote) / sent;
+		const line = `${off ? '[senders off] ' : ''}${n} voters, one vote each per ${every / 1000} s (${((n * 1000) / every).toFixed(1)} msg/s): sent ${sent}, the boss took ${rxVote} (${((100 * rxVote) / sent).toFixed(1)} %), ring drops ${drops}, voters seen ${vin?.[2] ?? '?'} (recent ${vin?.[1] ?? '?'}); mesh ${refused}`;
 		results.push(line);
 		console.log(`     ${line}`);
 		void ms;
@@ -609,7 +615,8 @@ async function fanin(A: Emu, real: Emu[]) {
 	const mesh = A.lines.slice(-40).filter((l) => /rx|drop|spoof/.test(l));
 	console.log(`     A's mesh counters after: ${mesh.slice(-4).join(' | ')}`);
 	bc.close();
-	ok(results.length === 5, 'fan-in measured');
+	ok(results.length === 6, 'fan-in measured');
+	ok(wide100 >= 90, 'fan-in: a boss takes >= 90 % of the votes of 100 voters (the senders table)', `${wide100.toFixed(1)} %`);
 	void real;
 	void createHmac;
 	await sync(A, { ended: { sid, by: 'time', stake: 0, lamps: 0 } });

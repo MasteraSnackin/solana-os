@@ -50,6 +50,7 @@ typedef struct {
     int wt_rssi[4], wt[4];      // rssiWeight thresholds (dBm) and weights
     int offpeak_from, offpeak_to;   // UTC hours [from, to); -1 = none
     int close;                  // the close range for claims (dBm), -55 (GOSSIP.md §7 Cfg `close`)
+    int name_nodes;             // adoptions before a program can be named (Cfg `nameNodes`, 50)
     int nroles;
     struct { char id[8]; char ro; } roles[GOSSIP_CFG_ROLES];   // live role ids
     int nspam;

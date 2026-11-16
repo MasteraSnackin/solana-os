@@ -28,7 +28,6 @@ static const char *TAG = GR_TAG;
 
 #define VOTERS_MAX      160
 #define RECENT_MS       10000       // voters seen in the last 10 s count (GOSSIP.md §8)
-#define MIN_VOTERS      3           // bossMinVoters (the RoleState doesn't carry it: the contract's default)
 #define CONFIRMED       4           // lockout >= 4: confirmed; 32: finalized
 #define FINALIZED       32
 #define FORK_EVERY      8           // at most one fork in 8 beats
@@ -54,6 +53,7 @@ static struct {
     bool on, done, won;
     long sid;
     int bpm, beats, beat_ms;
+    int min;                        // bossMinVoters, from RoleState.boss.min
     int64_t t0;                     // local ms of beat 0
     int fk;                         // the announced fork beat, -1 none
     int64_t next_bcast, ended_at;
@@ -108,7 +108,7 @@ static void boss_now(int64_t now, int *b, int *ms, int *ph)
     *ph = B.done ? (B.won ? 2 : 3) : 1;
 }
 
-void gr_boss_start(long sid, int bpm, int beats, int64_t since)
+void gr_boss_start(long sid, int bpm, int beats, int min, int64_t since)
 {
     int64_t now = gr_ms(), t = gr_server_ms();
     if (!B.v) {
@@ -119,6 +119,7 @@ void gr_boss_start(long sid, int bpm, int beats, int64_t since)
     B.sid = sid;
     B.bpm = bpm;
     B.beats = beats;
+    B.min = min > 0 ? min : 3;
     B.beat_ms = beat_ms_of(bpm);
     // Beat 0 is at `since` by the server's clock, as close as we know it.
     int64_t off = t && since ? t - since : 0;
@@ -504,7 +505,7 @@ void gr_boss_tick(int64_t now)
         int b, ms, ph;
         boss_now(now, &b, &ms, &ph);
         if (!B.done && ph == 1) {
-            if (B.n >= MIN_VOTERS && B.fin * 3 >= B.n * 2) {
+            if (B.n >= B.min && B.fin * 3 >= B.n * 2) {
                 boss_end(now, true);    // rooted: >= 2/3 of the recent voters finalized
             } else if (b >= B.beats) {
                 boss_end(now, false);   // bossSeconds without that: the boss wins

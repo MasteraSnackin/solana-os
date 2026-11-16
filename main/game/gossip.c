@@ -334,6 +334,7 @@ static void cfg_defaults(gossip_cfg_t *c)
     memcpy(c->wt, wt, sizeof(wt));
     c->offpeak_from = c->offpeak_to = -1;
     c->close = -55;
+    c->name_nodes = 50;
 }
 
 static int jint(const cJSON *o, const char *k, int def, int lo, int hi)
@@ -389,6 +390,7 @@ static void cfg_parse(const cJSON *j, gossip_cfg_t *c)
         }
     }
     c->close = jint(j, "close", -55, -127, 0);
+    c->name_nodes = jint(j, "nameNodes", 50, 0, 1000000);
     const cJSON *e;
     cJSON_ArrayForEach(e, cJSON_GetObjectItem(j, "roles")) {
         const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(e, "id"));
@@ -2561,6 +2563,7 @@ char *gossip_me_json(void)
     }
     lock();
     cJSON *o = S->node_json ? cJSON_Parse(S->node_json) : NULL;
+    int name_nodes = S->cfg.name_nodes;
     int inc = 0;
     for (int i = 0; i < HEAR_MAX; i++) {
         inc += S->hear[i].a[0] && S->hear[i].state != ST_HEARING;
@@ -2587,6 +2590,16 @@ char *gossip_me_json(void)
     cJSON_AddNumberToObject(o, "synced", (double)(s_synced / 1000));
     cJSON_DeleteItemFromObject(o, "incubating");
     cJSON_AddNumberToObject(o, "incubating", inc);
+    cJSON_DeleteItemFromObject(o, "lead");
+    cJSON_AddBoolToObject(o, "lead", os_setting(OS_SET_LEADER) != 0);   // "May become a leader"
+    cJSON_DeleteItemFromObject(o, "name_nodes");
+    cJSON_AddNumberToObject(o, "name_nodes", name_nodes);
+    if (!cJSON_IsObject(cJSON_GetObjectItem(o, "ach"))) {
+        cJSON *a = cJSON_AddObjectToObject(o, "ach");   // Node.ach before the server sent one
+        cJSON_AddNumberToObject(a, "n", 0);
+        cJSON_AddNumberToObject(a, "pts", 0);
+        cJSON_AddArrayToObject(a, "last");
+    }
     return print_free(o);
 }
 
