@@ -6,7 +6,7 @@ ESP-NOW badge-to-badge mesh, Bluetooth LE for apps, the *Hitchhiker's Guide to S
 game apps and a sandboxed Lua 5.5 app host. The same sources also build to WebAssembly for a
 browser emulator (`emulator/`) and for the store's Lua compiler (`tools/luac/`).
 
-Stack: ESP-IDF v6.0.1, C, LVGL 9, Lua 5.5. What changed in each release: [CHANGELOG.md](CHANGELOG.md).
+Stack: ESP-IDF master (pinned in `esp-idf.commit`), C, LVGL 9, Lua 5.5. What changed in each release: [CHANGELOG.md](CHANGELOG.md).
 
 ## Lua apps and memory
 
@@ -38,8 +38,14 @@ on 0.5.0; magic-8 22.8 KB, then 13.6 KB. While snake runs the badge keeps
 
 ## Build and flash
 
+ESP-IDF is `master` at the commit in `esp-idf.commit` (the build refuses any other):
+
 ```sh
-source ~/.espressif/v6.0.1/esp-idf/export.sh
+git clone --recursive https://github.com/espressif/esp-idf.git ~/.espressif/master/esp-idf
+git -C ~/.espressif/master/esp-idf checkout "$(cat esp-idf.commit)"
+git -C ~/.espressif/master/esp-idf submodule update --init --recursive
+~/.espressif/master/esp-idf/install.sh esp32c5
+source ~/.espressif/master/esp-idf/export.sh
 idf.py build
 idf.py -p /dev/cu.usbserial-110 -b 460800 flash
 ```
