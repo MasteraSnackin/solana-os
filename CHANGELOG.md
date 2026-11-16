@@ -21,6 +21,19 @@ Roles:
 <!-- gossip:fw-roles -->
 <!-- /gossip:fw-roles -->
 
+- **TLS: fixed record buffers.** mbedTLS's dynamic buffers are off
+  (`CONFIG_MBEDTLS_DYNAMIC_BUFFER=n`, with its `DYNAMIC_FREE_*` options), as a security
+  risk: they freed and reallocated the record buffers around every message. Each open
+  TLS connection (the kept-alive server connection, an app's WebSocket, an update's
+  download) now holds a 16 KB input buffer (TLS's largest record, which any host may
+  send) and a 2 KB output buffer until it closes, ~19.8 KB of PSRAM (0.7 KB before); its
+  SRAM cost is unchanged. Measured on a production badge: a full handshake peaks at
+  ~41–44 KB of PSRAM (26–33 KB before), a resumption at ~26–29 KB (24–26 KB), and with a
+  Lua app, a C app or Bluetooth on the SRAM figures match the dynamic build's to within
+  100 B. `os_http` and `os_ws` refuse a new handshake below 68 KB free (52 KB to resume)
+  or a 17 KB block, up from 56 KB (40 KB) and 8 KB: limits that bind only on a chip
+  without PSRAM.
+
 ## 2.3.0 (unreleased)
 
 C apps, background services with the first two built on them (Mailbox and
