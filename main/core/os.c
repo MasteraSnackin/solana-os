@@ -18,6 +18,7 @@
 #include "os.h"
 #include "os_wifi.h"
 #include "os_settings.h"
+#include "os_battery.h"
 #include "os_service.h"
 #include "ui.h"
 
@@ -166,15 +167,18 @@ static void usb_fire(void)
 
 static void status_update(void)
 {
-    int mv = bsp_battery_mv();
-    s_usb = mv < 0 || mv > 4300;
+    os_battery_tick();
+    os_battery_info_t b;
+    os_battery_get(&b);
+    s_usb = !b.known || b.usb;
     usb_fire();
-    if (mv < 0) {
+    if (!b.known || (!b.usb && b.pct < 0)) {
         lv_label_set_text(s_batt, LV_SYMBOL_BATTERY_EMPTY " --");
-    } else if (mv > 4300) {
+    } else if (b.usb) {
+        // VSYS is VBUS: the cell (charging, full or absent) can't be read.
         lv_label_set_text(s_batt, LV_SYMBOL_USB " USB");
     } else {
-        int pct = bsp_battery_percent(mv);
+        int pct = b.pct;
         const char *sym = pct > 80 ? LV_SYMBOL_BATTERY_FULL : pct > 55 ? LV_SYMBOL_BATTERY_3
                         : pct > 30 ? LV_SYMBOL_BATTERY_2 : pct > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
         lv_label_set_text_fmt(s_batt, "%s %d%%", sym, pct);

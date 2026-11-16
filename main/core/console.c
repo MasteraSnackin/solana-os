@@ -39,8 +39,9 @@ static int cmd_info(int argc, char **argv)
            esp_app_get_description()->version, BOARD_SPI_SCK, BOARD_SPI_MOSI, BOARD_SPI_MISO, BOARD_LCD_CS, BOARD_LCD_DC, BOARD_LCD_RST, BOARD_LCD_BL,
            BOARD_SD_CS, BOARD_I2C_SCL, BOARD_I2C_SDA, BOARD_TCA9534_ADDR, BOARD_TCA9534_INT, BOARD_BOOT_BTN,
            BOARD_RGB_COUNT, BOARD_RGB_GPIO, BOARD_BAT_ADC_GPIO, BOARD_BAT_DIVIDER, BOARD_UART_TX, BOARD_UART_RX);
-    int mv = bsp_battery_mv();
-    printf("Battery: %d mV (%d%%)\nButtons: 0x%02lX\nHeap: %u bytes free\n", mv, bsp_battery_percent(mv),
+    char batt[40];
+    os_battery_text(batt, sizeof(batt));
+    printf("Battery: %s\nButtons: 0x%02lX\nHeap: %u bytes free\n", batt,
            (unsigned long)bsp_buttons_get(), (unsigned)heap_caps_get_free_size(OS_MEM_SRAM));
     if (os_mem_psram()) {
         printf("PSRAM: %u KB, %u KB free\n", (unsigned)(heap_caps_get_total_size(OS_MEM_PSRAM) / 1024),

@@ -695,9 +695,8 @@ static void on_mesh(os_mesh_type_t type, const os_mesh_peer_t *from, const char 
 
 static int battery(bool *usb)
 {
-    int mv = bsp_battery_mv();
-    *usb = mv < 0 || mv > 4300;
-    return mv < 0 ? -1 : *usb ? 100 : bsp_battery_percent(mv);
+    *usb = os_battery_usb();            // the OS's one filtered reading (2.4.0)
+    return os_battery_pct();
 }
 
 static char *sync_body(bool on)

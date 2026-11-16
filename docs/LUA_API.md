@@ -349,7 +349,7 @@ timer.cancel(id)
 ```lua
 sys.millis()                -- ms since the app started
 sys.time()                  -- unix seconds from the server clock, or nil if never synced
-sys.battery()               -- percent, or nil on USB / unknown
+sys.battery()               -- percent, or nil on USB / unknown; the status bar's number (2.4.0: filtered, only falls until USB)
 sys.keys()                  -- the keys held now, e.g. { up = true, left = true } (0.5.11)
 sys.memory()                -- { used = 18773, max = 6291456 }: the app's Lua heap in bytes (2.0.0)
 sys.tick(16)                -- on_tick every 16 ms from now on (16..1000; 30 by default); returns the old period (2.3.0)

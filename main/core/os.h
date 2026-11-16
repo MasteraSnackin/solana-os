@@ -12,6 +12,7 @@
 #include "lvgl.h"
 #include "os_keys.h"
 #include "theme.h"
+#include "os_battery.h"   // the battery as the OS reads it (2.4.0)
 
 #define OS_TICK_MS      100
 

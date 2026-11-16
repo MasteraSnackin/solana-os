@@ -92,5 +92,9 @@ uint32_t bsp_rgb_get(int index);    // 0xRRGGBB
 
 // ---- Battery ----
 esp_err_t bsp_battery_init(void);
-int bsp_battery_mv(void);           // -1 on error
-int bsp_battery_percent(int mv);
+// VSYS in mV (the cell on battery, VBUS less a diode on USB): 16 readings,
+// the 4 lowest and 4 highest dropped, the rest averaged. -1 on error. The
+// percentage is the OS's (core/os_battery.h), never worked out from this.
+int bsp_battery_mv(void);
+// n single calibrated readings of VSYS in mV into out (diagnostics): n, or -1.
+int bsp_battery_read(int *out, int n);

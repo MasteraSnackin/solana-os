@@ -900,9 +900,8 @@ static void battery_read(int64_t now)
         return;
     }
     s_batt_at = now;
-    int mv = bsp_battery_mv();
-    s_usb = mv < 0 || mv > 4300;        // the status bar's rule
-    s_batt = mv < 0 ? -1 : s_usb ? 100 : bsp_battery_percent(mv);
+    s_usb = os_battery_usb();           // the OS's one filtered reading (2.4.0)
+    s_batt = os_battery_pct();
 }
 
 // Adds item under key if what is printed still fits in *room; else deletes it.

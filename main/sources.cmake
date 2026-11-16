@@ -86,6 +86,7 @@ set(SOLANA_OS_WAMR_AOT_SRCS
 set(SOLANA_OS_SRCS
     core/os.c core/launcher.c core/calibrate.c core/ui.c core/os_cloud.c core/os_settings.c core/os_wifi_boot.c
     core/os_mesh.c core/os_bridge.c core/os_api.c core/os_socket.c core/os_data.c core/os_cmd.c core/os_ota.c
+    core/os_battery.c core/battery_calc.c                                                  # one battery reading (2.4.0)
     core/ed25519.c
     core/os_service.c core/os_service_test.c game/services.c apps/services/services_app.c   # background services (2.3.0)
     game/mailbox.c apps/mailbox/mailbox_app.c lua/lua_mail.c                               # Mailbox (2.3.0)

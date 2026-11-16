@@ -534,8 +534,6 @@ static const char *start(const char *id, uint32_t req_gen)
     known_load();
     lua_pkg_t *p = malloc(sizeof(*p));
     const char *why = NULL;
-    int mv = bsp_battery_mv();
-    bool usb = mv < 0 || mv > 4300;
     if (!p) {
         why = "not enough memory";
     } else if (!os_mem_psram()) {
@@ -550,7 +548,7 @@ static const char *start(const char *id, uint32_t req_gen)
         why = "denied";
     } else if (lua_pkg_expired(p)) {
         why = "expired";
-    } else if (!usb && bsp_battery_percent(mv) < SVC_BATTERY_LOW) {
+    } else if (os_battery_below(SVC_BATTERY_LOW)) {
         why = "low battery";
     } else if (os_mem_sram_malloc_free() < SVC_SRAM_START
                || heap_caps_get_free_size(OS_MEM_PSRAM) < SVC_PSRAM_LOW + LUA_SVC_HEAP_MAX / 4) {
@@ -1798,9 +1796,8 @@ static void checks(void *arg)
         known_save();
     }
 
-    int mv = bsp_battery_mv();
-    bool usb = mv < 0 || mv > 4300;
-    if (n && !usb && bsp_battery_percent(mv) < SVC_BATTERY_LOW) {
+    bool usb = os_battery_usb();
+    if (n && os_battery_below(SVC_BATTERY_LOW)) {
         stop_all(STOP_SYSTEM, "Stopped: battery low", false);
         s_battery_stopped = true;
     } else if (s_battery_stopped && usb) {
