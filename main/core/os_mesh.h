@@ -127,6 +127,11 @@ int os_mesh_scan_take(uint8_t channels[OS_MESH_SCAN_CH_MAX], int *n_ch, os_mesh_
 // Peers heard in the last OS_MESH_PEER_TTL_MS, strongest first.
 int os_mesh_peers(os_mesh_peer_t *out, int max);
 bool os_mesh_peer(const char *id, os_mesh_peer_t *out);
+// os_mesh_peer, else a live entry of the senders heard (2.4.0, MESH.md "Senders
+// heard": a radio sender past the 20-entry table, its HELLO-bound MAC; only id,
+// mac, rssi, kind and last_ms are set): someone an APP message can be sent to
+// now. Never a bridged peer from the senders table. Any task.
+bool os_mesh_near(const char *id, os_mesh_peer_t *out);
 // Keep a peer in the table whatever else is heard (a trade partner, an
 // accepted X Dex peer); unpin when done. False if the id isn't in the table.
 // Only HELLOs add peers and set their MAC: other messages from an unknown id

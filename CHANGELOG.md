@@ -95,6 +95,40 @@ Integration (the parts against the real server):
   `by`); `grole test` writes no NVS any more and yields to the node service while gossip
   is on. C: `gossip_me_t` gains `lead`, `name_nodes`, `ach_n`, `ach_pts`.
 
+Review fixes (before release):
+
+- **The boss can't be rooted before `minBeats`** (`RoleState.boss.minBeats`, the server's
+  `bossMinBeats`, 60 by default; a missing one reads as 60). Three players finalized the
+  block in six votes (~4 s) and the server then ruled their claims lost (`c × 4 ≥ beats`).
+  `gossip.role()`'s boss and `gossip.voters()` gain `minBeats`; C: `min_beats` in
+  `gossip_role_t` and `gossip_voters_t`.
+- **The boss believes less of a vote summary**: a lockout must have been earned
+  (`l ≤ 2^(v-1)`), none before beat 0, and a voter counts toward the 2/3 only once heard
+  in two vote periods. Three made-up ids sending `{v:1,l:32}` ended a fight at once.
+- **The senders heard answer too.** An APP message to an id the peer table lacks goes to
+  the MAC that id's HELLO bound in the senders table (`os_mesh_send`, `os_mesh_station_send`,
+  new `os_mesh_near`), under a lock now that other tasks read it: in a full hall a boss
+  acknowledges claimants past its 20 peers, and a player whose table has no room for the
+  boss still votes, bids and claims (and a Validator cures). Emulator, 100 voters with the
+  boss in neither real player's table and 20 of them in its own: all votes in, 100 of 100
+  claimants acknowledged (2 of 100 before), both real players voting and claiming ("not near"
+  before). A role still sends 4 messages a second, two of them the boss's beat during a
+  fight: 100 claimants take about 50 s of acks while it runs, about 35 s after it ends. A queued ack or cured answer the
+  role's queue had no room for no longer counts against the claimant's 5 s; a fight's
+  claim at the end tries for 36 s (12 tries).
+- **A newer station id from a MAC replaces the older after 3 HELLOs over 6 s** with no
+  HELLO of the older between, as an id's MAC change (it was at once, so a MAC spoofer
+  could keep knocking a live role off its listeners' tables): a badge's next role is heard
+  about 6 s after its first HELLO.
+- **Hearing holds a source to little**: its HELLOs count once a second, it holds one hearing
+  entry (a listed role id four) and its newest program takes that entry's place, and a
+  source whose record came back `bad` or `unknown` is not heard for 10 minutes. One badge
+  cycling made-up addresses kept all eight entries of every badge near it.
+- **A lost sync answer no longer stops Gossip syncing**: a sync, or a fetch of the server's
+  key, with no answer in 30 s is given up and goes again (os_api drops an answer when the OS
+  queue stays full; nothing cleared the request in flight). Console `api lose <path>` drops
+  the next answer to test it.
+
 Also in 2.4.0:
 
 - **TLS: fixed record buffers.** mbedTLS's dynamic buffers are off

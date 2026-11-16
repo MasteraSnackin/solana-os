@@ -40,12 +40,14 @@ static const char *TAG = GR_TAG;
 #define CLAIM_SILENT_MS 15000       // the boss went quiet after we voted: claim anyway
 #define EV_GAP_MS       250         // on_gossip "boss": at most four a second
 #define WINDOW_MS       120         // ±120 ms: the jitter histogram's mark
+#define TWO_PERIODS_MS  1500        // a voter counts once two summaries ~2 s apart came in (one alone proves little)
 
 typedef struct {
     char id[OS_MESH_ID_LEN + 1];
     uint16_t votes;
     uint8_t lockout;
     int64_t at;
+    int64_t first;                  // its first summary this fight
 } voter_t;
 
 // The boss's side.
@@ -54,6 +56,7 @@ static struct {
     long sid;
     int bpm, beats, beat_ms;
     int min;                        // bossMinVoters, from RoleState.boss.min
+    int min_beats;                  // bossMinBeats, from RoleState.boss.minBeats: no rooting before this beat
     int64_t t0;                     // local ms of beat 0
     int fk;                         // the announced fork beat, -1 none
     int64_t next_bcast, ended_at;
@@ -108,7 +111,7 @@ static void boss_now(int64_t now, int *b, int *ms, int *ph)
     *ph = B.done ? (B.won ? 2 : 3) : 1;
 }
 
-void gr_boss_start(long sid, int bpm, int beats, int min, int64_t since)
+void gr_boss_start(long sid, int bpm, int beats, int min, int min_beats, int64_t since)
 {
     int64_t now = gr_ms(), t = gr_server_ms();
     if (!B.v) {
@@ -120,6 +123,7 @@ void gr_boss_start(long sid, int bpm, int beats, int min, int64_t since)
     B.bpm = bpm;
     B.beats = beats;
     B.min = min > 0 ? min : 3;
+    B.min_beats = min_beats >= 0 ? min_beats : 60;
     B.beat_ms = beat_ms_of(bpm);
     // Beat 0 is at `since` by the server's clock, as close as we know it.
     int64_t off = t && since ? t - since : 0;
@@ -130,7 +134,8 @@ void gr_boss_start(long sid, int bpm, int beats, int min, int64_t since)
     B.nv = 0;
     B.n = B.conf = B.fin = B.p = 0;
     B.votes_in = B.votes_full = 0;
-    ESP_LOGI(TAG, "boss %ld: %d bpm, %d beats%s", sid, bpm, beats, B.v ? "" : " (no voter table: no memory)");
+    ESP_LOGI(TAG, "boss %ld: %d bpm, %d beats, rooted from beat %d%s", sid, bpm, beats, B.min_beats,
+             B.v ? "" : " (no voter table: no memory)");
 }
 
 bool gr_boss_over(void)
@@ -146,11 +151,12 @@ void gr_boss_stop(void)
     B.nv = 0;
 }
 
+// The recent window: voters heard in the last 10 s, and in two vote periods at least.
 static void count(int64_t now)
 {
     B.n = B.conf = B.fin = 0;
     for (int i = 0; i < B.nv; i++) {
-        if (now - B.v[i].at <= RECENT_MS) {
+        if (now - B.v[i].at <= RECENT_MS && B.v[i].at - B.v[i].first >= TWO_PERIODS_MS) {
             B.n++;
             B.conf += B.v[i].lockout >= CONFIRMED;
             B.fin += B.v[i].lockout >= FINALIZED;
@@ -189,8 +195,9 @@ static void on_vote(const char *from, os_peer_kind_t kind, const cJSON *d)
     }
     boss_now(now, &b, &ms, &ph);
     int v = gr_jint(d, "v", 0, GR_CLAIM_C_MAX, -1), l = gr_jint(d, "l", 0, FINALIZED, -1);
-    // Plausible only: at most one vote a beat so far, and a lockout needs votes behind it.
-    if (v < 0 || l < 0 || v > b + 1 || (l > 0 && v == 0)) {
+    // Plausible only: at most one vote a beat so far (ph 0: none yet), and a lockout
+    // needs votes behind it: each vote in time doubles it, so l <= 2^(v-1).
+    if (v < 0 || l < 0 || ph != 1 || v > b + 1 || (l > 0 && (v == 0 || (v <= 6 && l > (1 << (v - 1)))))) {
         return;
     }
     B.votes_in++;
@@ -202,6 +209,7 @@ static void on_vote(const char *from, os_peer_kind_t kind, const cJSON *d)
             stale = &B.v[i];
         }
     }
+    bool fresh = !x;
     if (!x && B.nv < VOTERS_MAX) {
         x = &B.v[B.nv++];
     } else if (!x && stale && now - stale->at > RECENT_MS) {
@@ -210,6 +218,9 @@ static void on_vote(const char *from, os_peer_kind_t kind, const cJSON *d)
     if (!x) {
         B.votes_full++;
         return;
+    }
+    if (fresh) {
+        x->first = now;
     }
     strlcpy(x->id, from, sizeof(x->id));
     x->votes = (uint16_t)v;
@@ -309,6 +320,7 @@ char *gossip_role_voters_json(void)
         cJSON_AddNumberToObject(o, "all", B.nv);
         cJSON_AddNumberToObject(o, "beat", b);
         cJSON_AddNumberToObject(o, "beats", B.beats);
+        cJSON_AddNumberToObject(o, "minBeats", B.min_beats);
         cJSON_AddNumberToObject(o, "fork", B.fk);
         cJSON_AddNumberToObject(o, "phase", ph);
     }
@@ -510,8 +522,8 @@ void gr_boss_tick(int64_t now)
         int b, ms, ph;
         boss_now(now, &b, &ms, &ph);
         if (!B.done && ph == 1) {
-            if (B.n >= B.min && B.fin * 3 >= B.n * 2) {
-                boss_end(now, true);    // rooted: >= 2/3 of the recent voters finalized
+            if (b >= B.min_beats && B.n >= B.min && B.fin * 3 >= B.n * 2) {
+                boss_end(now, true);    // rooted: past minBeats, >= 2/3 of the recent voters finalized
             } else if (b >= B.beats) {
                 boss_end(now, false);   // bossSeconds without that: the boss wins
             }
@@ -528,9 +540,9 @@ void gr_boss_status(void)
     if (B.on) {
         int b, ms, ph;
         boss_now(now, &b, &ms, &ph);
-        printf("  boss: sid %ld beat %d/%d ms %d phase %d fork %d; voters %d recent of %d, %d confirmed, %d "
-               "finalized, p %d; votes in %lu, table full %lu\n",
-               B.sid, b, B.beats, ms, ph, B.fk, B.n, B.nv, B.conf, B.fin, B.p, (unsigned long)B.votes_in,
+        printf("  boss: sid %ld beat %d/%d (rooted from %d) ms %d phase %d fork %d; voters %d recent of %d, %d "
+               "confirmed, %d finalized, p %d; votes in %lu, table full %lu\n",
+               B.sid, b, B.beats, B.min_beats, ms, ph, B.fk, B.n, B.nv, B.conf, B.fin, B.p, (unsigned long)B.votes_in,
                (unsigned long)B.votes_full);
     }
     if (P.have) {

@@ -78,6 +78,11 @@ static const char *TAG = "gossip";
 #define VERIFY_BATCH    6
 
 #define HEARD_MS        5000        // §5: "heard in the last 5 s"
+#define HEAR_PER_SRC    1           // hearing entries one source may hold at once (§5) ...
+#define HEAR_PER_ROLE   4           // ... a listed role id: a Leader's block
+#define HEAR_GAP_MS     1000        // one source's HELLOs count for hearing at most once a second
+#define BAD_MAX         8           // sources whose record came back bad or unknown ...
+#define BAD_MS          (10 * 60 * 1000)    // ... are not heard for 10 min
 #define DURABLE_MS      (10 * 60 * 1000)    // trait 4
 #define FORGET_MS       60000       // an entry at 0 not heard for this long goes
 #define PEER_TTL_MS     OS_MESH_PEER_TTL_MS
@@ -92,6 +97,8 @@ static const char *TAG = "gossip";
 #define BODY_MAX        4096        // §7
 #define RESP_CAP        4096
 #define KEY_RETRY_MS    (10 * 60 * 1000)    // a failed signature fetches the key again, at most this often
+#define ANSWER_LOST_MS  30000       // a sync or key request with no answer by then is given up (os_api drops an
+                                    // answer when the OS queue stays full; the request itself gives up in 10 s)
 #define NOTICE_GAP_MS   10500       // os_service_notify takes one per 10 s
 #define SRAM_SYNC_MIN   (24 * 1024) // malloc-able SRAM a sync's answer needs (its cJSON tree)
 #define SRAM_HEAR_MIN   (12 * 1024) // below this HELLOs are dropped unread
@@ -122,6 +129,7 @@ typedef struct {
     uint8_t b;
     int8_t rssi;
     int64_t last_ms;
+    int64_t heard_ms;               // the last of its HELLOs that counted for hearing
 } peer_t;
 
 typedef struct {
@@ -171,6 +179,10 @@ typedef struct {
     gossip_cfg_t cfg;
 
     hear_t hear[HEAR_MAX];
+    struct {
+        char id[OS_MESH_ID_LEN + 1];
+        int64_t until;              // esp ms
+    } bad[BAD_MAX];                 // sources not heard for now (§5)
     peer_t peer[PEER_MAX];
     char done[DONE_MAX][ADDR1];     // seen/adopted: never heard again
     int ndone;
@@ -227,6 +239,7 @@ static char s_extra[GOSSIP_ADDR_MAX + GOSSIP_G_MAX + 24];  // the HELLO fields s
 static int64_t s_extra_w = -1;
 static uint8_t s_key[32];
 static bool s_has_key, s_key_asked;
+static void *s_key_tok;             // the key request in flight
 static int64_t s_key_at;
 static char s_key_srv[96];
 static volatile bool s_verifying;
@@ -827,7 +840,10 @@ static void key_load(void)
 
 static void key_answer(int status, const char *body, void *ctx)
 {
-    (void)ctx;
+    if (!ctx || ctx != s_key_tok) {
+        return;                     // one we gave up on
+    }
+    s_key_tok = NULL;
     s_key_asked = false;
     cJSON *j = status == 200 ? cJSON_Parse(body) : NULL;
     const char *hex = cJSON_GetStringValue(cJSON_GetObjectItem(j, "key"));
@@ -861,11 +877,18 @@ static void key_answer(int status, const char *body, void *ctx)
 static void key_fetch(void)
 {
     int64_t now = now_ms();
+    if (s_key_asked && now - s_key_at > ANSWER_LOST_MS) {
+        os_api_cancel(s_key_tok);   // its answer was lost: ask again
+        s_key_tok = NULL;
+        s_key_asked = false;
+    }
     if (s_key_asked || (s_key_at && now - s_key_at < KEY_RETRY_MS && s_has_key)
         || (s_key_at && now - s_key_at < 30000)) {
         return;
     }
-    if (os_api_call("GET", "/api/device/gossip/key", NULL, 256, key_answer, os_api_token()) == ESP_OK) {
+    void *tok = os_api_token();
+    if (os_api_call("GET", "/api/device/gossip/key", NULL, 256, key_answer, tok) == ESP_OK) {
+        s_key_tok = tok;
         s_key_asked = true;
         s_key_at = now;
     }
@@ -974,6 +997,7 @@ static void forget_all(void)
     S->boost = S->nslots = S->ninbox = S->nfx = S->nimm = 0;
     cfg_defaults(&S->cfg);
     memset(S->hear, 0, sizeof(S->hear));
+    memset(S->bad, 0, sizeof(S->bad));
     memset(S->done, 0, sizeof(S->done));
     S->ndone = 0;
     memset(S->dorm, 0, sizeof(S->dorm));
@@ -1194,10 +1218,55 @@ static peer_t *peer_get(const char *id, bool make)
     return p;
 }
 
+// Under the lock: a source whose record came back bad or unknown, for 10 min.
+static bool bad_source(const char *id, int64_t now)
+{
+    for (int i = 0; i < BAD_MAX; i++) {
+        if (S->bad[i].id[0] && !strcmp(S->bad[i].id, id) && now < S->bad[i].until) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Under the lock: not heard for BAD_MS, and what we hear from it now goes.
+static void bad_add(const char *id, int64_t now)
+{
+    int slot = 0;
+    for (int i = 0; i < BAD_MAX; i++) {
+        if (!strcmp(S->bad[i].id, id) || now >= S->bad[i].until) {
+            slot = i;
+            break;
+        }
+        slot = S->bad[i].until < S->bad[slot].until ? i : slot;
+    }
+    strlcpy(S->bad[slot].id, id, sizeof(S->bad[slot].id));
+    S->bad[slot].until = now + BAD_MS;
+    for (int i = 0; i < HEAR_MAX; i++) {
+        if (S->hear[i].a[0] && S->hear[i].state == ST_HEARING && !strcmp(S->hear[i].from, id)) {
+            memset(&S->hear[i], 0, sizeof(S->hear[i]));
+        }
+    }
+    ESP_LOGI(TAG, "%s: its record came back bad: not heard for %d min", id, BAD_MS / 60000);
+}
+
+static bool listed_role(const char *id)
+{
+    for (int i = 0; i < S->cfg.nroles && i < GOSSIP_CFG_ROLES; i++) {
+        if (!strcmp(S->cfg.roles[i].id, id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void hear(const char *a, const char *from, const char *g, int boost, int rssi)
 {
     int64_t now = now_ms();
     hear_t *h = NULL, *lru = NULL;
+    if (bad_source(from, now)) {
+        return;
+    }
     for (int i = 0; i < HEAR_MAX; i++) {
         if (!strcmp(S->hear[i].a, a)) {
             h = &S->hear[i];
@@ -1207,6 +1276,21 @@ static void hear(const char *a, const char *from, const char *g, int boost, int 
     if (!h) {
         if (skipped(a, gossip_server_ms())) {
             return;
+        }
+        // One source holds at most one entry heard in the last 5 s (a listed role
+        // id four): a badge making up addresses can't fill the table (§5). Its
+        // newest program takes its own entry's place.
+        int mine = 0, cap = listed_role(from) ? HEAR_PER_ROLE : HEAR_PER_SRC;
+        hear_t *own = NULL;
+        for (int i = 0; i < HEAR_MAX; i++) {
+            hear_t *x = &S->hear[i];
+            if (x->a[0] && x->state == ST_HEARING && now - x->last_ms <= HEARD_MS && !strcmp(x->from, from)) {
+                mine++;
+                own = !own || x->last_ms < own->last_ms ? x : own;
+            }
+        }
+        if (mine >= cap) {
+            h = own;
         }
         for (int i = 0; i < HEAR_MAX && !h; i++) {
             if (!S->hear[i].a[0]) {
@@ -1547,6 +1631,10 @@ static void hello_one(const hop_t *hp)
     p->ro = h.ro;
     p->rssi = (int8_t)h.rssi;
     p->last_ms = now_ms();
+    bool counts = p->last_ms - p->heard_ms >= HEAR_GAP_MS;     // once a second a source (§5)
+    if (counts) {
+        p->heard_ms = p->last_ms;
+    }
     if (h.g[0]) {
         strlcpy(p->st, h.st, sizeof(p->st));
         p->c = gp.c == 'n' ? 0 : gp.c;
@@ -1561,7 +1649,7 @@ static void hello_one(const hop_t *hp)
     // the radar, never counted.
     int64_t srv = gossip_server_ms();
     bool fresh = !srv || (gp.w >= srv / 30000 - 2 && gp.w <= srv / 30000 + 2);
-    if (h.st[0] && fresh && gossip_on()) {
+    if (h.st[0] && fresh && counts && gossip_on()) {
         lock();
         hear(h.st, h.id, h.g, gp.b, h.rssi);
         unlock();
@@ -1805,6 +1893,13 @@ static void outcome(const cJSON *o, int64_t srv)
         }
         if (!strcmp(r, "cool")) {
             break;              // still incubating: it goes again
+        }
+        if ((!strcmp(r, "bad") || !strcmp(r, "unknown")) && h->rec_n == n && h->state != ST_HEARING) {
+            char src[OS_MESH_ID_LEN + 1];
+            strlcpy(src, h->from, sizeof(src));
+            memset(h, 0, sizeof(*h));
+            bad_add(src, now_ms());     // a forged tag or a made-up program: its source is ignored (§5)
+            break;
         }
         bool took = !strcmp(r, "adopted") || !strcmp(r, "forked");
         if (took || !strcmp(r, "seen")) {
@@ -2401,6 +2496,23 @@ void gossip_tick(int64_t now)
     }
     spread(srv);
     notices(now);
+    if (s_tok && now - s_tok_at > ANSWER_LOST_MS) {
+        // No answer in 30 s: os_api dropped it (the OS queue stayed full). Give it
+        // up, as a failed sync: what it carried goes again, at the normal cadence.
+        ESP_LOGW(TAG, "sync: no answer in %d s, giving up on it", ANSWER_LOST_MS / 1000);
+        os_api_cancel(s_tok);
+        s_tok = NULL;
+        lock();
+        for (int i = 0; i < S->nrec; i++) {
+            S->rec[i].sent = false;
+        }
+        for (int i = 0; i < S->nact; i++) {
+            S->act_q[i].sent = false;
+        }
+        unlock();
+        gossip_role_sync_done(false, NULL);
+        s_next_sync = now + sync_interval();
+    }
     if (!s_claimed || s_tok) {
         return;
     }
