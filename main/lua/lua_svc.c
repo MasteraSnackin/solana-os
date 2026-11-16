@@ -1108,6 +1108,7 @@ static void svc_libs(lua_State *L)
 
         // The role side's reads:
         // gossip:fw-roles (role, boss)
+        "role", "boss",
         // /gossip:fw-roles
         NULL,
     };
