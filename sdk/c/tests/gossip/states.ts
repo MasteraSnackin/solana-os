@@ -7,7 +7,7 @@
 // seconds, and server milliseconds as a decimal string.
 import { createHash } from 'node:crypto';
 
-export const NOW = 1790000000; // the mock's sys.time()
+export const NOW = Math.floor(Date.now() / 1000); // the mock's sys.time(), and near the emulator's clock
 
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 export function b58(bytes: Uint8Array): string {

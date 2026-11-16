@@ -15,7 +15,7 @@
 //   none           no acting call since the last want
 //   log:<text>     a console line containing text since the last log check
 // Lists don't select by themselves here (mock-host's ui.list does): sel does it.
-import { EVENTS, STATES, type State } from './states';
+import { EVENTS, NOW, STATES, type State } from './states';
 
 type Ctx = Record<string, any>;
 let state: State;
@@ -86,7 +86,7 @@ export function install(c: Ctx) {
         return [c.obj('canvas', { pixel: () => [], get: () => [c.i(0)], clear: () => [] })];
     });
     // sys.time as the states expect.
-    api['sys.time'] = fn(() => [c.i(1790000000)]);
+    api['sys.time'] = fn(() => [c.i(NOW)]);
 }
 
 export function script(c: Ctx) {

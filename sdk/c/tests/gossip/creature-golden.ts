@@ -12,7 +12,7 @@
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { deflateSync } from 'node:zlib';
+import { png } from './png';
 
 const args = Bun.argv.slice(2);
 const opt = (k: string) => {
@@ -33,16 +33,18 @@ const VECTORS = [
 ];
 // SHA-256 of frame 0 (bg 0x000000). The web's renderer must produce the same.
 const GOLDEN: Record<string, string> = {
-    'vector 1': 'GOLDEN1',
-    'vector 2': 'GOLDEN2',
-    'vector 3': 'GOLDEN3',
+    'vector 1': '0922d9b7f45f0fe246bb85a09167ec13cd588f480746a93f7f09a3bce3f37358',
+    'vector 2': 'dc409de07c51201699b191a23f58619d301e2caee85e56caaea4b24215db4c84',
+    'vector 3': '74ab953af50586b6f2386b8cef1f4e8fb5803f05daf70421073c69d8056e0269',
 };
 
 const dir = mkdtempSync(join(tmpdir(), 'creature-'));
 const harness = `#include <stdio.h>
 #include "creature.h"
 static int hex(char c) { return c <= '9' ? c - '0' : c - 'a' + 10; }
+int creature_selftest(void);
 int main(int argc, char **argv) {
+    printf("S %d\\n", creature_selftest());
     for (int a = 1; a < argc; a++) {
         uint8_t g[32]; uint16_t px[48 * 48]; uint8_t rgb[3]; creature_genome c;
         for (int i = 0; i < 32; i++) g[i] = (uint8_t)(hex(argv[a][2 * i]) * 16 + hex(argv[a][2 * i + 1]));
@@ -62,62 +64,29 @@ int main(int argc, char **argv) {
 }
 `;
 writeFileSync(join(dir, 'main.c'), harness);
-const cc = Bun.spawnSync(['cc', '-std=c11', '-O1', '-Wall', '-Wextra', '-Werror', '-I', app, '-o', join(dir, 'golden'), join(dir, 'main.c'), join(app, 'creature.c')]);
+const cc = Bun.spawnSync(['cc', '-std=c11', '-O1', '-DCREATURE_SELFTEST', '-Wall', '-Wextra', '-Werror', '-I', app, '-o', join(dir, 'golden'), join(dir, 'main.c'), join(app, 'creature.c')]);
 if (cc.exitCode !== 0) {
     console.error(cc.stderr.toString());
     process.exit(1);
 }
 const run = Bun.spawnSync([join(dir, 'golden'), ...VECTORS.map((v) => v.g)]);
-const lines = run.stdout.toString().trim().split('\n');
+const all = run.stdout.toString().trim().split('\n');
+const selftest = Number(all[0].slice(2));
+const lines = all.slice(1);
 const pngDir = opt('--png');
 let bad = 0;
 const fail = (m: string) => {
     bad++;
     console.log(`creature-golden: FAIL ${m}`);
 };
+if (selftest !== 0) fail(`the fast body masks differ from shape_in() at ${selftest} pixels`);
 
-function png(px: Uint8Array, scale: number): Uint8Array {
-    const w = 48 * scale, h = 48 * scale;
-    const raw = new Uint8Array(h * (w * 3 + 1));
-    for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-            const k = ((y / scale) | 0) * 48 + ((x / scale) | 0);
-            const v = px[k * 2] | (px[k * 2 + 1] << 8);
-            const o = y * (w * 3 + 1) + 1 + x * 3;
-            raw[o] = ((v >> 11) & 31) * 255 / 31;
-            raw[o + 1] = ((v >> 5) & 63) * 255 / 63;
-            raw[o + 2] = (v & 31) * 255 / 31;
-        }
-    }
-    const crcTable = Array.from({ length: 256 }, (_, n) => {
-        let c = n;
-        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-        return c >>> 0;
+function rgb565png(px: Uint8Array, scale: number): Uint8Array {
+    return png(48 * scale, 48 * scale, (x, y) => {
+        const k = ((y / scale) | 0) * 48 + ((x / scale) | 0);
+        const v = px[k * 2] | (px[k * 2 + 1] << 8);
+        return [(((v >> 11) & 31) * 255) / 31, (((v >> 5) & 63) * 255) / 63, ((v & 31) * 255) / 31];
     });
-    const crc = (b: Uint8Array) => {
-        let c = 0xffffffff;
-        for (const x of b) c = crcTable[(c ^ x) & 255] ^ (c >>> 8);
-        return (c ^ 0xffffffff) >>> 0;
-    };
-    const chunk = (type: string, data: Uint8Array) => {
-        const out = new Uint8Array(12 + data.length);
-        const dv = new DataView(out.buffer);
-        dv.setUint32(0, data.length);
-        out.set(new TextEncoder().encode(type), 4);
-        out.set(data, 8);
-        dv.setUint32(8 + data.length, crc(out.subarray(4, 8 + data.length)));
-        return out;
-    };
-    const ihdr = new Uint8Array(13);
-    const dv = new DataView(ihdr.buffer);
-    dv.setUint32(0, w);
-    dv.setUint32(4, h);
-    ihdr.set([8, 2, 0, 0, 0], 8);
-    const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', new Uint8Array())];
-    const all = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-    let o = 0;
-    for (const p of parts) all.set(p, (o += p.length) - p.length);
-    return all;
 }
 
 VECTORS.forEach((v, n) => {
@@ -133,7 +102,7 @@ VECTORS.forEach((v, n) => {
             console.log(`creature-golden: ${v.name} frame 0 sha256 ${hash}`);
             if (GOLDEN[v.name] !== hash) fail(`${v.name}: frame 0 hashes ${hash}, golden ${GOLDEN[v.name]}`);
         }
-        if (pngDir) writeFileSync(join(pngDir, `creature-v${n + 1}-f${f}.png`), png(px, 4));
+        if (pngDir) writeFileSync(join(pngDir, `creature-v${n + 1}-f${f}.png`), rgb565png(px, 4));
     }
 });
 console.log(bad ? `creature-golden: ${bad} failures` : 'creature-golden: all vectors decode as the contract says and match the golden hashes');
