@@ -73,6 +73,28 @@ Roles:
   a boss session costs ~0.3 KB of SRAM and ~6 KB of PSRAM.
 <!-- /gossip:fw-roles -->
 
+Integration (the parts against the real server):
+
+- **os_mesh: the senders heard.** A second, light table of every sender a HELLO came
+  from (192 entries in PSRAM, mesh task only), the HELLOs the 20-entry peer table had no
+  room for too, admits APP messages from senders the peer table left out; only a HELLO
+  binds an id to a MAC there too, and the peer table still decides what is listed. A boss
+  in the emulator took 137 of 1000 votes from 100 voters before (13.7 %), 1000 of 1000
+  with it. Without PSRAM: the peer table's rule alone. `mesh status` counts it, `mesh
+  senders on|off` (RAM) switches it to measure.
+- **os_mesh: a newer station id replaces the older** from the same MAC at once (never the
+  badge's own id): a badge's next role, or a Collaborator station after a role, is heard
+  without waiting 30 s. The server keeps one role id per badge across sessions too.
+- **A finished boss answers its fight's claims** for 30 s after the server ended its
+  session (the server ends it on the report that says how the fight went; the players
+  claim after they hear the end, and their acks need the role key on the air).
+- `gossip.me()` gains `lead`, `name_nodes` (Cfg `nameNodes`) and `ach` (Node `ach`);
+  items carry `pick` (the Upgrade Authority+); `gossip.role()`'s boss gains `min`
+  (`bossMinVoters`, which the boss now roots the block with); a Leader's own program in
+  its block goes up with its badge id (the server refused the whole report for an empty
+  `by`); `grole test` writes no NVS any more and yields to the node service while gossip
+  is on. C: `gossip_me_t` gains `lead`, `name_nodes`, `ach_n`, `ach_pts`.
+
 ## 2.3.0 (unreleased)
 
 C apps, background services with the first two built on them (Mailbox and

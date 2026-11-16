@@ -1262,13 +1262,19 @@ gossip_deploy(NULL);    gossip_use(item, p, q, trait /* -1 none */);  gossip_nam
 gossip_public(1);       gossip_lead(1);
 ```
 
-- `gossip_me_t` holds the Node's numbers, `act`, `nslots`/`ninbox`, `why`; its items,
-  effects, immunity and objectives are in `gossip_me_json`. Times are unix seconds.
+- `gossip_me_t` holds the Node's numbers, `act`, `nslots`/`ninbox`, `why`, `lead` (the
+  "May become a leader" setting), `name_nodes` (adoptions before a program can be named)
+  and `ach_n`/`ach_pts` (achievements); its items (with `pick` for the Upgrade Authority+
+  that takes a trait), effects, immunity, objectives and the newest achievements' names are
+  in `gossip_me_json`. Times are unix seconds, countdowns (`left`) seconds.
 - `gossip_program_t`: `a`, `par`, `name`, `gen`, `nodes` (-1 unknown), `verified`, `spam`,
   `colour` (0xRRGGBB), `hue`, `body`, `eyes`, `marks`, `mark_seed`, `traits[3]` and
   `ntraits`, `vir`, `hard`, `stab`, `rarity` (`GOSSIP_COMMON` .. `GOSSIP_LEGENDARY`).
-- **Slots are 0-based in C** (1-based in Lua). The export `on_gossip` (void, the event as
-  `badge_arg(1)`) needs no ABI change: any C app with the permission has it.
+- **Slots are 0-based in C** (1-based in Lua, 0-based on the wire). The export `on_gossip`
+  (void, the event as `badge_arg(1)`) is called by name, like a Lua app's function: any C
+  app with the permission that exports it gets every event of the Lua reference's
+  `on_gossip` (the node side's `exposed`, `result`, `node`, `event`, the role side's
+  `role`, `boss`, `bid`, `ack`, `cured`), with the same fields. No ABI change.
 - Each wrapper reads through the Lua module (one call and a table walk): read once per
   frame at most, not per creature.
 <!-- /gossip:fw-node -->

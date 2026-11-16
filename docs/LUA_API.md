@@ -1961,8 +1961,11 @@ gossip.me()           -- the node, or nil while the badge is unclaimed:
                       --  held, deployed, deploys, adopted, boost = 0,
                       --  fx = {{k = "fee", until = 1794795600, p = nil}, ...},
                       --  imm = {{p = "G2Qq...", until = ...}, ...},
-                      --  items = {{id, k, n}, ...}, itemsN, epoch = {n, ends, obj = {{id, text, have, need}}},
-                      --  pub = false, earns = false, why = "Link X at <site>/profile to earn"}
+                      --  items = {{id, k, n, pick = true (Upgrade Authority+: takes a trait)}, ...}, itemsN,
+                      --  epoch = {n, ends, obj = {{id, text, have, need}}},
+                      --  pub = false, earns = false, why = "Link X at <site>/profile to earn",
+                      --  lead = false (the "May become a leader" setting), name_nodes = 50 (adoptions
+                      --  before a program can be named), ach = {n = 3, pts = 45, last = {"Voter", ...}}}
 gossip.programs()     -- {slots = {p, false, p}, inbox = {p, ...}}: each p a program table (below)
 gossip.program(a)     -- a program this badge holds a record of, else nil:
                       -- {a, par = "" (a root), gen, name = nil (unnamed), nodes (when known),
@@ -1982,12 +1985,18 @@ function on_gossip(ev) end
                       -- {t = "result", n, act = "deploy", ok = true, error}   the answer to an action
                       -- {t = "node", seq}   gossip.me() changed
                       -- {t = "event", kind = "rank" | "milestone" | "drop" | "lamps" | "named" | "cured"
-                      --   | "mev" | "boss" | "page", text, col = 0x9945FF}   the badge also shows it as a notice
+                      --   | "mev" | "boss" | "page" | "achievement", text, col = 0x9945FF}   the badge also
+                      --   shows it as a notice
 ```
 
-- **Times are unix seconds** (Lua's numbers on the badge are 32-bit: the server's
-  milliseconds wouldn't survive). `synced` is the last sync since the badge started, 0
-  before one; until then the badge has no clock and doesn't spread.
+- **Times are unix seconds** (`clsAt`, `fx.until`, `imm.until`, `epoch.ends`, `synced`,
+  and the role side's `since`, `until`), with `left` in seconds where a countdown is
+  wanted: Lua's numbers on the badge are 32-bit, so the server's milliseconds wouldn't
+  survive. `synced` is the last sync since the badge started, 0 before one; until then the
+  badge has no clock and doesn't spread.
+- `on_gossip` is a function the badge calls by name when the app defines it (C apps: the
+  export `on_gossip`, C_API.md), on the app on screen and on every app service with the
+  permission, with each event below and the role side's.
 - **Looks are trustworthy, the rest waits for the server.** A program's genome decodes from
   its address alone (the same on the badge, the server, the web and in the Lab); `verified`
   is true once the server's signed record checked on the badge, which happens off the app's
@@ -2007,7 +2016,7 @@ gossip.place(a, 2)            -- from the inbox (or another slot) into slot 2
 gossip.drop(3)                -- empty slot 3
 gossip.deploy()               -- its own root program; deploy(item) with a Deploy Buffer or Genesis Relic
 gossip.use(item, {p = a, q = b, trait = 4})   -- an item (docs/GOSSIP.md §9), with what it needs
-gossip.name(a, "Turbine Toad")  -- 1-16 printable ASCII, a program of its own with 50 adoptions
+gossip.name(a, "Turbine Toad")  -- 1-16 printable ASCII, a program of its own with name_nodes adoptions
 gossip.public(true)           -- "Show me on the Network board"
 gossip.lead(true)             -- the "May become a leader" setting (Settings shows it too)
 ```
@@ -2035,7 +2044,8 @@ answers the offer or ends it; no app ever holds the role's key or signs for it.
 gossip.role()        -- nil, or one of:
                      --   {offer = {sid, ro, until, left = s to accept by itself | answer = true/false}}
                      --   {sid, ro, id, n, since, until, left, st = {addresses}, boost, on_air,
-                     --    boss = {bpm, beats, spam} (a boss), block = {{p, by}, ...} (a Leader), tally}
+                     --    boss = {bpm, beats, min, spam} (a boss: min = the fewest voters that can
+                     --    root the block), block = {{p, by}, ...} (a Leader), tally}
                      --   {ended = {sid, ro, by, stake, lamps}}   (for 10 minutes after the end)
 gossip.boss()        -- the fight heard nearby, or nil: {id, sid, beat, ms, bpm, fork, p, phase, rssi, real}
 
@@ -2065,11 +2075,11 @@ gossip.vote(votes, lockout)    -- during a fight: your votes in time and lockout
   beacon at that moment declines by itself (one second identity per badge).
 - **The session.** `id` is the role's id on the air (a station, MESH.md "Gossip"), `n` its
   name, `st` the program(s) it may gossip (a Leader's block as the server accepted it,
-  10 s each in turn), `since`/`until` server ms. It ends at `until`, by the owner, under
-  15 % battery off USB, when a Collaborator takeover or a badge beacon takes the second
-  identity, or 90 s without a sync; then `{ended = ...}` shows what it paid. Times are unix
-  seconds (`left`: seconds to go), not the contract's server milliseconds: Lua's numbers are
-  32-bit.
+  10 s each in turn), `since`/`until` unix seconds (`left`: seconds to go). It ends at
+  `until`, by the owner, under 15 % battery off USB, when a Collaborator takeover or a badge
+  beacon takes the second identity, or 90 s without a sync; then `{ended = ...}` shows what
+  it paid. A boss whose fight is over stays on the air 30 s after the server ended it, to
+  answer the players' claims. A badge keeps one role id from session to session.
 - **Claims.** The role's service answers a claim by itself, at most once per claimant per
   5 s, and where the role needs closeness (MEV Bot, Anonymous Deployer) only when it hears
   you at the close range or stronger (Cfg `close`, −55 dBm); `gossip.claim` checks your side

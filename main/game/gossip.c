@@ -2575,6 +2575,14 @@ char *gossip_me_json(void)
     }
     ms_to_s(o, "clsAt");
     ms_to_s(cJSON_GetObjectItem(o, "epoch"), "ends");
+    // An empty slot is null on the wire, which a Lua table can't hold (a hole: `#slots`
+    // would miss a 4th or 5th slot): false, as gossip.programs() says it.
+    cJSON *slots = cJSON_GetObjectItem(o, "slots");
+    for (int i = 0; cJSON_IsArray(slots) && i < cJSON_GetArraySize(slots); i++) {
+        if (cJSON_IsNull(cJSON_GetArrayItem(slots, i))) {
+            cJSON_ReplaceItemInArray(slots, i, cJSON_CreateFalse());
+        }
+    }
     cJSON *e;
     cJSON_ArrayForEach(e, cJSON_GetObjectItem(o, "fx")) {
         ms_to_s(e, "until");

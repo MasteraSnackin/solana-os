@@ -3435,6 +3435,9 @@ typedef struct {
     int pub;                // shown on the Network board
     int earns;
     char why[72];           // when it doesn't earn: why
+    int lead;               // the "May become a leader" setting
+    int32_t name_nodes;     // adoptions before a program can be named (Cfg nameNodes)
+    int32_t ach_n, ach_pts; // achievements earned and their points (Node.ach)
 } gossip_me_t;
 
 // The node: 0, or BADGE_ERR while the badge is unclaimed ("not linked").
@@ -3474,6 +3477,14 @@ static inline int gossip_me(gossip_me_t *out)
         out->pub = badge_field_bool(m, "pub");
         out->earns = badge_field_bool(m, "earns");
         badge_field_str(m, "why", out->why, sizeof out->why);
+        out->lead = badge_field_bool(m, "lead");
+        out->name_nodes = badge_field_int(m, "name_nodes", 50);
+        badge_val a = badge_push_field(m, "ach");
+        if (badge_type(a) == SOS_TABLE) {
+            out->ach_n = badge_field_int(a, "n", 0);
+            out->ach_pts = badge_field_int(a, "pts", 0);
+        }
+        sos_pop(1);
     } else {
         badge__seterr("not linked");
     }
