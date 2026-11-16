@@ -155,7 +155,7 @@ bool gr_held_spam(char out[GOSSIP_ADDR_MAX + 1])
     return gossip_held_spam(out);
 }
 
-static gossip_cfg_t s_cfg;          // OS task copy, refreshed every tick (it is 500 B: not on stacks)
+static gossip_cfg_t s_cfg;          // under gr_mx, refreshed every tick (it is 500 B: not on stacks)
 
 int gr_close(void)
 {
@@ -657,15 +657,20 @@ static void role_hello(int64_t now)
     }
 }
 
-static cJSON *role_ev(const char *state)
+static cJSON *role_ev_of(const char *state, long sid, char ro)
 {
     cJSON *e = cJSON_CreateObject();
+    char r[2] = {ro, 0};
     cJSON_AddStringToObject(e, "t", "role");
     cJSON_AddStringToObject(e, "state", state);
-    cJSON_AddNumberToObject(e, "sid", R.phase == PH_NONE && R.ended_sid ? R.ended_sid : R.sid);
-    char ro[2] = {R.phase == PH_NONE ? R.ended_ro : R.ro, 0};
-    cJSON_AddStringToObject(e, "ro", ro);
+    cJSON_AddNumberToObject(e, "sid", sid);
+    cJSON_AddStringToObject(e, "ro", r);
     return e;
+}
+
+static cJSON *role_ev(const char *state)
+{
+    return role_ev_of(state, R.sid, R.ro);
 }
 
 static void role_start(int64_t now)
@@ -710,12 +715,8 @@ static void role_stop(const char *end)
     }
     free(R.tally);
     R.tally = NULL;
-    long sid = R.sid;
-    char ro = R.ro;
     R.phase = PH_NONE;
-    R.ended_ro = ro;
     cJSON *e = role_ev("off");
-    cJSON_ReplaceItemInObject(e, "sid", cJSON_CreateNumber(sid));
     if (end) {
         cJSON_AddStringToObject(e, "by", end);
     }
@@ -781,8 +782,7 @@ static void apply_ended(const cJSON *e)
         snprintf(t + n, sizeof(t) - n, ", %d !LAMPs", R.ended_lamps);
     }
     gr_notice(COL_PURPLE, t);
-    cJSON *ev = role_ev("ended");
-    cJSON_ReplaceItemInObject(ev, "sid", cJSON_CreateNumber(sid));
+    cJSON *ev = role_ev_of("ended", sid, ro);
     cJSON_AddStringToObject(ev, "by", R.ended_by);
     cJSON_AddNumberToObject(ev, "stake", R.ended_stake);
     cJSON_AddNumberToObject(ev, "lamps", R.ended_lamps);
@@ -1046,14 +1046,16 @@ void gossip_role_tick(int64_t now)
         return;
     }
     static os_cloud_info_t in;          // OS task only (it is big)
+    static gossip_cfg_t cfg;
     os_cloud_get_info(&in);
-    gossip_cfg(&s_cfg);
+    gossip_cfg(&cfg);
     bool batt_low = false;
     if (R.phase == PH_SESSION) {
         battery_read(now);
         batt_low = !s_usb && s_batt >= 0 && s_batt < BATT_MIN;
     }
     xSemaphoreTake(gr_mx, portMAX_DELAY);
+    s_cfg = cfg;                        // the Lua task reads it under gr_mx (close range, live roles)
     strlcpy(s_me, gr_id_ok(in.id) ? in.id : "", sizeof(s_me));
     drain_locked();
     if (R.phase == PH_OFFER) {
