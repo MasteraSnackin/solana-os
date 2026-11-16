@@ -250,11 +250,12 @@ static int l_time(lua_State *L)
 
 static int l_battery(lua_State *L)
 {
-    int mv = bsp_battery_mv();
-    if (mv < 0 || mv > 4300) {      // unknown, or on USB power
+    os_battery_info_t b;
+    os_battery_get(&b);
+    if (!b.known || b.usb || b.pct < 0) {      // unknown, or on USB power
         lua_pushnil(L);
     } else {
-        lua_pushinteger(L, bsp_battery_percent(mv));
+        lua_pushinteger(L, b.pct);
     }
     return 1;
 }

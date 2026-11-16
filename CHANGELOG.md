@@ -113,6 +113,38 @@ Also in 2.4.0:
   Solana ideas behind it. Older badges get its pages as Tech docs from the server; a
   category the server adds later no longer lands on Events' counts.
 
+Battery:
+
+- **The battery percentage, fixed** (`core/os_battery.c`, `core/battery_calc.c`). Before,
+  every reader (the status bar every second, HW Debug, the updater, app services,
+  Collaborator, Gossip roles, `sys.battery()`) took its own single reading, the mean of 8
+  ADC samples, and drew a straight line from 3.30 V (0 %) to 4.15 V (100 %). Measured on
+  a production badge on USB: one sample varies by 13.7 mV (standard deviation) and up to
+  154 mV with Wi-Fi joined (4.1 / 76 mV with it off), so on battery the number jumped up
+  and down every second with each Wi-Fi burst. Now one filtered reading for the whole OS,
+  made once a second on the OS task: 16 samples with the 4 highest and 4 lowest dropped
+  (6.3 mV / 52 mV with Wi-Fi joined, 1.4 / 8 mV off), the median of the last 9 seconds,
+  a 60-second average, a LiPo curve (Meshtastic's default `OCV_ARRAY`, 4.19 V = 100 %,
+  3.10 V = 0 %, linear between 10 % steps) and a number that only falls while on battery
+  (it starts again from a fresh reading after each time on USB). It reads 0 % at 3.10 V
+  instead of 3.30 V, where the badge still runs.
+- **What the badge can't know** (from the board file): the sense reads VSYS behind the
+  power path (22k/22k), not the cell, so on USB it reads VBUS less a Schottky (~4.8 V) and
+  the cell (charging, full or missing) is out of sight; the MCP73831's STAT pin drives the
+  red (charging) and blue (charged) LEDs only. The status bar shows "USB" and nothing
+  more. The charger is set to 100 mA (PROG 10 kΩ), so a flat 1000 mAh cell needs about
+  10 hours to fill: a badge unplugged after an hour or two reads low, correctly.
+- Thresholds, before (old line) → now (filtered, the curve): 15 % (app services,
+  Collaborator, Gossip roles) 3428 → 3360 mV; 50 % (the server's pick of a Gossip role,
+  from `batt`) 3725 → 3720 mV; 70 % (software update) 3895 → 3890 mV.
+- **Console `batt`**: the reading; `batt noise [s]` (single samples and bursts, mean, sd,
+  spread); `batt log on [s]` appends a line every 60 s (and at every USB change) to
+  `/sdcard/battery.csv` (outside `/sdcard/hh`; uptime, unix time, raw and filtered mV,
+  percent, USB, Wi-Fi, brightness, LED load) until `batt log off` or a restart;
+  `batt log [tail [n]|clear]`. Off by default, nothing kept in RAM. `bsp_battery_percent`
+  is gone; `bsp_battery_read` gives single samples. Host test:
+  `sh main/core/tests/battery_test.sh`.
+
 ## 2.3.0 (unreleased)
 
 C apps, background services with the first two built on them (Mailbox and

@@ -897,7 +897,7 @@ callback, `NULL` is allowed: the call still happens, and nothing runs when it an
 uint32_t sys_millis(void);                 // ms since the app started (no stack: fast)
 uint32_t sys_keys(void);                   // keys held now: KEY_HELD(sys_keys(), KEY_UP) (fast)
 int32_t sys_time(void);                    // unix seconds from the server's clock, 0 if never synced
-int32_t sys_battery(void);                 // percent, -1 on USB or unknown
+int32_t sys_battery(void);                 // percent, -1 on USB or unknown (the status bar's number, filtered)
 int sys_memory(int32_t *used, int32_t *max);   // the whole app: Lua state and WAMR's share ("Limits")
 int32_t sys_tick(int32_t ms);              // on_tick every ms (16..1000, default 30) from now on; the old period (2.3.0)
 void sys_exit(void);

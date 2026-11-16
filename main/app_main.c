@@ -13,6 +13,7 @@
 #include "core/os_bridge.h"
 #include "core/os_mesh.h"
 #include "core/os_ota.h"
+#include "core/os_battery.h"
 #include "core/os_service.h"
 #include "core/console.h"
 #include "lua/lua_host.h"
@@ -62,6 +63,7 @@ void app_main(void)
     if (bsp_battery_init() != ESP_OK) {
         ESP_LOGW(TAG, "battery ADC unavailable");
     }
+    os_battery_init();  // the first reading, before anything asks for the battery
     if (os_wifi_init() != ESP_OK) {
         ESP_LOGE(TAG, "wifi unavailable");
     }

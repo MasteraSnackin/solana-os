@@ -108,11 +108,7 @@ static bool sha256_file(const char *path, uint8_t out[32], size_t *size)
 
 int os_ota_battery(void)
 {
-    int mv = bsp_battery_mv();
-    if (mv < 0) {
-        return -1;
-    }
-    return mv > 4300 ? 100 : bsp_battery_percent(mv);   // over 4.3 V: USB power (the status bar's rule)
+    return os_battery_pct();            // 100 on USB power, the filtered percentage otherwise
 }
 
 // ---------------------------------------------------------------------------
