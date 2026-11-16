@@ -91,6 +91,7 @@ set(SOLANA_OS_SRCS
     game/mailbox.c apps/mailbox/mailbox_app.c lua/lua_mail.c                               # Mailbox (2.3.0)
     game/gossip.c game/gossip_genome.c lua/lua_gossip.c                                  # Gossip, the node service (2.4.0, fw-node)
     game/gossip_role.c lua/lua_gossip_role.c                                             # Gossip roles (2.4.0, fw-roles)
+    game/gossip_role_app.c game/gossip_role_boss.c                                       # Gossip roles: claims, bids, cures; the fight (fw-roles)
     game/collab.c apps/collab/collab_app.c          # Collaborator (2.3.0)
     game/game.c game/xdex.c game/trade.c game/quests.c game/beacon.c
     apps/registry.c

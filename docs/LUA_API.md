@@ -2024,6 +2024,72 @@ gossip.lead(true)             -- the "May become a leader" setting (Settings sho
 The role side (offers, sessions, the boss fight, claims, bids and cures):
 
 <!-- gossip:fw-roles -->
+A badge whose owner turned on Settings > May become a leader can be offered a **role** by
+the server: a second identity it broadcasts for a while (Leader `l`, MEV Bot `m`, Anonymous
+Deployer `a`, Byzantine Leader `z`, the boss). The OS's role service runs it: the station on
+the air, its HELLO tags, answering claims, the boss's metronome. Apps read it and the Lab
+answers the offer or ends it; no app ever holds the role's key or signs for it.
+
+```lua
+-- Reading (any app with gossip, app services too)
+gossip.role()        -- nil, or one of:
+                     --   {offer = {sid, ro, until, left = s to accept by itself | answer = true/false}}
+                     --   {sid, ro, id, n, since, until, left, st = {addresses}, boost, on_air,
+                     --    boss = {bpm, beats, spam} (a boss), block = {{p, by}, ...} (a Leader), tally}
+                     --   {ended = {sid, ro, by, stake, lamps}}   (for 10 minutes after the end)
+gossip.boss()        -- the fight heard nearby, or nil: {id, sid, beat, ms, bpm, fork, p, phase, rssi, real}
+
+-- Acting (the Lab only; others get nil, "lab only"): true, or nil and why
+gossip.role_answer(yes)        -- answer the offer now (it accepts by itself after 30 s): "no offer", "answered"
+gossip.role_end()              -- decline the offer, or end the session: "no role"
+gossip.block({{p = a, by = id}, ...})   -- a Leader's block, <= 4 programs and whose bid each was:
+                                         -- "not a leader", "at most 4 programs", "bad program or id"
+gossip.bids()                  -- a Leader's bids heard, latest per badge (<= 16):
+                               -- {{from, name, p, fee, rssi, age}, ...}, or nil when not a Leader
+gossip.fork()                  -- the boss's owner throws a fork: "not the boss", "no fight", "too soon", "too late"
+gossip.voters()                -- the boss's voters: {voters, conf, fin, p, all, beat, beats, fork, phase}, or nil
+gossip.bid(role, a, fee)       -- bid program a to a Leader near you (fee: queue a Priority Fee Action too):
+                               -- "not near", "not a leader", "bad program", "busy"
+gossip.claim(role, c)          -- "I am here, with this count": the service repeats it until the role
+                               -- answers (on_gossip ack), then uploads it: "not near", "too far", "busy"
+gossip.cure(id)                -- a Validator removes a nearby badge's spam (on_gossip cured):
+                               -- "not a validator", "not near", "curing", "busy"
+gossip.vote(votes, lockout)    -- during a fight: your votes in time and lockout (0-32); the service
+                               -- sends a summary every ~2 s: "no fight near", "over"
+```
+
+- **The offer.** It shows in `gossip.role()` with `left`; the owner is notified ("Gossip: you
+  are up as Leader. Open the Lab, or decline there"), and `on_gossip({t = "role", state =
+  "offer"})` fires. Without an answer the badge accepts after 30 s. Turning the setting off
+  declines it, as does `role_end()`. A badge that is a Collaborator station or a badge
+  beacon at that moment declines by itself (one second identity per badge).
+- **The session.** `id` is the role's id on the air (a station, MESH.md "Gossip"), `n` its
+  name, `st` the program(s) it may gossip (a Leader's block as the server accepted it,
+  10 s each in turn), `since`/`until` server ms. It ends at `until`, by the owner, under
+  15 % battery off USB, when a Collaborator takeover or a badge beacon takes the second
+  identity, or 90 s without a sync; then `{ended = ...}` shows what it paid. Times are unix
+  seconds (`left`: seconds to go), not the contract's server milliseconds: Lua's numbers are
+  32-bit.
+- **Claims.** The role's service answers a claim by itself, at most once per claimant per
+  5 s, and where the role needs closeness (MEV Bot, Anonymous Deployer) only when it hears
+  you at the close range or stronger (Cfg `close`, −55 dBm); `gossip.claim` checks your side
+  first ("too far"). The answer is tagged with the role's key; the server checks it.
+- **The fight.** `gossip.boss()` moves `beat` and `ms` (to the next beat) forward to the
+  moment you read it. `phase`: 0 before the first beat (`ms` counts down to it), 1 the
+  fight, 2 the players rooted the block, 3 the boss won. `fork` is the beat that is a fork
+  (−1 none): a vote on it resets your lockout. `p` is the share of voters now confirmed
+  (0-100); `real` says the server lists that role as live. Vote with SELECT inside ±120 ms
+  of a beat and give the service your count and lockout; at the end it claims for you with
+  `c` = your votes in time (`on_gossip` `ack` when the boss answered).
+- **Events** (`on_gossip(ev)`, the role side): `{t = "role", state = "offer" | "session" |
+  "off" | "declined" | "ended", sid, ro, by?, stake?, lamps?}`; `{t = "boss", id, sid, beat,
+  ms, bpm, fork, p, phase, rssi, real}` at most four a second (the boss's own owner gets
+  `{t = "boss", own = true, sid, phase, voters, fin}` at the end); `{t = "bid", from, name,
+  p, fee, rssi}` (a Leader); `{t = "ack", role, c, r, ok}` (`ok = false`: no answer after
+  7 tries); `{t = "cured", peer, p, ok}` (a Validator; `ok = false`: no answer).
+- **Services** keep `gossip.role` and `gossip.boss`; the acting calls are the Lab's.
+- **Rates.** The service sends at most one `gossip` message a second for the badge (two in a
+  fight) and four for a role, whatever the Lab asks.
 <!-- /gossip:fw-roles -->
 
 ### Build on the badge, sign on a phone

@@ -54,3 +54,27 @@ bool gossip_role_opted_in(void);
 void gossip_role_on_hello(const gossip_hello_t *h);
 
 // ---- end of seam -----------------------------------------------------------
+
+// ---- the role side for lua_gossip_role.c, the console and tests ------------
+//
+// Reads (any task): a malloc'd JSON text the gossip module decodes into a Lua
+// table (free() it), or NULL for nil. Nothing here ever carries the role key.
+char *gossip_role_state_json(void);     // gossip.role(): this badge's offer, session or last end
+char *gossip_role_boss_json(void);      // gossip.boss(): the fight heard nearby
+char *gossip_role_bids_json(void);      // gossip.bids(): a Leader's bids (array)
+char *gossip_role_voters_json(void);    // gossip.voters(): a boss's voter counts
+
+// Acting (any task; the Lab's calls): NULL when done or queued, else why not
+// ("not a leader", "too far", "busy" ...), a short ASCII text.
+typedef struct {
+    char p[GOSSIP_ADDR_MAX + 1];
+    char by[8];
+} gossip_role_pick_t;
+const char *gossip_role_bid(const char *role, const char *addr, bool fee);
+const char *gossip_role_claim(const char *role, int c);
+const char *gossip_role_cure(const char *id);
+const char *gossip_role_vote(int votes, int lockout);
+const char *gossip_role_answer(bool yes);
+const char *gossip_role_end(void);
+const char *gossip_role_block(const gossip_role_pick_t *picks, int n);
+const char *gossip_role_fork(void);

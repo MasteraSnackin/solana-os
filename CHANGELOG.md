@@ -41,6 +41,36 @@ HELLO takes extra fields (`os_mesh_hello_extra`) and a station's HELLO can be re
 Roles:
 
 <!-- gossip:fw-roles -->
+- **Roles** (`game/gossip_role.c`, `gossip_role_app.c`, `gossip_role_boss.c`): a badge
+  whose owner turned on May become a leader takes the server's offer (it accepts by itself
+  after 30 s unless declined) and puts the role on the air as a second identity, a station
+  with the role HELLO of GOSSIP.md §4 tagged with the session's role key, a Leader's block
+  turning every 10 s. It ends at `until`, by the owner, under 15 % off USB, when a
+  Collaborator takeover or a badge beacon needs the second identity (`busy`), or 90 s
+  without a sync, and reports how through the node service's sync. Never more than the
+  badge's id and one other per MAC.
+- **The `gossip` app id** (MESH.md "Gossip"): the OS's own APP messages, through one
+  subscriber that only copies on the mesh task (a 24-entry ring in PSRAM) and parses on
+  the OS task. `claim`/`ack` both ways (the role answers by itself, once per claimant per
+  5 s, at the close range where the role needs it), `bid` to a Leader (≤ 16 kept),
+  `cure`/`cured` (every badge answers a Validator when it holds a listed spam program,
+  signed with its mesh key), and the boss fight: the metronome and its `boss` broadcast
+  twice a second, fork beats (one in eight), a voter table of ≤ 160 in PSRAM, the 2/3
+  finalized win, the report; players follow it, send a vote summary every ~2 s and claim
+  at the end. Sends keep GOSSIP.md §4's rates (a badge 1 a second, 2 in a fight; a role 4).
+- **`gossip` module, role side** (`lua/lua_gossip_role.c`): `role`, `boss` (apps and
+  services), and the Lab's `role_answer`, `role_end`, `block`, `bids`, `fork`, `voters`,
+  `bid`, `claim`, `cure`, `vote`; `on_gossip` events `role`, `boss`, `bid`, `ack`,
+  `cured`. C: `gossip_role`, `gossip_boss`, ... in `badge.h`.
+- **Console** `grole` (status, counters, the fight's beat jitter) and a RAM-only test
+  mode (`grole test on`) that stands in for the node service and the server: one sync
+  round with a given RoleState, a class, a held spam program, a close range, and a vote
+  flood for fan-in measurements. Tests: `main/lua/tests/gossip-role/run.ts` (four
+  emulated badges and a fake server), `tests/t-gossip-role`.
+- Measured on two production badges side by side (−41 dBm): the beat a player predicts
+  from one `boss` broadcast to the next moves by 0 ms on average, 3 ms at most; votes from
+  one badge into a boss at up to 200 a second all arrived (no radio queue or ring drops);
+  a boss session costs ~0.3 KB of SRAM and ~6 KB of PSRAM.
 <!-- /gossip:fw-roles -->
 
 ## 2.3.0 (unreleased)

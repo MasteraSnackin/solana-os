@@ -1276,6 +1276,34 @@ gossip_public(1);       gossip_lead(1);
 The role side:
 
 <!-- gossip:fw-roles -->
+```c
+gossip_role_t r;
+if (gossip_role(&r) == 1 && !strcmp(r.kind, "offer")) {   // "offer", "session", "ended"
+    // r.ro, r.left (seconds before it accepts by itself) ...
+    gossip_role_answer(1);                     // or gossip_role_end() to decline
+}
+gossip_boss_t b;
+if (gossip_boss(&b) == 1 && b.phase == 1) {    // the fight heard nearby, beat/ms moved to now
+    gossip_vote(votes, lockout);               // the OS sends a summary every ~2 s
+}
+void on_gossip(void) { /* badge_arg(1): {t = "boss", ...}: gossip_boss_arg(&b) */ }
+```
+
+| Function | Lua | Returns |
+|---|---|---|
+| `gossip_role(&r)` | `gossip.role()` | 1 filled, 0 none. `r.kind` `""`/`"offer"`/`"session"`/`"ended"`; `since`, `until` unix seconds, `left` seconds |
+| `gossip_boss(&b)`, `gossip_boss_arg(&b)` | `gossip.boss()`, an `on_gossip` `boss` event | 1 filled, 0 none (`gossip_boss_arg` in `on_gossip`) |
+| `gossip_voters(&v)` | `gossip.voters()` | 1 while this badge is the boss, else 0 |
+| `gossip_bids(out, max)` | `gossip.bids()` | how many filled (`gossip_bid_t`), 0 when not a Leader |
+| `gossip_role_answer(yes)`, `gossip_role_end()` | `gossip.role_answer`, `gossip.role_end` | 0, or `BADGE_ERR` with `badge_error()` |
+| `gossip_bid(role, addr, fee)`, `gossip_claim(role, c)`, `gossip_cure(id)` | the same | 0 or `BADGE_ERR` |
+| `gossip_vote(votes, lockout)`, `gossip_fork()` | the same | 0 or `BADGE_ERR` |
+| `gossip_block(picks, n)` | `gossip.block` | 0 or `BADGE_ERR` (`gossip_pick_t {p, by}`, ≤ 4) |
+
+The rules are the Lua reference's: `gossip_role` and `gossip_boss` for any app with
+`gossip` and in a service; the rest for the Lab (`gossip-lab`) only, others get
+`BADGE_ERR` and `"lab only"` (`gossip_bids` and `gossip_voters` return `BADGE_ERR` too).
+Nothing here blocks or reaches the server; the role key never reaches the app.
 <!-- /gossip:fw-roles -->
 
 ### `service` (permission `background`, Solana OS 2.3.0, [Lua](LUA_API.md#service-permission-background-solana-os-230))
