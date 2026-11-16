@@ -757,7 +757,6 @@ static void verify_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static void key_fetch(void);
 
 // OS task: start the checker on the records waiting, if it isn't running.
 static void verify_kick(void)
@@ -1307,6 +1306,30 @@ static int peers_near(void)
     return n;
 }
 
+// Under the lock: a program shown as exposed or incubating whose record left
+// the queue without an outcome (dropped when 64 waited, or acknowledged with
+// none) is heard again from zero, never stuck.
+static void hear_orphans(void)
+{
+    for (int i = 0; i < HEAR_MAX; i++) {
+        hear_t *h = &S->hear[i];
+        if (!h->a[0] || h->state == ST_HEARING) {
+            continue;
+        }
+        bool queued = false;
+        for (int k = 0; k < S->nrec && !queued; k++) {
+            queued = S->rec[k].n == h->rec_n;
+        }
+        if (!queued) {
+            h->state = ST_HEARING;
+            h->exp = 0;
+            h->secs = 0;
+            h->best = -127;
+            h->rec_n = 0;
+        }
+    }
+}
+
 static void sync_soon_now(void)
 {
     s_soon = true;
@@ -1355,6 +1378,7 @@ static void exposed(hear_t *h, int64_t srv)
     S->nrec++;
     h->state = ST_EXPOSED;
     h->rec_n = s_rn;
+    hear_orphans();             // the one dropped, if any
     unlock();
     s_rn++;
     nvs_set("rn", s_rn);
@@ -1997,6 +2021,7 @@ static void on_sync(int status, const char *body, void *ctx)
         S->act_q[i].sent = false;
     }
     card_dirty = S->nrec + S->nact != before;
+    hear_orphans();
     // Exposed programs whose record went out are incubating now (§5).
     for (int i = 0; i < HEAR_MAX; i++) {
         if (S->hear[i].a[0] && S->hear[i].state == ST_EXPOSED) {
@@ -2332,6 +2357,8 @@ void gossip_tick(int64_t now)
         s_epoch = ep;
         if (!first) {
             ESP_LOGI(TAG, "a new owner or a wiped card: starting over");
+            os_api_cancel(s_tok);       // its answer is the previous owner's
+            s_tok = NULL;
             forget_all();
             load_all();
             s_extra[0] = 0;
