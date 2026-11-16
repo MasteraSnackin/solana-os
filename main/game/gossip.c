@@ -321,12 +321,15 @@ int64_t gossip_server_ms(void)
 // ---------------------------------------------------------------------------
 // Cfg (§7) and its defaults
 
+// Before the first sync's Cfg: the server's tuned defaults (its simulator
+// found the contract's first numbers spread one program through a third of a
+// 500-badge hall in five minutes). After it, always the Cfg the server sent.
 static void cfg_defaults(gossip_cfg_t *c)
 {
-    static const int rssi[4] = {-50, -60, -70, -80}, wt[4] = {10, 6, 3, 1};
+    static const int rssi[4] = {-50, -60, -70, -80}, wt[4] = {10, 5, 1, 0};
     memset(c, 0, sizeof(*c));
-    c->thr = 100;
-    c->decay = 2;
+    c->thr = 6000;
+    c->decay = 10;
     memcpy(c->wt_rssi, rssi, sizeof(rssi));
     memcpy(c->wt, wt, sizeof(wt));
     c->offpeak_from = c->offpeak_to = -1;
@@ -355,8 +358,9 @@ static void cfg_parse(const cJSON *j, gossip_cfg_t *c)
     if (!cJSON_IsObject(j)) {
         return;
     }
-    c->thr = jint(j, "thr", 100, 1, 100000);
-    c->decay = jint(j, "decay", 2, 0, 100000);
+    // Bounded so exposure ×W_SCALE stays inside int32 (thr ≤ 1e6 → 1e9).
+    c->thr = jint(j, "thr", 6000, 1, 1000000);
+    c->decay = jint(j, "decay", 10, 0, 1000000);
     const cJSON *wt = cJSON_GetObjectItem(j, "wt");
     if (cJSON_IsArray(wt) && cJSON_GetArraySize(wt) >= 1) {
         int n = 0;
@@ -1206,11 +1210,14 @@ static void hear(const char *a, const char *from, const char *g, int boost, int 
         for (int i = 0; i < HEAR_MAX && !h; i++) {
             if (!S->hear[i].a[0]) {
                 h = &S->hear[i];
-            } else if (S->hear[i].state == ST_HEARING && (!lru || S->hear[i].last_ms < lru->last_ms)) {
+            } else if (S->hear[i].state == ST_HEARING && now - S->hear[i].last_ms > HEARD_MS
+                       && (!lru || S->hear[i].last_ms < lru->last_ms)) {
                 lru = &S->hear[i];
             }
         }
-        h = h ? h : lru;        // never one already exposed
+        // Never one already exposed, never one heard in the last 5 s: with
+        // all eight fresh, a new program waits until one goes quiet.
+        h = h ? h : lru;
         if (!h) {
             return;
         }
@@ -1394,12 +1401,13 @@ static void second(int64_t now)
             h->peers = (uint8_t)(peers > 255 ? 255 : peers);
             int32_t w = weight(h, peers, srv);
             h->last_w = w;
-            h->exp += w;
+            h->exp = h->exp > INT32_MAX - w ? INT32_MAX : h->exp + w;
             if (w > 0 && h->secs < 0xFFFF) {
                 h->secs++;
             }
         } else if (gg_has_trait(&h->gen, 4) && quiet <= DURABLE_MS) {
-            h->exp += h->last_w;        // Durable nonce: at the last weight for 10 min
+            // Durable nonce: at the last weight for 10 min.
+            h->exp = h->exp > INT32_MAX - h->last_w ? INT32_MAX : h->exp + h->last_w;
         } else {
             int32_t d = S->cfg.decay * W_SCALE;
             h->exp = h->exp > d ? h->exp - d : 0;
@@ -1408,7 +1416,7 @@ static void second(int64_t now)
             }
         }
         unlock();
-        if (h->a[0] && h->exp >= S->cfg.thr * W_SCALE) {
+        if (h->a[0] && (int64_t)h->exp >= (int64_t)S->cfg.thr * W_SCALE) {
             exposed(h, srv);
         }
     }
@@ -1718,18 +1726,11 @@ static void out_ack(out_t *q, int *n, uint32_t ack, const cJSON *res, bool recor
 {
     int k = 0;
     for (int i = 0; i < *n; i++) {
-        bool keep = q[i].n > ack;
-        if (!keep && records) {
-            // `cool`: the record stays for the next sync (§6 step 3).
-            const cJSON *o;
-            cJSON_ArrayForEach(o, res) {
-                const char *r = cJSON_GetStringValue(cJSON_GetObjectItem(o, "r"));
-                if (jint(o, "n", -1, -1, INT32_MAX) == (int)q[i].n && r && !strcmp(r, "cool")) {
-                    keep = true;
-                }
-            }
-        }
-        if (keep) {
+        // Only `ack` removes: a cooled record and everything after it stay
+        // unacknowledged, in order, for a later sync (§6 step 3, §7).
+        (void)res;
+        (void)records;
+        if (q[i].n > ack) {
             q[k++] = q[i];
         } else {
             free(q[i].json);
@@ -2011,8 +2012,15 @@ static void on_sync(int status, const char *body, void *ctx)
     if (node_dirty) {
         node_save();
     }
+    // More waiting goes 5 s later, but only while the server is taking it:
+    // an answer that acknowledged nothing new (a cooldown holds the records,
+    // up to 20 min) goes back to the normal cadence.
     lock();
-    bool more = S->nrec > 8 || S->nact > 0 || S->npending > 0;
+    bool took = S->nrec + S->nact < before;
+    bool more = S->npending > 0 || (took && (S->nrec > 0 || S->nact > 0));
+    if (!took && S->npending == 0) {
+        s_soon = false;
+    }
     unlock();
     s_next_sync = now + (more ? SYNC_GAP_MS : sync_interval());
     verify_kick();
@@ -2509,6 +2517,16 @@ char *gossip_programs_json(void)
     return print_free(o);
 }
 
+// Lua on the badge has 32-bit numbers: server milliseconds (1.8e12) would
+// arrive rounded by minutes. Apps get the Node's times as unix seconds.
+static void ms_to_s(cJSON *o, const char *k)
+{
+    cJSON *v = cJSON_GetObjectItem(o, k);
+    if (cJSON_IsNumber(v)) {
+        cJSON_SetNumberValue(v, (double)(int64_t)(v->valuedouble / 1000));
+    }
+}
+
 char *gossip_me_json(void)
 {
     if (!S || !s_claimed) {
@@ -2525,12 +2543,21 @@ char *gossip_me_json(void)
         cJSON_Delete(o);
         o = cJSON_CreateObject();       // no Node yet: the badge's own fields alone
     }
+    ms_to_s(o, "clsAt");
+    ms_to_s(cJSON_GetObjectItem(o, "epoch"), "ends");
+    cJSON *e;
+    cJSON_ArrayForEach(e, cJSON_GetObjectItem(o, "fx")) {
+        ms_to_s(e, "until");
+    }
+    cJSON_ArrayForEach(e, cJSON_GetObjectItem(o, "imm")) {
+        ms_to_s(e, "until");
+    }
     cJSON_DeleteItemFromObject(o, "id");
     cJSON_AddStringToObject(o, "id", s_id);
     cJSON_DeleteItemFromObject(o, "on");
     cJSON_AddBoolToObject(o, "on", gossip_on());
     cJSON_DeleteItemFromObject(o, "synced");
-    cJSON_AddNumberToObject(o, "synced", (double)s_synced);
+    cJSON_AddNumberToObject(o, "synced", (double)(s_synced / 1000));
     cJSON_DeleteItemFromObject(o, "incubating");
     cJSON_AddNumberToObject(o, "incubating", inc);
     return print_free(o);
@@ -2620,7 +2647,7 @@ char *gossip_hearing_json(void)
         }
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "a", h->a);
-        int pct = h->state != ST_HEARING ? 100 : (int)(h->exp * 100 / (thr ? thr : 1));
+        int pct = h->state != ST_HEARING ? 100 : (int)((int64_t)h->exp * 100 / (thr ? thr : 1));
         cJSON_AddNumberToObject(o, "pct", pct > 100 ? 100 : pct);
         cJSON_AddStringToObject(o, "state", states[h->state <= ST_INCUBATING ? h->state : 0]);
         cJSON_AddStringToObject(o, "from", h->from);
@@ -2633,6 +2660,89 @@ char *gossip_hearing_json(void)
 
 // ---------------------------------------------------------------------------
 // Console: gossip [status|peers|progs|sync|on|off]
+
+// `gossip bench`: what the OS task spends on 20 peers' HELLOs and a full
+// hearing table, measured with made-up peers (ids ZZ00..ZZ19, a vector's
+// program, a bad tag: nothing of it reaches the server), then put back.
+static void bench(void)
+{
+    static const char *const addrs[3] = {"59qkXRBPMBADVrovwJYTsqXF21MvW9YYSGofQneQMruo",
+                                         "G2QqkHaYPwAg64t6soMZvrDDT48gH3SF8DYsfutQ2JWC",
+                                         "31UFvJfpgAT4Paado1LNpEor9LL5DXMFAiCYzE2j5Cdj"};
+    state_t *save = heap_caps_malloc(sizeof(*S), os_mem_bulk_caps());
+    hop_t *hop = heap_caps_malloc(sizeof(hop_t), os_mem_bulk_caps());
+    if (!save || !hop) {
+        heap_caps_free(save);
+        heap_caps_free(hop);
+        printf("gossip bench: no memory\n");
+        return;
+    }
+    lock();
+    memcpy(save, S, sizeof(*S));
+    memset(S->hear, 0, sizeof(S->hear));
+    S->nslots = S->ninbox = S->nfx = S->nimm = S->ndone = 0;
+    S->act[0] = 0;
+    unlock();
+    bool was_run = s_run, was_claimed = s_claimed;
+    s_run = s_claimed = true;
+    int64_t t0 = esp_timer_get_time();
+    for (int i = 0; i < 20; i++) {
+        memset(hop, 0, sizeof(*hop));
+        snprintf(hop->id, sizeof(hop->id), "ZZ%02d", i);
+        hop->rssi = (int8_t)(-45 - i * 2);
+        snprintf(hop->json, sizeof(hop->json),
+                 "{\"k\":\"b\",\"n\":\"@bench%02d\",\"lv\":%d,\"st\":\"%s\",\"g\":\"r%d.%lld.0123456789abcdef\"}", i, i,
+                 addrs[i % 3], i % 10, (long long)(gossip_server_ms() / 30000));
+        hello_one(hop);
+    }
+    int64_t t1 = esp_timer_get_time();
+    // Fill all eight entries, then the once-a-second maths, 100 times.
+    lock();
+    for (int i = 0; i < HEAR_MAX; i++) {
+        uint8_t b[32], a[32];
+        gg_b58_decode32(addrs[i % 3], b);
+        a[0] = (uint8_t)i;
+        memcpy(a + 1, b + 1, 31);
+        hear_t *h = &S->hear[i];
+        memset(h, 0, sizeof(*h));
+        gg_b58_encode32(a, h->a);
+        gg_decode(a, &h->gen);
+        strlcpy(h->from, "ZZ00", sizeof(h->from));
+        h->rssi = (int8_t)(-50 - i * 3);
+        h->best = h->rssi;
+        h->boost = (uint8_t)(i % 4);
+        h->last_ms = now_ms();
+    }
+    S->cfg.thr = 1000000;           // nobody gets exposed meanwhile
+    unlock();
+    int64_t t2 = esp_timer_get_time();
+    for (int k = 0; k < 100; k++) {
+        second(now_ms());
+    }
+    int64_t t3 = esp_timer_get_time();
+    // The tag of the badge's own HELLO, as spread() makes it on a change.
+    char msg[120], tag[OS_MESH_TAG_LEN + 1];
+    gg_tag_msg(msg, sizeof(msg), s_id[0] ? s_id : "ZZ0000", addrs[0], 59000000, 'r', 0);
+    int64_t t4 = esp_timer_get_time();
+    bool signed_ok = os_mesh_sign(msg, tag);
+    int64_t t5 = esp_timer_get_time();
+    lock();
+    memcpy(S, save, sizeof(*S));
+    for (int i = 0; i < PEER_MAX; i++) {
+        if (!strncmp(S->peer[i].id, "ZZ", 2)) {
+            memset(&S->peer[i], 0, sizeof(S->peer[i]));
+        }
+    }
+    unlock();
+    s_run = was_run;
+    s_claimed = was_claimed;
+    heap_caps_free(save);
+    heap_caps_free(hop);
+    printf("gossip bench: 20 HELLOs parsed in %lld us (%lld us each); a second's maths over 8 programs %lld us; "
+           "the HELLO tag %lld us%s\n",
+           (long long)(t1 - t0), (long long)((t1 - t0) / 20), (long long)((t3 - t2) / 100), (long long)(t5 - t4),
+           signed_ok ? "" : " (no mesh key)");
+}
 
 static void cmd_run(void *arg)
 {
@@ -2651,6 +2761,10 @@ static void cmd_run(void *arg)
         char *s = gossip_nearby_json();
         printf("gossip peers: %s\n", s ? s : "[]");
         cJSON_free(s);
+        free(line);
+        return;
+    } else if (!strcmp(line, "bench")) {
+        bench();
         free(line);
         return;
     } else if (!strcmp(line, "progs")) {

@@ -3417,6 +3417,369 @@ static inline int service_notify(const char *text, uint32_t led)
 // ============================================================================
 
 /* gossip:fw-node */
+// Reading (any app with "gossip", services too). Times are unix seconds.
+
+#define GOSSIP_ADDR 45      // a base58 address and its NUL
+
+typedef struct {
+    char id[8];             // this badge
+    int on;                 // gossip runs (Settings > Gossip, claimed)
+    int32_t synced;         // the last sync, 0 = none since the badge started
+    int32_t incubating;     // programs exposed, waiting for the server
+    char cls;               // 'r' RPC Node, 'v' Validator, 'i' Indexer, 'b' Builder, 0 none
+    int32_t cls_at;         // when the class may change again
+    int32_t stake, rank, credits;       // rank 0 Localnet .. 3 Mainnet
+    int32_t held, deployed, deploys, adopted, boost, items_n;
+    int32_t nslots, ninbox;
+    char act[GOSSIP_ADDR];  // the program it gossips, "" none
+    int pub;                // shown on the Network board
+    int earns;
+    char why[72];           // when it doesn't earn: why
+} gossip_me_t;
+
+// The node: 0, or BADGE_ERR while the badge is unclaimed ("not linked").
+static inline int gossip_me(gossip_me_t *out)
+{
+    memset(out, 0, sizeof *out);
+    badge__fn("gossip.me");
+    if (badge__call(0, 1)) {
+        return BADGE_ERR;
+    }
+    badge_val m = badge_top();
+    int ok = badge_type(m) == SOS_TABLE;
+    if (ok) {
+        char c[2];
+        badge_field_str(m, "id", out->id, sizeof out->id);
+        out->on = badge_field_bool(m, "on");
+        out->synced = badge_field_int(m, "synced", 0);
+        out->incubating = badge_field_int(m, "incubating", 0);
+        out->cls = badge_field_str(m, "cls", c, sizeof c) == 1 ? c[0] : 0;
+        out->cls_at = badge_field_int(m, "clsAt", 0);
+        out->stake = badge_field_int(m, "stake", 0);
+        out->rank = badge_field_int(m, "rank", 0);
+        out->credits = badge_field_int(m, "credits", 0);
+        out->held = badge_field_int(m, "held", 0);
+        out->deployed = badge_field_int(m, "deployed", 0);
+        out->deploys = badge_field_int(m, "deploys", 0);
+        out->adopted = badge_field_int(m, "adopted", 0);
+        out->boost = badge_field_int(m, "boost", 0);
+        out->items_n = badge_field_int(m, "itemsN", 0);
+        badge_val s = badge_push_field(m, "slots");
+        out->nslots = (int32_t)badge_len(s);
+        sos_pop(1);
+        s = badge_push_field(m, "inbox");
+        out->ninbox = (int32_t)badge_len(s);
+        sos_pop(1);
+        badge_field_str(m, "act", out->act, sizeof out->act);
+        out->pub = badge_field_bool(m, "pub");
+        out->earns = badge_field_bool(m, "earns");
+        badge_field_str(m, "why", out->why, sizeof out->why);
+    } else {
+        badge__seterr("not linked");
+    }
+    sos_pop(1);
+    return ok ? 0 : BADGE_ERR;
+}
+
+// The whole Node (with items, effects, immunity and objectives) as JSON:
+// its length, or BADGE_ERR.
+static inline int32_t gossip_me_json(char *buf, uint32_t cap)
+{
+    badge__fn("gossip.me");
+    if (badge__call(0, 1)) {
+        return BADGE_ERR;
+    }
+    if (sos_type(-1) != SOS_TABLE) {
+        sos_pop(1);
+        badge__seterr("not linked");
+        return BADGE_ERR;
+    }
+    return badge__encode_top(buf, cap);
+}
+
+enum { GOSSIP_COMMON, GOSSIP_RARE, GOSSIP_EPIC, GOSSIP_LEGENDARY };
+
+// A program: its genome (docs/GOSSIP.md §3) and, from its record, the rest.
+typedef struct {
+    char a[GOSSIP_ADDR];
+    char par[GOSSIP_ADDR];  // "" for a root (or no record)
+    char name[17];          // "" unnamed
+    int32_t gen;            // generation, 0 for a root
+    int32_t nodes;          // adoptions, -1 when not known
+    int verified;           // the record's signature checked
+    int spam;
+    uint32_t colour;        // 0xRRGGBB, also the LED colour
+    int32_t hue, body, eyes, marks, mark_seed;
+    int32_t traits[3], ntraits;     // 0 Gossip-native .. 5 Off-peak
+    int32_t vir, hard, stab;        // 1..10
+    int32_t rarity;                 // GOSSIP_COMMON .. GOSSIP_LEGENDARY
+} gossip_program_t;
+
+static inline void badge__gossip_prog(badge_val p, gossip_program_t *out)
+{
+    static const char *const rar[] = {"common", "rare", "epic", "legendary"};
+    char r[12];
+    memset(out, 0, sizeof *out);
+    badge_field_str(p, "a", out->a, sizeof out->a);
+    badge_field_str(p, "par", out->par, sizeof out->par);
+    badge_field_str(p, "name", out->name, sizeof out->name);
+    out->gen = badge_field_int(p, "gen", 0);
+    out->nodes = badge_field_int(p, "nodes", -1);
+    out->verified = badge_field_bool(p, "verified");
+    out->spam = badge_field_bool(p, "spam");
+    out->colour = (uint32_t)badge_field_int(p, "colour", 0);
+    out->hue = badge_field_int(p, "hue", 0);
+    out->body = badge_field_int(p, "body", 0);
+    out->eyes = badge_field_int(p, "eyes", 0);
+    out->marks = badge_field_int(p, "marks", 0);
+    out->mark_seed = badge_field_int(p, "mark_seed", 0);
+    badge_val t = badge_push_field(p, "traits");
+    out->ntraits = (int32_t)badge_len(t);
+    for (int i = 0; i < out->ntraits && i < 3; i++) {
+        out->traits[i] = badge_int(badge_push_index(t, i));
+        sos_pop(1);
+    }
+    sos_pop(1);
+    out->vir = badge_field_int(p, "vir", 0);
+    out->hard = badge_field_int(p, "hard", 0);
+    out->stab = badge_field_int(p, "stab", 0);
+    badge_field_str(p, "rarity", r, sizeof r);
+    for (int i = 0; i < 4; i++) {
+        if (!strcmp(r, rar[i])) {
+            out->rarity = i;
+        }
+    }
+}
+
+static inline int badge__gossip_one(int nargs, gossip_program_t *out, const char *missing)
+{
+    if (badge__call(nargs, 1)) {
+        return BADGE_ERR;
+    }
+    int ok = sos_type(-1) == SOS_TABLE;
+    if (ok) {
+        badge__gossip_prog(badge_top(), out);
+    } else {
+        memset(out, 0, sizeof *out);
+        badge__seterr(missing);
+    }
+    sos_pop(1);
+    return ok ? 0 : BADGE_ERR;
+}
+
+// A program this badge holds a record of: 0, or BADGE_ERR ("unknown").
+static inline int gossip_program(const char *a, gossip_program_t *out)
+{
+    badge__fn("gossip.program");
+    sos_push_cstr(a ? a : "");
+    return badge__gossip_one(1, out, "unknown");
+}
+
+// Any address's genome alone (pure): 0, or BADGE_ERR ("bad address").
+static inline int gossip_genome(const char *a, gossip_program_t *out)
+{
+    badge__fn("gossip.genome");
+    sos_push_cstr(a ? a : "");
+    return badge__gossip_one(1, out, "bad address");
+}
+
+// Slot i (0-based) or inbox entry i: 1 with *out filled, 0 when the slot is
+// empty or past the end, BADGE_ERR on an error. Slots and the inbox count are
+// in gossip_me (nslots, ninbox).
+static inline int badge__gossip_held(const char *which, int i, gossip_program_t *out)
+{
+    memset(out, 0, sizeof *out);
+    badge__fn("gossip.programs");
+    if (badge__call(0, 1)) {
+        return BADGE_ERR;
+    }
+    int got = 0;
+    if (sos_type(-1) == SOS_TABLE) {
+        badge_val l = badge_push_field(badge_top(), which);
+        if (i >= 0 && i < (int)badge_len(l)) {
+            badge_val p = badge_push_index(l, i);
+            if (badge_type(p) == SOS_TABLE) {
+                badge__gossip_prog(p, out);
+                got = 1;
+            }
+            sos_pop(1);
+        }
+        sos_pop(1);
+    }
+    sos_pop(1);
+    return got;
+}
+static inline int gossip_slot(int i, gossip_program_t *out)
+{
+    return badge__gossip_held("slots", i, out);
+}
+static inline int gossip_inbox(int i, gossip_program_t *out)
+{
+    return badge__gossip_held("inbox", i, out);
+}
+
+typedef struct {
+    char id[8];
+    char name[25];
+    int role;               // a role identity (Leader, MEV Bot, ...), not a badge
+    char ro;                // its role: 'l', 'm', 'a', 'z'; 0 for a badge
+    int real;               // the server lists that role as live
+    char cls;               // 'r','v','i','b', 0 none or not heard
+    int32_t rssi;
+    char st[GOSSIP_ADDR];   // the program it gossips, "" none
+    int32_t boost;
+} gossip_peer_t;
+
+// The radar, strongest first: how many (<= 20), or BADGE_ERR.
+static inline int gossip_nearby(gossip_peer_t *out, int max)
+{
+    badge__fn("gossip.nearby");
+    if (badge__call(0, 1)) {
+        return BADGE_ERR;
+    }
+    badge_val t = badge_top();
+    int n = (int)badge_len(t);
+    for (int i = 0; i < n && i < max; i++) {
+        badge_val p = badge_push_index(t, i);
+        gossip_peer_t *o = &out[i];
+        char k[8], c[2];
+        memset(o, 0, sizeof *o);
+        badge_field_str(p, "id", o->id, sizeof o->id);
+        badge_field_str(p, "name", o->name, sizeof o->name);
+        badge_field_str(p, "kind", k, sizeof k);
+        o->role = !strcmp(k, "role");
+        o->ro = badge_field_str(p, "role", c, sizeof c) == 1 ? c[0] : 0;
+        o->real = badge_field_bool(p, "real");
+        o->cls = badge_field_str(p, "class", c, sizeof c) == 1 ? c[0] : 0;
+        o->rssi = badge_field_int(p, "rssi", 0);
+        badge_field_str(p, "st", o->st, sizeof o->st);
+        o->boost = badge_field_int(p, "boost", 0);
+        sos_pop(1);
+    }
+    sos_pop(1);
+    return n;
+}
+
+enum { GOSSIP_HEARING, GOSSIP_EXPOSED, GOSSIP_INCUBATING };
+typedef struct {
+    char a[GOSSIP_ADDR];
+    int32_t pct;            // 0..100 of the way to exposed
+    int32_t state;          // GOSSIP_HEARING, GOSSIP_EXPOSED, GOSSIP_INCUBATING
+    char from[8];
+    int32_t rssi;
+} gossip_heard_t;
+
+// The programs being heard (<= 8): how many, or BADGE_ERR.
+static inline int gossip_hearing(gossip_heard_t *out, int max)
+{
+    badge__fn("gossip.hearing");
+    if (badge__call(0, 1)) {
+        return BADGE_ERR;
+    }
+    badge_val t = badge_top();
+    int n = (int)badge_len(t);
+    for (int i = 0; i < n && i < max; i++) {
+        badge_val p = badge_push_index(t, i);
+        char st[12];
+        badge_field_str(p, "a", out[i].a, sizeof out[i].a);
+        out[i].pct = badge_field_int(p, "pct", 0);
+        badge_field_str(p, "state", st, sizeof st);
+        out[i].state = !strcmp(st, "incubating") ? GOSSIP_INCUBATING : !strcmp(st, "exposed") ? GOSSIP_EXPOSED : GOSSIP_HEARING;
+        badge_field_str(p, "from", out[i].from, sizeof out[i].from);
+        out[i].rssi = badge_field_int(p, "rssi", 0);
+        sos_pop(1);
+    }
+    sos_pop(1);
+    return n;
+}
+
+// In on_gossip(): the event (badge_arg(1)) as JSON, and its kind ("exposed",
+// "result", "node", "event", and the role side's), each a length or BADGE_ERR.
+static inline int32_t gossip_event_json(char *buf, uint32_t cap)
+{
+    return json_encode(badge_arg(1), buf, cap);
+}
+static inline int32_t gossip_event_kind(char *buf, uint32_t cap)
+{
+    return badge_field_str(badge_arg(1), "t", buf, cap);
+}
+
+// Acting: the Lab (gossip-lab) only; elsewhere BADGE_ERR "lab only". Each
+// queues an action for the next sync: 0, or BADGE_ERR ("busy" with 4
+// waiting, "gossip is off", or the argument that's wrong). The answer comes
+// as on_gossip {t = "result"}. Slots are 0-based here (1-based in Lua).
+static inline int gossip_set_class(char c)
+{
+    char s[2] = {c, 0};
+    badge__fn("gossip.set_class");
+    sos_push_cstr(s);
+    return badge__call_ok(1);
+}
+static inline int gossip_activate(const char *a)
+{
+    badge__fn("gossip.activate");
+    sos_push_cstr(a ? a : "");
+    return badge__call_ok(1);
+}
+static inline int gossip_place(const char *a, int slot)
+{
+    badge__fn("gossip.place");
+    sos_push_cstr(a ? a : "");
+    sos_push_int(slot + 1);
+    return badge__call_ok(2);
+}
+static inline int gossip_drop(int slot)
+{
+    badge__fn("gossip.drop");
+    sos_push_int(slot + 1);
+    return badge__call_ok(1);
+}
+// item: a Deploy Buffer's or Genesis Relic's id, or NULL for the free deploy.
+static inline int gossip_deploy(const char *item)
+{
+    badge__fn("gossip.deploy");
+    if (item) {
+        sos_push_cstr(item);
+    }
+    return badge__call_ok(item ? 1 : 0);
+}
+// p, q: programs or NULL; trait: 0..5 or -1.
+static inline int gossip_use(const char *item, const char *p, const char *q, int trait)
+{
+    badge__fn("gossip.use");
+    sos_push_cstr(item ? item : "");
+    sos_new_table();
+    if (p) {
+        badge__sets("p", p);
+    }
+    if (q) {
+        badge__sets("q", q);
+    }
+    if (trait >= 0) {
+        badge__seti("trait", trait);
+    }
+    return badge__call_ok(2);
+}
+static inline int gossip_name(const char *a, const char *text)
+{
+    badge__fn("gossip.name");
+    sos_push_cstr(a ? a : "");
+    sos_push_cstr(text ? text : "");
+    return badge__call_ok(2);
+}
+static inline int gossip_public(int on)
+{
+    badge__fn("gossip.public");
+    sos_push_bool(on);
+    return badge__call_ok(1);
+}
+// The "May become a leader" setting.
+static inline int gossip_lead(int on)
+{
+    badge__fn("gossip.lead");
+    sos_push_bool(on);
+    return badge__call_ok(1);
+}
 /* /gossip:fw-node */
 
 // The role side:

@@ -81,7 +81,10 @@ type Badge = { id: string; hw: string; secret: string; key: string; node: Node; 
 
 const tag = (keyHex: string, s: string) => createHmac('sha256', Buffer.from(keyHex, 'hex')).update(s).digest('hex').slice(0, 16);
 
-export function startFake(port: number, opts: { thr?: number; next?: number } = {}) {
+// coolOnce: the first sync carrying records answers the first `cool` and
+// settles nothing (ack stays below it), as a node in its cooldown (§6 step 3).
+export function startFake(port: number, opts: { thr?: number; next?: number; coolOnce?: boolean } = {}) {
+	let cooled = false;
 	const badges = new Map<string, Badge>();         // by id
 	const records = new Map<string, Rec>();
 	const syncs: { id: string; body: any; answer: any }[] = [];
@@ -122,7 +125,7 @@ export function startFake(port: number, opts: { thr?: number; next?: number } = 
 
 	const server = Bun.serve({
 		port,
-		hostname: '127.0.0.1',
+		hostname: process.env.HOST ?? '127.0.0.1',
 		async fetch(req) {
 			const url = new URL(req.url);
 			const json = (o: unknown, status = 200) => Response.json(o, { status });
@@ -149,7 +152,7 @@ export function startFake(port: number, opts: { thr?: number; next?: number } = 
 				if (!me) return json({ error: 'Badge not linked' }, 403);
 				const text = await req.text();
 				if (text.length > 4096) return json({ error: 'too big' }, 413);
-				const body = JSON.parse(text);
+				let body = JSON.parse(text);
 				const answer: any = { time: Date.now(), next: opts.next ?? 5000, ack: 0, aack: 0 };
 				const res: any[] = [], ares: any[] = [], progs: Rec[] = [], ev: any[] = [];
 				let changed = false;
@@ -174,6 +177,13 @@ export function startFake(port: number, opts: { thr?: number; next?: number } = 
 					}
 					ares.push(ok ? { n: a.n, ok } : { n: a.n, ok, error });
 					changed ||= ok;
+				}
+				if (opts.coolOnce && !cooled && body.rec?.length) {
+					cooled = true;
+					const first = body.rec[0];
+					answer.ack = first.n - 1;
+					res.push({ n: first.n, p: first.p, r: 'cool' });
+					body = { ...body, rec: [] };
 				}
 				for (const e of body.rec ?? []) {
 					answer.ack = Math.max(answer.ack, e.n);
@@ -220,4 +230,14 @@ export function startFake(port: number, opts: { thr?: number; next?: number } = 
 		},
 	});
 	return { server, badges, records, syncs, url: `http://127.0.0.1:${port}`, stop: () => server.stop(true) };
+}
+
+// Standalone, for a badge on the LAN: HOST=0.0.0.0 PORT=3211 bun fake.ts, then
+// on the badge `server http://<this machine>:3211`.
+if (import.meta.main) {
+	const f = startFake(Number(process.env.PORT ?? 3211), { thr: Number(process.env.THR ?? 100), next: Number(process.env.NEXT ?? 5000) });
+	console.log(`gossip fake on ${f.server.url}`);
+	setInterval(() => {
+		for (const s of f.syncs.splice(0)) console.log(`sync ${s.id}: ${JSON.stringify(s.body).slice(0, 300)} -> ${JSON.stringify(s.answer).slice(0, 300)}`);
+	}, 1000);
 }

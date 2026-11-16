@@ -8,13 +8,14 @@
 // on B (t-gossip, not the Lab: its acting calls say "lab only"), the radar, the
 // service's switch, and A going quiet when gossip is off. Exit code 1 when
 // anything is off. PORT (default 3211) for the fake.
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFake } from './fake';
 
 const here = import.meta.dir;
 const emuDir = join(here, '../../../../../web/static/emulator');
-const fake = startFake(Number(process.env.PORT ?? 3211), { thr: 60, next: 4000 });
+const fake = startFake(Number(process.env.PORT ?? 3211), { thr: 60, next: 4000, coolOnce: true });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Emu = {
@@ -68,9 +69,9 @@ async function boot(name: string): Promise<Emu> {
 		mkdirp(dest);
 		for (const f of readdirSync(dir)) {
 			if (statSync(join(dir, f)).isFile()) {
-				let data = readFileSync(join(dir, f), 'utf8');
-				if (f === 'app.json') data = data.replace(`"${id}"`, `"${as}"`);
-				mod.FS.writeFile(`${dest}/${f}`, data);
+				if (f.endsWith('.c')) continue;
+				const raw = readFileSync(join(dir, f));
+				mod.FS.writeFile(`${dest}/${f}`, f === 'app.json' ? raw.toString('utf8').replace(`"${id}"`, `"${as}"`) : raw);
 			}
 		}
 	};
@@ -143,6 +144,9 @@ const bsync = fake.syncs.find((x) => x.id !== fake.syncs[0]?.id && x.body.rec?.l
 const rec = fake.syncs.flatMap((x) => x.body.rec ?? []).find((r: any) => r.p === prog);
 ok(!!rec && rec.f && /^r0\.\d+\.[0-9a-f]{16}$/.test(rec.g) && rec.s > 0 && rec.r < 0 && rec.t > 1.7e9, `B's exposure record: ${JSON.stringify(rec)}`);
 void bsync;
+const cool = fake.syncs.findIndex((x) => x.answer.res?.some((r: any) => r.r === 'cool'));
+ok(cool >= 0 && fake.syncs.slice(cool + 1).some((x) => x.body.rec?.some((r: any) => r.p === prog && r.n === fake.syncs[cool].answer.res[0].n)),
+	'B: a cooled record stays unacknowledged and goes again with a later sync');
 let progs = '';
 for (let t = 0; t < 20 && !progs.includes('verified'); t++) {
 	mark = b.lines.length;
@@ -159,7 +163,7 @@ b.put('t-gossip', join(here, '../t-gossip'));
 mark = b.lines.length;
 b.cmd('lua run t-gossip');
 const me = await b.waitFor(/t-gossip me: /, 8000, mark);
-ok(!!me && me.includes(`"act":"${prog}"`) && me.includes('"on":true') && /"synced":\d{13}/.test(me), `B: gossip.me() ${me?.slice(0, 160)}`);
+ok(!!me && me.includes(`"act":"${prog}"`) && me.includes('"on":true') && /"synced":\d{10}[,}]/.test(me), `B: gossip.me() ${me?.slice(0, 160)}`);
 const pr = await b.waitFor(/t-gossip program: /, 4000, mark);
 ok(!!pr && pr.includes('"verified":true') && pr.includes(`"a":"${prog}"`) && /"traits":\[/.test(pr) && /"nodes":2/.test(pr), `B: gossip.program(act) ${pr?.slice(0, 200)}`);
 const ps = await b.waitFor(/t-gossip programs: /, 4000, mark);
@@ -170,6 +174,31 @@ ok(!!nb && nb.includes(`"st":"${prog}"`) && nb.includes('"class":"r"') && nb.inc
 ok(!!(await b.waitFor(/t-gossip set_class: nil lab only/, 4000, mark)), 'B: acting outside the Lab: nil, "lab only"');
 void aId;
 b.cmd('key home');
+
+// 3b. The same through badge.h, when the C toolchain is there (bun run cc).
+const cc = join(here, '../../../../tools/cc/badge-cc');
+if (existsSync(join(here, '../../../../tools/cc/.toolchain'))) {
+	const out = join(tmpdir(), `t-c-gossip-${process.pid}`);
+	mkdirSync(out, { recursive: true });
+	const r = Bun.spawnSync([cc, join(here, 't-c-gossip'), '-o', join(out, 'app.wasm'), '-q']);
+	ok(r.exitCode === 0, `t-c-gossip builds ${r.stderr.toString().slice(0, 200)}`);
+	copyFileSync(join(here, 't-c-gossip/app.json'), join(out, 'app.json'));
+	await sleep(1500);
+	mark = b.lines.length;
+	b.put('t-c-gossip', out);
+	b.cmd('lua run t-c-gossip');
+	ok(!!(await b.waitFor(/t-c-gossip genome: ok colour f040ff body 3 traits 3:2,4,0 vir 5 rarity 1/, 15000, mark)), 'C: gossip_genome (vector 3)');
+	ok(!!(await b.waitFor(/t-c-gossip bad genome: refused bad address/, 4000, mark)), 'C: gossip_genome refuses a bad address');
+	ok(!!(await b.waitFor(new RegExp(`t-c-gossip me: id e\\w+ on 1 .* act ${prog} synced \\d{10}`), 4000, mark)), 'C: gossip_me');
+	ok(!!(await b.waitFor(new RegExp(`t-c-gossip slot 0: ${prog} verified 1 nodes 2`), 4000, mark)), 'C: gossip_slot');
+	ok(!!(await b.waitFor(new RegExp(`t-c-gossip program: ${prog} gen 0 verified 1`), 4000, mark)), 'C: gossip_program');
+	ok(!!(await b.waitFor(new RegExp(`t-c-gossip nearby: e\\w+ badge class r rssi -\\d+ st ${prog}`), 4000, mark)), 'C: gossip_nearby');
+	ok(!!(await b.waitFor(/t-c-gossip set_class: lab only/, 4000, mark)), 'C: acting outside the Lab: lab only');
+	if (process.env.DEBUG) console.log(b.since(mark).filter((l) => /t-c-gossip|error|lua/.test(l)).join('\n'));
+	b.cmd('key home');
+} else {
+	console.log('skip C wrappers: no toolchain (bun run cc)');
+}
 
 // 4. Off: A's HELLO loses its fields, one last sync says on: false.
 const before = fake.syncs.length;
