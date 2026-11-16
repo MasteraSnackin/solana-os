@@ -45,6 +45,7 @@ type Emu = {
 	waitFor: (re: RegExp, ms: number, mark?: number) => Promise<string | undefined>;
 	run: (l: string, re: RegExp, ms?: number) => Promise<string | undefined>;
 	halt: () => void;
+	put: (id: string, dir: string, rename?: string) => void;
 };
 
 // mac5: the emulator's fake RSSI of this badge at every other one is
@@ -94,7 +95,25 @@ async function boot(name: string, mac5: number): Promise<Emu> {
 			e.cmd(l);
 			return waitFor(re, ms, mark);
 		},
-		halt: () => mod.ccall('emu_halt', null, [], [])
+		halt: () => mod.ccall('emu_halt', null, [], []),
+		// Copy a test app onto the emulated card, as svc-run.ts does; rename: install it under another id.
+		put: (id, dir, rename) => {
+			const dest = `/sdcard/hh/apps/${rename ?? id}`;
+			let cur = '';
+			for (const part of dest.split('/').filter(Boolean)) {
+				cur += `/${part}`;
+				try {
+					mod.FS.mkdir(cur);
+				} catch {
+					/* exists */
+				}
+			}
+			for (const f of ['main.lua', 'app.json']) {
+				let t = readFileSync(join(dir, f), 'utf8');
+				if (rename && f === 'app.json') t = t.replace(`"${id}"`, `"${rename}"`);
+				mod.FS.writeFile(`${dest}/${f}`, t);
+			}
+		}
 	};
 	if (!(await waitFor(/console ready/, 30_000))) throw new Error(`${name}: no console`);
 	return e;
@@ -173,6 +192,7 @@ try {
 	ok(!!peers, 'A hears the other badges');
 
 	if (only !== 'fanin') {
+		await luaModule(B);
 		await roles(A, B, C, D);
 		await fight(A, [B, C, D], true);
 		await fight(A, [B, C, D], false);
@@ -189,6 +209,23 @@ console.log(failures ? `${failures} failed` : 'all passed');
 process.exit(failures ? 1 : 0);
 
 // ---------------------------------------------------------------------------
+
+// The module from Lua: every acting call is the Lab's alone (tests/t-gossip-role).
+async function luaModule(e: Emu) {
+	const dir = join(here, '../t-gossip-role');
+	e.put('t-gossip-role', dir);
+	e.put('t-gossip-role', dir, 'gossip-lab');
+	for (const id of ['t-gossip-role', 'gossip-lab']) {
+		const mark = e.lines.length;
+		e.cmd(`lua run ${id}`);
+		const done = await e.waitFor(/t-gossip-role done/, 8000, mark);
+		const out = e.lines.slice(mark).filter((l) => l.includes('t-gossip-role '));
+		const bad = out.filter((l) => / FAIL /.test(l));
+		ok(!!done && /0 failed/.test(done) && !bad.length, `t-gossip-role as ${id}`, bad.join(' | ') || done);
+		e.cmd('open home');
+		await sleep(800);
+	}
+}
 
 async function roles(A: Emu, B: Emu, C: Emu, D: Emu) {
 	const now = () => Date.now();

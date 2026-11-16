@@ -15,6 +15,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -115,6 +117,7 @@ static int64_t s_test_offset;       // server ms - local ms
 static char s_test_class;
 static char s_test_spam[GOSSIP_ADDR_MAX + 1];
 static char s_test_real[GOSSIP_CFG_ROLES][OS_MESH_ID_LEN + 1];
+static int s_test_close;            // dBm, 0 = Cfg's
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -156,6 +159,9 @@ static gossip_cfg_t s_cfg;          // OS task copy, refreshed every tick (it is
 
 int gr_close(void)
 {
+    if (s_test && s_test_close) {
+        return s_test_close;
+    }
     return s_cfg.close ? s_cfg.close : GR_CLOSE_DEF;
 }
 
@@ -1281,6 +1287,50 @@ static void print_state(void)
     free(j);
 }
 
+// Fan-in measurement (test mode): send `vote` summaries to a role id at a set
+// rate, past the badge's own one-a-second limit, as many badges would. A task of
+// its own so the console and the OS task stay free; it prints what it sent.
+static struct {
+    char to[OS_MESH_ID_LEN + 1];
+    int per_s, secs;
+} s_flood;
+static volatile bool s_flooding;
+
+static void flood_task(void *arg)
+{
+    char json[GR_MSG_MAX + 1];
+    int64_t t0 = gr_ms();
+    int ok = 0, fail = 0, n = s_flood.per_s * s_flood.secs;
+    for (int i = 0; i < n; i++) {
+        int64_t due = t0 + (int64_t)i * 1000 / s_flood.per_s, now = gr_ms();
+        if (due > now) {
+            vTaskDelay(pdMS_TO_TICKS(due - now) ? pdMS_TO_TICKS(due - now) : 1);
+        }
+        snprintf(json, sizeof(json), "{\"app\":\"" GR_APP "\",\"to\":\"%s\",\"d\":{\"t\":\"vote\",\"v\":1,\"l\":1}}",
+                 s_flood.to);
+        os_mesh_send(OS_MESH_APP, s_flood.to, json) == ESP_OK ? ok++ : fail++;
+    }
+    printf("grole flood: %d sent, %d failed in %lld ms\n", ok, fail, (long long)(gr_ms() - t0));
+    s_flooding = false;
+    vTaskDelete(NULL);
+}
+
+static void flood_start(const char *to, int per_s, int secs)
+{
+    if (s_flooding || !gr_id_ok(to) || per_s < 1 || per_s > 200 || secs < 1 || secs > 120) {
+        printf("grole flood: busy or bad arguments (1-200 a second, 1-120 s)\n");
+        return;
+    }
+    strlcpy(s_flood.to, to, sizeof(s_flood.to));
+    s_flood.per_s = per_s;
+    s_flood.secs = secs;
+    s_flooding = true;
+    if (xTaskCreate(flood_task, "grflood", 3072, NULL, 4, NULL) != pdPASS) {
+        s_flooding = false;
+        printf("grole flood: no task\n");
+    }
+}
+
 // Console JSON: the console splits on spaces and eats double quotes, so the
 // test commands take JSON written with single quotes.
 static cJSON *console_json(const char *s)
@@ -1404,11 +1454,18 @@ static int cmd_grole(int argc, char **argv)
             // grole test sync [<RoleState JSON, single quotes> | none | fail]
             const char *st = argc > 3 ? argv[3] : "none";
             test_sync(strcmp(st, "none") && strcmp(st, "fail") ? st : NULL, strcmp(st, "fail") != 0);
+        } else if (!strcmp(what, "close") && argc > 3) {
+            s_test_close = atoi(argv[3]);
+            printf("grole: close range %d dBm\n", gr_close());
+        } else if (!strcmp(what, "flood") && argc > 4) {
+            flood_start(argv[3], atoi(argv[4]), argc > 5 ? atoi(argv[5]) : 10);
+            return 0;
         } else if (!strcmp(what, "lead") && argc > 3) {
             os_setting_set(OS_SET_LEADER, atoi(argv[3]) ? 1 : 0);
             gossip_role_setting_changed();
         } else {
-            printf("grole test [on [<unix ms>]|off|class <c|->|spam [<addr>]|real <id>...|sync [<json>|none|fail]|lead 0|1]\n");
+            printf("grole test [on [<unix ms>]|off|class <c|->|spam [<addr>]|real <id>...|sync [<json>|none|fail]|"
+                   "close <dBm>|flood <role> <per s> [<s>]|lead 0|1]\n");
             return 1;
         }
         print_state();
