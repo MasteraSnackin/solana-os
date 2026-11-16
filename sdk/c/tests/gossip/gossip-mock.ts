@@ -11,11 +11,19 @@
 //   ev:<name>      on_gossip with states.ts EVENTS[name]
 //   state:<name>   the module answers from another state from now on
 //   screen:<name>  the app's last "lab: <name>" line names that screen
-//   want:<fn>      the app called gossip.<fn> since the last want (acting calls)
+//   want:<fn>      the app called gossip.<fn> since the last want (acting calls);
+//                  want:<fn>~<text> also needs <text> in its arguments, want:<fn>!<text> not
+//   wait:<ms>      the clock moves on without a tick
+//   beat:<off>     the clock moves to the fight's next beat + off ms (no tick)
+//   tobeat:<k>:<off> the clock moves to beat k + off ms
+//   fight:<phase>  the fight ends: 2 rooted, 3 the boss won
 //   none           no acting call since the last want
+// The clock: sys.millis() is the mock's own (it starts at 1000 and moves by the tick
+// period the app asked for, sys.tick, at each t step, and by wait/beat steps), so the
+// fight's beats (states.ts `fight`) land where the app expects them.
 //   log:<text>     a console line containing text since the last log check
 // Lists don't select by themselves here (mock-host's ui.list does): sel does it.
-import { EVENTS, NOW, STATES, type State } from './states';
+import { EVENTS, NOW, STATES, bossAt, votersAt, type State } from './states';
 
 type Ctx = Record<string, any>;
 let state: State;
@@ -24,6 +32,9 @@ const acted: string[] = [];
 const lines: string[] = [];
 let logMark = 0;
 let lastList: { f: any; n: number } | null = null;
+let clock = 1000;
+let period = 30;
+export const millis = () => clock++; // a real clock moves within a callback too
 
 const ACTING = ['set_class', 'activate', 'place', 'drop', 'deploy', 'use', 'name', 'public', 'lead', 'bid', 'claim', 'cure', 'vote',
     'role_answer', 'role_end', 'block', 'fork'];
@@ -49,7 +60,25 @@ export function install(c: Ctx) {
         const v = name === 'program' ? (state.program ?? {})[c.str(a[0])] : state[name];
         return [v === undefined || v === null ? NIL : js2v(v)];
     });
-    for (const n of ['me', 'programs', 'program', 'nearby', 'hearing', 'role', 'boss'] as const) api[`gossip.${n}`] = read(n);
+    for (const n of ['me', 'programs', 'program', 'nearby', 'hearing', 'role'] as const) api[`gossip.${n}`] = read(n);
+    // The fight, from the clock (beat and ms moved forward to the read, as the badge does).
+    api['gossip.boss'] = fn((a: any[]) => {
+        want(a, '', 'gossip.boss');
+        const f = state.fight;
+        return [f && !f.own && f.heard !== false ? js2v(bossAt(f, clock)) : NIL];
+    });
+    api['gossip.voters'] = fn((a: any[]) => {
+        want(a, '', 'gossip.voters');
+        const f = state.fight;
+        return [f && f.own ? js2v(votersAt(f, clock)) : NIL];
+    });
+    api['gossip.bids'] = fn((a: any[]) => (want(a, '', 'gossip.bids'), [state.bids ? js2v(state.bids) : NIL]));
+    api['sys.tick'] = fn((a: any[]) => {
+        want(a, 'i', 'sys.tick');
+        const old = period;
+        period = a[0].v;
+        return [c.i(old)];
+    });
     const specs: Record<string, string> = {
         set_class: 's', activate: 's', place: 's i', drop: 'i', deploy: 's?', use: 's t?', name: 's s', public: 'b', lead: 'b',
         bid: 's s b?', claim: 's i', cure: 's', vote: 'i i', role_answer: 'b', role_end: '', block: 't', fork: '',
@@ -64,8 +93,6 @@ export function install(c: Ctx) {
             return [b(true)];
         });
     }
-    api['gossip.bids'] = fn(() => [tbl([])]);
-    api['gossip.voters'] = fn(() => [NIL]);
     // ui.list without the stand-in's automatic selection; `sel` selects.
     api['ui.list'] = fn((a: any[]) => {
         want(a, 'i i i i t t?', 'ui.list');
@@ -111,9 +138,26 @@ export function script(c: Ctx) {
             deliver();
         } else if (op === 't') {
             for (let n = 0; n < Number(arg); n++) {
-                run('on_tick', () => ex.on_tick(30));
+                clock += period;
+                run('on_tick', () => ex.on_tick(period));
                 deliver();
             }
+        } else if (op === 'wait') {
+            clock += Number(arg);
+        } else if (op === 'beat' || op === 'tobeat') {
+            const f = state.fight;
+            if (!f) fail('no fight in this state');
+            else {
+                const bm = 60000 / f.bpm;
+                const [kArg, offArg] = op === 'tobeat' ? arg.split(':') : ['', arg];
+                const k = op === 'tobeat' ? Number(kArg) : Math.max(0, Math.floor((clock - Number(offArg) - f.t0) / bm) + 1);
+                const to = f.t0 + k * bm + Number(offArg);
+                if (to < clock) fail(`beat ${k} + ${offArg} is in the past`);
+                else clock = to;
+            }
+        } else if (op === 'fight') {
+            if (!state.fight) fail('no fight in this state');
+            else state.fight.end = Number(arg);
         } else if (op === 'sel') {
             if (!lastList?.f) fail('no list with on_select');
             else if (Number(arg) >= lastList.n) fail(`the list has ${lastList.n} rows`);
@@ -126,7 +170,8 @@ export function script(c: Ctx) {
             if (!EVENTS[arg]) fail('no such event');
             else if (!ex.on_gossip) fail('the app exports no on_gossip');
             else {
-                run(`on_gossip(${arg})`, () => ex.on_gossip(), [js2v(EVENTS[arg])]);
+                // tbl, not js2v: js2v takes any object with a `t` key for an encoded value.
+                run(`on_gossip(${arg})`, () => ex.on_gossip(), [c.tbl(EVENTS[arg])]);
                 deliver();
             }
         } else if (op === 'state') {
@@ -139,7 +184,9 @@ export function script(c: Ctx) {
             if (screen() !== arg) fail(`on screen "${screen()}"`);
         } else if (op === 'want') {
             const got = acted.slice(mark);
-            if (!got.some((x) => x.startsWith(`${arg}(`))) fail(`acting calls since the last check: ${got.join(' ') || 'none'}`);
+            const [name, has, not] = [arg.split(/[~!]/)[0], arg.includes('~') ? arg.split('~')[1] : '', arg.includes('!') ? arg.split('!')[1] : ''];
+            const ok = (x: string) => x.startsWith(`${name}(`) && (!has || x.includes(has)) && (!not || !x.includes(not));
+            if (!got.some(ok)) fail(`acting calls since the last check: ${got.join(' ') || 'none'}`);
             else console.log(`gossip-mock: ${got.join(' ')}`);
             mark = acted.length;
         } else if (op === 'none') {

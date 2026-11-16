@@ -2675,7 +2675,7 @@ char *gossip_me_json(void)
     }
     lock();
     cJSON *o = S->node_json ? cJSON_Parse(S->node_json) : NULL;
-    int name_nodes = S->cfg.name_nodes;
+    int name_nodes = S->cfg.name_nodes, close = S->cfg.close;
     int inc = 0;
     for (int i = 0; i < HEAR_MAX; i++) {
         inc += S->hear[i].a[0] && S->hear[i].state != ST_HEARING;
@@ -2714,6 +2714,8 @@ char *gossip_me_json(void)
     cJSON_AddBoolToObject(o, "lead", os_setting(OS_SET_LEADER) != 0);   // "May become a leader"
     cJSON_DeleteItemFromObject(o, "name_nodes");
     cJSON_AddNumberToObject(o, "name_nodes", name_nodes);
+    cJSON_DeleteItemFromObject(o, "close");
+    cJSON_AddNumberToObject(o, "close", close);                         // Cfg close: claims' range (dBm)
     if (!cJSON_IsObject(cJSON_GetObjectItem(o, "ach"))) {
         cJSON *a = cJSON_AddObjectToObject(o, "ach");   // Node.ach before the server sent one
         cJSON_AddNumberToObject(a, "n", 0);
@@ -2783,6 +2785,9 @@ char *gossip_nearby_json(void)
         }
         cJSON_AddNumberToObject(o, "rssi", p->rssi);
         cJSON_AddStringToObject(o, "st", p->st);
+        if (p->st[0] && addr_in(p->st, (const char (*)[ADDR1])cfg->spam, cfg->nspam)) {
+            cJSON_AddTrueToObject(o, "spam");                           // Cfg spam: a Validator may cure it
+        }
         cJSON_AddNumberToObject(o, "boost", p->b);
         cJSON_AddItemToArray(arr, o);
     }

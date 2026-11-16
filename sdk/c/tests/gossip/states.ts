@@ -71,8 +71,27 @@ export type State = {
     nearby?: unknown[];
     hearing?: unknown[];
     role?: unknown;
-    boss?: unknown;
+    bids?: unknown[];
+    fight?: Fight;
 };
+
+// A boss fight as the module gives it (docs/GOSSIP.md section 8): the badge keeps beat 0's
+// moment and computes beat and ms at each read; the mock does the same from its clock.
+export type Fight = {
+    id: string; sid: number; t0: number; bpm: number; fork: number; p: number; real: boolean;
+    end?: number; heard?: boolean; rssi?: number;
+    own?: boolean; voters?: number; conf?: number; fin?: number; beats?: number;
+};
+export function bossAt(f: Fight, clock: number) {
+    const bm = 60000 / f.bpm;
+    if (clock < f.t0) return { id: f.id, sid: f.sid, beat: 0, ms: f.t0 - clock, bpm: f.bpm, fork: f.fork, p: f.p, phase: 0, rssi: f.rssi ?? -60, real: f.real };
+    const e = clock - f.t0;
+    return { id: f.id, sid: f.sid, beat: Math.floor(e / bm), ms: Math.round(bm - (e % bm)), bpm: f.bpm, fork: f.fork, p: f.p, phase: f.end ?? 1, rssi: f.rssi ?? -60, real: f.real };
+}
+export function votersAt(f: Fight, clock: number) {
+    const b = bossAt(f, clock);
+    return { voters: f.voters ?? 0, conf: f.conf ?? 0, fin: f.fin ?? 0, p: f.p, all: f.voters ?? 0, beat: b.beat, beats: f.beats ?? 300, fork: f.fork, phase: b.phase };
+}
 
 const empty = (): State => ({
     me: {
@@ -140,6 +159,30 @@ const hearingList = (exposed: boolean) => [
     ] : []),
 ];
 
+// ---- the role side ---------------------------------------------------------------------
+
+const SPAM = addr(40);
+// The radar a player sees: a close MEV Bot, a Leader, a boss, a badge carrying spam, a far
+// unverified Anonymous Deployer (strongest first).
+const rolesNear = () => [
+    { id: 'R0LE02', name: 'MEV Bot', kind: 'role', role: 'm', real: true, rssi: -50, st: '', boost: 0 },
+    { id: 'R0LE01', name: 'Leader', kind: 'role', role: 'l', real: true, rssi: -52, st: addr(10), boost: 9 },
+    { id: 'R0LE04', name: 'Byzantine Leader', kind: 'role', role: 'z', real: true, rssi: -60, st: SPAM, boost: 9 },
+    { id: 'S0PAM1', name: '@spammed', kind: 'badge', class: 'r', rssi: -62, st: SPAM, boost: 0, spam: true },
+    { id: 'B07X9Q', name: '@node7', kind: 'badge', class: 'b', rssi: -66, st: addr(27), boost: 1 },
+    { id: 'R0LE03', name: '???', kind: 'role', role: 'a', real: false, rssi: -83, st: addr(11), boost: 3 },
+];
+const session = (ro: string, extra: Record<string, unknown>) => ({
+    sid: 42, ro, id: 'R0LE0' + ({ l: '1', m: '2', a: '3', z: '4' } as Record<string, string>)[ro], n: ({ l: 'Leader', m: 'MEV Bot', a: '???', z: 'Byzantine Leader' } as Record<string, string>)[ro],
+    since: NOW - 120, until: NOW + 480, left: 480, st: [], boost: 0, on_air: true, ...extra,
+});
+const BIDS = [
+    { from: 'B00X9Q', name: '@node0', p: addr(20), fee: true, rssi: -48, age: 20 },
+    { from: 'B01X9Q', name: '@node1', p: addr(21), fee: false, rssi: -51, age: 5 },
+    { from: 'B03X9Q', name: '', p: addr(23), fee: false, rssi: -60, age: 2 },
+];
+const withRole = (role: unknown, extra: Partial<State> = {}): State => ({ ...busy(), nearby: nearbyList(), role, ...extra });
+
 export const STATES: Record<string, () => State> = {
     unlinked: () => ({ me: null }),
     nomodule: () => ({ me: undefined as never }), // gossip.me missing: the module isn't there
@@ -155,6 +198,30 @@ export const STATES: Record<string, () => State> = {
         const s = busy();
         return { ...s, me: { ...s.me!, synced: NOW - 3 * 3600, on: false } };
     },
+    offer: () => withRole({ offer: { sid: 41, ro: 'l', until: NOW + 23, left: 23 } }),
+    'offer-mev': () => withRole({ offer: { sid: 44, ro: 'm', until: NOW + 12, left: 12 } }),
+    leader: () => withRole(session('l', { st: [addr(20)], boost: 9, block: [{ p: addr(20), by: 'B00X9Q' }], tally: { bids: 1, block: 1 } }), { bids: BIDS }),
+    mev: () => withRole(session('m', { until: NOW + 840, left: 840, tally: { pot: 34, near: 5, caught: false } })),
+    anon: () => withRole(session('a', { st: [addr(11)], boost: 3, tally: { found: 1, first: String((NOW - 30) * 1000) } })),
+    ended: () => withRole({ ended: { sid: 42, ro: 'l', by: 'time', stake: 50, lamps: 10 } }),
+    roles: () => ({ ...busy(), nearby: rolesNear() }),
+    validator: () => {
+        const s = busy();
+        return { ...s, me: { ...s.me!, cls: 'v' }, nearby: rolesNear() };
+    },
+    fight: () => ({ ...busy(), nearby: rolesNear(), fight: { id: 'R0LE04', sid: 77, t0: 3000, bpm: 100, fork: 12, p: 40, real: true } }),
+    'boss-own': () => ({
+        ...busy(), nearby: nearbyList(),
+        role: session('z', { sid: 78, until: NOW + 180, left: 180, st: [SPAM], boost: 9, boss: { bpm: 100, beats: 300, min: 3, spam: SPAM } }),
+        fight: { id: 'R0LE04', sid: 78, t0: 2000, bpm: 100, fork: -1, p: 60, real: true, own: true, voters: 5, conf: 3, fin: 1, beats: 300 },
+    }),
+    ach: () => {
+        const s = busy();
+        const items = [{ id: 'it_up', k: 'gossip.upgrade', n: 'Upgrade Authority+', pick: true }, { id: 'it_u2', k: 'gossip.upgrade', n: 'Upgrade Authority' },
+            ...(s.me!.items as unknown[])];
+        return { ...s, me: { ...s.me!, lead: true, close: -55, name_nodes: 50, items, itemsN: items.length,
+            ach: { n: 4, pts: 70, last: ['Voter', 'Power User', 'Collector', 'Patient Zero'] } } };
+    },
 };
 
 // Events the module's on_gossip delivers (section 10), for scripts.
@@ -167,5 +234,16 @@ export const EVENTS: Record<string, Record<string, unknown>> = {
     rank: { t: 'event', kind: 'rank', text: 'You reached Testnet' },
     milestone: { t: 'event', kind: 'milestone', text: 'Turbine reached 100 nodes' },
     drop: { t: 'event', kind: 'drop', text: 'You found a Priority Fee' },
-    role: { t: 'role', offer: { sid: 7, ro: 'l', until: (NOW + 30) * 1000 } },
+    role: { t: 'role', state: 'offer', sid: 41, ro: 'l' },
+    session: { t: 'role', state: 'session', sid: 41, ro: 'l' },
+    ended: { t: 'role', state: 'ended', sid: 42, ro: 'l', by: 'time', stake: 50, lamps: 10 },
+    bid: { t: 'bid', from: 'B04X9Q', name: '@node4', p: addr(24), fee: false, rssi: -57 },
+    ack: { t: 'ack', role: 'R0LE02', c: 1, r: -50, ok: true },
+    noack: { t: 'ack', role: 'R0LE02', c: 1, ok: false },
+    'ack-fight': { t: 'ack', role: 'R0LE04', c: 5, r: -60, ok: true },
+    cured: { t: 'cured', peer: 'S0PAM1', p: SPAM, ok: true },
+    'cured-me': { t: 'event', kind: 'cured', text: 'A Validator removed the spam from your slots' },
+    achievement: { t: 'event', kind: 'achievement', text: 'Achievement: Voter (+10)', col: 0xff754a },
+    'boss-paid': { t: 'event', kind: 'boss', text: 'Boss fight won: +42 Stake' },
+    'bid-refused': { t: 'result', n: 3, act: 'bid', ok: false, error: 'No Priority Fee to use' },
 };

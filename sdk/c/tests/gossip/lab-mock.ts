@@ -57,6 +57,33 @@ const SCENARIOS: [string, string, string][] = [
         'sel:3 screen:hearing t:40 ev:exposed ev:adopted t:20 ev:forked ev:seen ev:node ev:rank ev:milestone ev:drop ev:role t:40 ' +
         'k:back sel:7 screen:trophies k:back none'],
     ['gossip off and long unsynced', 'offline', 'screen:home t:40 sel:8 screen:settings sel:0 none'],
+    // The role side (docs/GOSSIP.md section 8), with the module's real shapes (LAB-NOTES).
+    ['a role offer: the banner, the countdown, accept', 'offer', 'screen:home t:3 sel:0 screen:offer t:40 sel:0 want:role_answer~true'],
+    ['a role offer declined', 'offer-mev', 'screen:home sel:0 screen:offer sel:1 want:role_end'],
+    ['the offer starts a Leader slot: bids, the block, the end', 'offer',
+        'sel:0 screen:offer state:leader t:40 screen:leader t:60 sel:2 sel:3 sel:0 want:block~B01X9Q ev:bid t:60 sel:4 none k:right want:role_end'],
+    ['the MEV Bot as its owner', 'mev', 'screen:home sel:0 screen:hide t:60 k:right want:role_end'],
+    ['the Anonymous Deployer as its owner', 'anon', 'screen:home sel:0 screen:hide t:60 ev:session t:5 k:back screen:home none'],
+    ['an ended role and what it paid', 'ended', 'screen:home sel:0 screen:role-ended k:back screen:home ev:ended none'],
+    ['roles on the radar: catch close up, bid on a Leader, too far to find', 'roles',
+        'sel:2 screen:radar t:5 sel:0 screen:peer sel:0 screen:target t:3 sel:0 want:claim~R0LE02 ev:ack t:3 sel:0 none k:back k:back ' +
+        'sel:1 screen:peer sel:0 screen:target sel:0 screen:pick sel:0 screen:bid sel:0 want:bid~true screen:target ev:bid-refused k:back k:back ' +
+        'sel:5 screen:peer sel:0 screen:target t:3 sel:0 none ev:noack k:back k:back sel:2 screen:peer sel:0 screen:target sel:0 none'],
+    ['a Validator cures spam nearby; the cured side', 'validator',
+        'sel:3 screen:cure t:3 sel:0 want:cure~S0PAM1 ev:cured t:2 k:back sel:2 screen:radar t:3 sel:3 screen:peer sel:0 want:cure ev:cured-me'],
+    ['a fight for a player: the beat, votes, a miss, a fork, won', 'fight',
+        'screen:home sel:0 log:lab:_fight_R0LE04 t:5 tobeat:0:10 t:1 k:select log:vote_in_time want:vote ' +
+        'beat:-40 t:1 k:select beat:-40 t:1 k:select beat:-40 t:1 k:select log:vote_in_time want:vote~4 ' +
+        'tobeat:5:180 t:1 k:select log:vote_miss want:vote~0 tobeat:12:10 t:1 k:select log:vote_fork t:40 log:lab:_led ' +
+        'fight:2 t:10 screen:fight-result ev:ack-fight ev:boss-paid'],
+    ['a fight for a player, lost', 'fight',
+        'sel:0 log:lab:_fight tobeat:0:5 t:1 k:select want:vote k:back screen:home sel:0 log:lab:_fight fight:3 t:10 screen:fight-result'],
+    ["the boss's owner: the metronome, forks, the end", 'boss-own',
+        'screen:home sel:0 log:lab:_boss_fight t:10 tobeat:3:100 t:4 k:up want:fork t:40 k:left want:fork fight:2 t:5 screen:fight-result'],
+    ['trophies, how to play, the Upgrade Authority+ trait, the lead setting', 'ach',
+        'sel:7 screen:trophies ev:achievement k:back sel:9 screen:howto k:back sel:4 screen:items sel:0 screen:item k:select screen:pick sel:0 ' +
+        'screen:trait sel:2 want:use~trait screen:items sel:1 screen:item k:select screen:pick sel:0 want:use!trait k:back ' +
+        'sel:8 screen:settings sel:2 want:lead~false'],
 ];
 
 const only = opt('--only');
