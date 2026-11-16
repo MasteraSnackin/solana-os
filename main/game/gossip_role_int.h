@@ -71,7 +71,7 @@ void gr_event(cJSON *ev);
 void gr_notice(uint32_t led, const char *text);
 
 // gossip_role_app.c
-void gr_app_init(void);
+bool gr_app_init(void);                             // false: no memory
 void gr_app_rx(const char *t, const char *from, os_peer_kind_t kind, int rssi, bool to_role, const cJSON *d);
 void gr_app_tick(int64_t now);
 void gr_app_heard(const gossip_hello_t *h);
@@ -84,7 +84,7 @@ void gr_app_status(void);                           // console
 void gr_app_stats_reset(void);
 
 // gossip_role_boss.c
-void gr_boss_init(void);
+bool gr_boss_init(void);
 void gr_boss_rx(const char *t, const char *from, os_peer_kind_t kind, int rssi, int64_t at, bool to_role,
                 const cJSON *d);
 void gr_boss_tick(int64_t now);

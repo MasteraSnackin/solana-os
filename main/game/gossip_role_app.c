@@ -13,7 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "core/os_mem.h"
 #include "core/os_mesh.h"
 #include "game.h"
 #include "gossip_role_int.h"
@@ -89,19 +91,22 @@ typedef struct {
     bool fresh, sending;            // heard since the last delivered sync; in the one now
 } heard_t;
 
-static pclaim_t s_pc[CLAIMS_PENDING];
+// The tables, in PSRAM when there is some (gr_app_init): SRAM is the badge's scarcest.
+static struct {
+    pclaim_t pc[CLAIMS_PENDING];
+    claim_t claims[CLAIMS_DONE];
+    seen_t acked[SEEN_N], cured_for[SEEN_N];
+    bid_t bids[BIDS_MAX];
+    pcure_t pcu[CURES_PENDING];
+    cure_t cures[CURES_DONE];
+    heard_t heard[HEARD_N];
+} *T;
 static int s_npc;
-static claim_t s_claims[CLAIMS_DONE];
 static int s_nclaims, s_claims_sent;
-static seen_t s_acked[SEEN_N], s_cured_for[SEEN_N];
-static bid_t s_bids[BIDS_MAX];
 static int s_nbids;
 static int s_acks;                  // acks this role sent this session
-static pcure_t s_pcu[CURES_PENDING];
 static int s_npcu;
-static cure_t s_cures[CURES_DONE];
 static int s_ncures, s_cures_sent;
-static heard_t s_heard[HEARD_N];
 static struct {
     uint32_t claims_sent, acks_got, acks_sent, acks_far, acks_rate, cures_sent, cured_got, cured_sent, bids;
 } s_n;
@@ -143,8 +148,8 @@ static bool seen_allow(seen_t *t, const char *id, int64_t now, int gap)
 static const heard_t *heard_get(const char *id)
 {
     for (int i = 0; i < HEARD_N; i++) {
-        if (s_heard[i].id[0] && !strcmp(s_heard[i].id, id)) {
-            return &s_heard[i];
+        if (T->heard[i].id[0] && !strcmp(T->heard[i].id, id)) {
+            return &T->heard[i];
         }
     }
     return NULL;
@@ -184,15 +189,15 @@ static const char *claim_locked(const char *role, int c, bool fight)
     }
     pclaim_t *pc = NULL;
     for (int i = 0; i < s_npc; i++) {
-        if (!strcmp(s_pc[i].role, role)) {
-            pc = &s_pc[i];              // a new count for the same role: start again
+        if (!strcmp(T->pc[i].role, role)) {
+            pc = &T->pc[i];              // a new count for the same role: start again
         }
     }
     if (!pc) {
         if (s_npc == CLAIMS_PENDING) {
             return "busy";
         }
-        pc = &s_pc[s_npc++];
+        pc = &T->pc[s_npc++];
     }
     strlcpy(pc->role, role, sizeof(pc->role));
     os_mesh_nonce(pc->n);
@@ -225,7 +230,7 @@ bool gr_app_claim_auto(const char *role, int c)
 
 static void pc_remove(int i)
 {
-    memmove(&s_pc[i], &s_pc[i + 1], (s_npc - i - 1) * sizeof(pclaim_t));
+    memmove(&T->pc[i], &T->pc[i + 1], (s_npc - i - 1) * sizeof(pclaim_t));
     s_npc--;
 }
 
@@ -242,7 +247,7 @@ static void on_claim(const char *from, os_peer_kind_t kind, int rssi, const cJSO
         s_n.acks_far++;                 // catching and finding are close up
         return;
     }
-    if (!seen_allow(s_acked, from, gr_ms(), ACK_GAP_MS)) {
+    if (!seen_allow(T->acked, from, gr_ms(), ACK_GAP_MS)) {
         s_n.acks_rate++;
         return;
     }
@@ -270,16 +275,16 @@ static void on_ack(const char *from, os_peer_kind_t kind, const cJSON *d)
         return;
     }
     for (int i = 0; i < s_npc; i++) {
-        pclaim_t *pc = &s_pc[i];
+        pclaim_t *pc = &T->pc[i];
         if (strcmp(pc->role, from) || strcmp(pc->n, n) || pc->c != c) {
             continue;
         }
         if (s_nclaims == CLAIMS_DONE) {
-            memmove(&s_claims[0], &s_claims[1], (CLAIMS_DONE - 1) * sizeof(claim_t));   // the oldest goes
+            memmove(&T->claims[0], &T->claims[1], (CLAIMS_DONE - 1) * sizeof(claim_t));   // the oldest goes
             s_nclaims--;
             s_claims_sent = s_claims_sent > 0 ? s_claims_sent - 1 : 0;
         }
-        claim_t *k = &s_claims[s_nclaims++];
+        claim_t *k = &T->claims[s_nclaims++];
         strlcpy(k->role, from, sizeof(k->role));
         strlcpy(k->n, n, sizeof(k->n));
         k->c = c;
@@ -350,22 +355,22 @@ static void on_bid(const char *from, os_peer_kind_t kind, int rssi, const cJSON 
     int64_t now = gr_ms();
     bid_t *b = NULL;
     for (int i = 0; i < s_nbids; i++) {
-        if (!strcmp(s_bids[i].from, from)) {
-            if (now - s_bids[i].at < BID_GAP_MS) {
+        if (!strcmp(T->bids[i].from, from)) {
+            if (now - T->bids[i].at < BID_GAP_MS) {
                 return;                 // one a badge every 2 s
             }
-            b = &s_bids[i];
+            b = &T->bids[i];
         }
     }
     if (!b) {
         if (s_nbids == BIDS_MAX) {
             int old = 0;
             for (int i = 1; i < s_nbids; i++) {
-                old = s_bids[i].at < s_bids[old].at ? i : old;
+                old = T->bids[i].at < T->bids[old].at ? i : old;
             }
-            b = &s_bids[old];           // the latest per badge, the oldest badge goes
+            b = &T->bids[old];           // the latest per badge, the oldest badge goes
         } else {
-            b = &s_bids[s_nbids++];
+            b = &T->bids[s_nbids++];
         }
     }
     os_mesh_peer_t peer;
@@ -401,12 +406,12 @@ char *gossip_role_bids_json(void)
     bool leader = gr_role_live(&L) && L.ro == 'l';
     for (int i = 0; leader && i < s_nbids; i++) {
         cJSON *e = cJSON_CreateObject();
-        cJSON_AddStringToObject(e, "from", s_bids[i].from);
-        cJSON_AddStringToObject(e, "name", s_bids[i].name);
-        cJSON_AddStringToObject(e, "p", s_bids[i].p);
-        cJSON_AddBoolToObject(e, "fee", s_bids[i].fee);
-        cJSON_AddNumberToObject(e, "rssi", s_bids[i].rssi);
-        cJSON_AddNumberToObject(e, "age", (double)((now - s_bids[i].at) / 1000));
+        cJSON_AddStringToObject(e, "from", T->bids[i].from);
+        cJSON_AddStringToObject(e, "name", T->bids[i].name);
+        cJSON_AddStringToObject(e, "p", T->bids[i].p);
+        cJSON_AddBoolToObject(e, "fee", T->bids[i].fee);
+        cJSON_AddNumberToObject(e, "rssi", T->bids[i].rssi);
+        cJSON_AddNumberToObject(e, "age", (double)((now - T->bids[i].at) / 1000));
         cJSON_AddItemToArray(a, e);
     }
     xSemaphoreGive(gr_mx);
@@ -434,13 +439,13 @@ const char *gossip_role_cure(const char *id)
         err = "not near";
     } else {
         for (int i = 0; i < s_npcu && !err; i++) {
-            err = strcmp(s_pcu[i].peer, id) ? NULL : "curing";
+            err = strcmp(T->pcu[i].peer, id) ? NULL : "curing";
         }
         if (!err && s_npcu == CURES_PENDING) {
             err = "busy";
         }
         if (!err) {
-            pcure_t *c = &s_pcu[s_npcu++];
+            pcure_t *c = &T->pcu[s_npcu++];
             strlcpy(c->peer, id, sizeof(c->peer));
             os_mesh_nonce(c->n);
             c->tries = 0;
@@ -462,7 +467,7 @@ static void on_cure(const char *from, os_peer_kind_t kind, const cJSON *d)
     if (kind != OS_PEER_BADGE || !gr_nonce_ok(n) || !gr_on() || !gr_me(me) || !gr_held_spam(spam)) {
         return;
     }
-    if (!seen_allow(s_cured_for, from, gr_ms(), CURED_GAP_MS)) {
+    if (!seen_allow(T->cured_for, from, gr_ms(), CURED_GAP_MS)) {
         return;
     }
     snprintf(msg, sizeof(msg), "cure|%s|%s|%s|%s", me, from, n, spam);
@@ -487,20 +492,20 @@ static void on_cured(const char *from, os_peer_kind_t kind, const cJSON *d)
         return;
     }
     for (int i = 0; i < s_npcu; i++) {
-        if (strcmp(s_pcu[i].peer, from) || strcmp(s_pcu[i].n, n)) {
+        if (strcmp(T->pcu[i].peer, from) || strcmp(T->pcu[i].n, n)) {
             continue;
         }
         if (s_ncures == CURES_DONE) {
-            memmove(&s_cures[0], &s_cures[1], (CURES_DONE - 1) * sizeof(cure_t));
+            memmove(&T->cures[0], &T->cures[1], (CURES_DONE - 1) * sizeof(cure_t));
             s_ncures--;
             s_cures_sent = s_cures_sent > 0 ? s_cures_sent - 1 : 0;
         }
-        cure_t *k = &s_cures[s_ncures++];
+        cure_t *k = &T->cures[s_ncures++];
         strlcpy(k->peer, from, sizeof(k->peer));
         strlcpy(k->n, n, sizeof(k->n));
         strlcpy(k->p, p, sizeof(k->p));
         strlcpy(k->g, g, sizeof(k->g));
-        memmove(&s_pcu[i], &s_pcu[i + 1], (s_npcu - i - 1) * sizeof(pcure_t));
+        memmove(&T->pcu[i], &T->pcu[i + 1], (s_npcu - i - 1) * sizeof(pcure_t));
         s_npcu--;
         s_n.cured_got++;
         cJSON *e = ev("cured");
@@ -524,7 +529,7 @@ void gr_app_heard(const gossip_hello_t *h)
     }
     heard_t *e = NULL, *old = NULL;
     for (int i = 0; i < HEARD_N && !e; i++) {
-        heard_t *x = &s_heard[i];
+        heard_t *x = &T->heard[i];
         if (!strcmp(x->id, h->id)) {
             e = x;
         } else if (!old || (old->id[0] && (!x->id[0] || x->at < old->at))) {
@@ -567,7 +572,7 @@ void gr_app_rx(const char *t, const char *from, os_peer_kind_t kind, int rssi, b
 void gr_app_tick(int64_t now)
 {
     for (int i = 0; i < s_npc; i++) {
-        pclaim_t *pc = &s_pc[i];
+        pclaim_t *pc = &T->pc[i];
         if (now < pc->next) {
             continue;
         }
@@ -592,7 +597,7 @@ void gr_app_tick(int64_t now)
         pc->next = now + CLAIM_EVERY_MS;
     }
     for (int i = 0; i < s_npcu; i++) {
-        pcure_t *c = &s_pcu[i];
+        pcure_t *c = &T->pcu[i];
         if (now < c->next) {
             continue;
         }
@@ -601,7 +606,7 @@ void gr_app_tick(int64_t now)
             cJSON_AddStringToObject(e, "peer", c->peer);
             cJSON_AddBoolToObject(e, "ok", false);
             gr_event(e);
-            memmove(&s_pcu[i], &s_pcu[i + 1], (s_npcu - i - 1) * sizeof(pcure_t));
+            memmove(&T->pcu[i], &T->pcu[i + 1], (s_npcu - i - 1) * sizeof(pcure_t));
             s_npcu--;
             i--;
             continue;
@@ -635,18 +640,18 @@ void gr_app_fill(cJSON *body, int *room)
 {
     s_claims_sent = s_cures_sent = 0;
     for (int i = 0; i < HEARD_N; i++) {
-        s_heard[i].sending = false;
+        T->heard[i].sending = false;
     }
     if (s_nclaims && *room > 16) {
         cJSON *a = cJSON_AddArrayToObject(body, "claims");
         *room -= 12;
         for (int i = 0; i < s_nclaims && i < SYNC_N; i++) {
             cJSON *e = cJSON_CreateObject();
-            cJSON_AddStringToObject(e, "role", s_claims[i].role);
-            cJSON_AddStringToObject(e, "n", s_claims[i].n);
-            cJSON_AddNumberToObject(e, "c", s_claims[i].c);
-            cJSON_AddNumberToObject(e, "r", s_claims[i].r);
-            cJSON_AddStringToObject(e, "g", s_claims[i].g);
+            cJSON_AddStringToObject(e, "role", T->claims[i].role);
+            cJSON_AddStringToObject(e, "n", T->claims[i].n);
+            cJSON_AddNumberToObject(e, "c", T->claims[i].c);
+            cJSON_AddNumberToObject(e, "r", T->claims[i].r);
+            cJSON_AddStringToObject(e, "g", T->claims[i].g);
             if (!add_room(a, e, room)) {
                 break;
             }
@@ -658,10 +663,10 @@ void gr_app_fill(cJSON *body, int *room)
         *room -= 11;
         for (int i = 0; i < s_ncures && i < SYNC_N; i++) {
             cJSON *e = cJSON_CreateObject();
-            cJSON_AddStringToObject(e, "peer", s_cures[i].peer);
-            cJSON_AddStringToObject(e, "n", s_cures[i].n);
-            cJSON_AddStringToObject(e, "p", s_cures[i].p);
-            cJSON_AddStringToObject(e, "g", s_cures[i].g);
+            cJSON_AddStringToObject(e, "peer", T->cures[i].peer);
+            cJSON_AddStringToObject(e, "n", T->cures[i].n);
+            cJSON_AddStringToObject(e, "p", T->cures[i].p);
+            cJSON_AddStringToObject(e, "g", T->cures[i].g);
             if (!add_room(a, e, room)) {
                 break;
             }
@@ -671,13 +676,13 @@ void gr_app_fill(cJSON *body, int *room)
     // Roles heard since the last delivered sync: the live ones first, then the strongest.
     int order[HEARD_N], n = 0;
     for (int i = 0; i < HEARD_N; i++) {
-        if (s_heard[i].id[0] && s_heard[i].fresh) {
+        if (T->heard[i].id[0] && T->heard[i].fresh) {
             order[n++] = i;
         }
     }
     for (int i = 1; i < n; i++) {
         for (int k = i; k > 0; k--) {
-            const heard_t *a = &s_heard[order[k - 1]], *b = &s_heard[order[k]];
+            const heard_t *a = &T->heard[order[k - 1]], *b = &T->heard[order[k]];
             bool ra = gr_real(a->id), rb = gr_real(b->id);
             if (ra != rb ? rb : b->r > a->r) {
                 int t = order[k];
@@ -690,7 +695,7 @@ void gr_app_fill(cJSON *body, int *room)
         cJSON *a = cJSON_AddArrayToObject(body, "heard");
         *room -= 10;
         for (int i = 0; i < n && i < SYNC_N; i++) {
-            heard_t *h = &s_heard[order[i]];
+            heard_t *h = &T->heard[order[i]];
             cJSON *e = cJSON_CreateObject();
             cJSON_AddStringToObject(e, "id", h->id);
             cJSON_AddStringToObject(e, "g", h->g);
@@ -706,16 +711,16 @@ void gr_app_fill(cJSON *body, int *room)
 void gr_app_done(bool delivered)
 {
     if (delivered) {
-        memmove(&s_claims[0], &s_claims[s_claims_sent], (s_nclaims - s_claims_sent) * sizeof(claim_t));
+        memmove(&T->claims[0], &T->claims[s_claims_sent], (s_nclaims - s_claims_sent) * sizeof(claim_t));
         s_nclaims -= s_claims_sent;
-        memmove(&s_cures[0], &s_cures[s_cures_sent], (s_ncures - s_cures_sent) * sizeof(cure_t));
+        memmove(&T->cures[0], &T->cures[s_cures_sent], (s_ncures - s_cures_sent) * sizeof(cure_t));
         s_ncures -= s_cures_sent;
     }
     for (int i = 0; i < HEARD_N; i++) {
-        if (delivered && s_heard[i].sending) {
-            s_heard[i].fresh = false;
+        if (delivered && T->heard[i].sending) {
+            T->heard[i].fresh = false;
         }
-        s_heard[i].sending = false;
+        T->heard[i].sending = false;
     }
     s_claims_sent = s_cures_sent = 0;
 }
@@ -729,7 +734,7 @@ void gr_app_session(long sid)
 {
     s_nbids = 0;
     s_acks = 0;
-    memset(s_acked, 0, sizeof(s_acked));
+    memset(T->acked, 0, sizeof(T->acked));
 }
 
 void gr_app_status(void)
@@ -742,9 +747,9 @@ void gr_app_status(void)
            s_ncures, (unsigned long)s_n.cures_sent, (unsigned long)s_n.cured_got, (unsigned long)s_n.cured_sent,
            s_nbids, (unsigned long)s_n.bids);
     for (int i = 0; i < HEARD_N; i++) {
-        if (s_heard[i].id[0]) {
-            printf("  heard %s ro %c %d dBm %s%s g %s\n", s_heard[i].id, s_heard[i].ro, s_heard[i].r,
-                   gr_real(s_heard[i].id) ? "real" : "unlisted", s_heard[i].fresh ? " (new)" : "", s_heard[i].g);
+        if (T->heard[i].id[0]) {
+            printf("  heard %s ro %c %d dBm %s%s g %s\n", T->heard[i].id, T->heard[i].ro, T->heard[i].r,
+                   gr_real(T->heard[i].id) ? "real" : "unlisted", T->heard[i].fresh ? " (new)" : "", T->heard[i].g);
         }
     }
 }
@@ -754,6 +759,8 @@ void gr_app_stats_reset(void)
     memset(&s_n, 0, sizeof(s_n));
 }
 
-void gr_app_init(void)
+bool gr_app_init(void)
 {
+    T = heap_caps_calloc(1, sizeof(*T), os_mem_bulk_caps());
+    return T != NULL;
 }

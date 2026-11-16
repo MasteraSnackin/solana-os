@@ -62,7 +62,7 @@ gr_stats_t gr_stats;
 
 typedef enum { PH_NONE, PH_OFFER, PH_SESSION } phase_t;
 
-static struct {
+typedef struct {
     phase_t phase;
     long sid;
     char ro;
@@ -96,7 +96,13 @@ static struct {
     char ended_by[12];
     int ended_stake, ended_lamps;
     int64_t ended_at;
-} R;
+} role_t;
+
+// The role and the other big state live in PSRAM when there is some (SRAM is
+// the badge's scarcest): allocated in gossip_role_init, which gives up (and
+// leaves gr_mx NULL, so every entry point returns at once) without them.
+static role_t *s_role;
+#define R (*s_role)
 
 static int64_t s_last_sync;         // local ms of the last delivered sync
 static long s_quit_sid;             // the last session this badge ended itself: never restarted
@@ -104,6 +110,8 @@ static int64_t s_batt_at;
 static int s_batt = 100;
 static bool s_usb = true;
 static char s_me[OS_MESH_ID_LEN + 1];
+static os_cloud_info_t *s_infobuf;  // the tick's copy of os_cloud's
+static gossip_cfg_t *s_cfgnext;     // the tick's copy of the Cfg before it takes the lock
 // What the last sync_fill put in, so sync_done knows what was delivered.
 static bool s_fill_end, s_fill_no;
 static long s_fill_end_sid;
@@ -155,7 +163,8 @@ bool gr_held_spam(char out[GOSSIP_ADDR_MAX + 1])
     return gossip_held_spam(out);
 }
 
-static gossip_cfg_t s_cfg;          // under gr_mx, refreshed every tick (it is 500 B: not on stacks)
+static gossip_cfg_t *s_cfgp;        // under gr_mx, refreshed every tick (PSRAM: it is 500 B)
+#define s_cfg (*s_cfgp)
 
 int gr_close(void)
 {
@@ -314,6 +323,7 @@ typedef struct {
 } msg_t;
 
 static msg_t *s_bq, *s_rq;          // PSRAM when there is some
+static msg_t *s_msgbuf;             // gr_flush's one message in hand
 static int s_nbq, s_nrq;
 static int64_t s_badge_at, s_role_at;
 static cJSON *s_ev[EV_N];
@@ -387,7 +397,7 @@ static void pop(msg_t *q, int *n, msg_t *out)
 // kick), then the events and the notice.
 static void gr_flush(void)
 {
-    static msg_t m;                     // OS task only: off the stack
+    msg_t *m = s_msgbuf;                // OS task only: off the stack
     for (int round = 0; round < 4; round++) {
         bool sent = false;
         int64_t now = gr_ms();
@@ -397,11 +407,11 @@ static void gr_flush(void)
         if (now - s_role_at >= GAP_ROLE_MS) {
             cJSON *d = gr_boss_due(now);
             if (d) {
-                role = envelope(NULL, d, m.json);
-                m.to[0] = 0;
+                role = envelope(NULL, d, m->json);
+                m->to[0] = 0;
                 cJSON_Delete(d);
             } else if (s_nrq) {
-                pop(s_rq, &s_nrq, &m);
+                pop(s_rq, &s_nrq, m);
                 role = true;
             }
             if (role) {
@@ -410,7 +420,7 @@ static void gr_flush(void)
         }
         xSemaphoreGive(gr_mx);
         if (role) {
-            esp_err_t err = os_mesh_station_send(m.to[0] ? m.to : NULL, m.json);
+            esp_err_t err = os_mesh_station_send(m->to[0] ? m->to : NULL, m->json);
             err == ESP_OK ? gr_stats.tx_role++ : gr_stats.tx_fail++;
             sent = true;
         }
@@ -422,11 +432,11 @@ static void gr_flush(void)
             char to[OS_MESH_ID_LEN + 1];
             cJSON *d = gr_boss_vote_due(now, to);
             if (d) {
-                badge = envelope(to, d, m.json);
-                strlcpy(m.to, to, sizeof(m.to));
+                badge = envelope(to, d, m->json);
+                strlcpy(m->to, to, sizeof(m->to));
                 cJSON_Delete(d);
             } else if (s_nbq) {
-                pop(s_bq, &s_nbq, &m);
+                pop(s_bq, &s_nbq, m);
                 badge = true;
             }
             if (badge) {
@@ -437,7 +447,7 @@ static void gr_flush(void)
         if (badge) {
             os_mesh_peer_t p;
             // Unicast only, and never over a bridge: bridges carry no gossip (GOSSIP.md §1).
-            esp_err_t err = os_mesh_peer(m.to, &p) && !p.bridged ? os_mesh_send(OS_MESH_APP, m.to, m.json)
+            esp_err_t err = os_mesh_peer(m->to, &p) && !p.bridged ? os_mesh_send(OS_MESH_APP, m->to, m->json)
                                                                  : ESP_ERR_NOT_FOUND;
             err == ESP_OK ? gr_stats.tx_badge++ : gr_stats.tx_fail++;
             sent = true;
@@ -506,6 +516,7 @@ typedef struct {
 
 static portMUX_TYPE s_rx_mux = portMUX_INITIALIZER_UNLOCKED;
 static rx_t *s_ring;                // RING_N, PSRAM when there is some
+static rx_t *s_rxbuf;               // the drain's copy of one
 static int s_ring_head, s_ring_n;
 static volatile bool s_drain_queued;
 
@@ -594,12 +605,12 @@ static void handle(const rx_t *r)
 
 static void drain_locked(void)
 {
-    static rx_t r;                      // OS task only
+    rx_t *r = s_rxbuf;                  // OS task only
     for (;;) {
         bool have = false;
         portENTER_CRITICAL(&s_rx_mux);
         if (s_ring_n && s_ring[s_ring_head].ready) {
-            r = s_ring[s_ring_head];
+            *r = s_ring[s_ring_head];
             s_ring[s_ring_head].ready = 0;
             s_ring_head = (s_ring_head + 1) % RING_N;
             s_ring_n--;
@@ -609,7 +620,7 @@ static void drain_locked(void)
         if (!have) {
             break;
         }
-        handle(&r);
+        handle(r);
     }
 }
 
@@ -1045,18 +1056,18 @@ void gossip_role_tick(int64_t now)
     if (!gr_mx) {
         return;
     }
-    static os_cloud_info_t in;          // OS task only (it is big)
-    static gossip_cfg_t cfg;
-    os_cloud_get_info(&in);
-    gossip_cfg(&cfg);
+    os_cloud_info_t *in = s_infobuf;    // OS task only (big: PSRAM)
+    gossip_cfg_t *cfg = s_cfgnext;
+    os_cloud_get_info(in);
+    gossip_cfg(cfg);
     bool batt_low = false;
     if (R.phase == PH_SESSION) {
         battery_read(now);
         batt_low = !s_usb && s_batt >= 0 && s_batt < BATT_MIN;
     }
     xSemaphoreTake(gr_mx, portMAX_DELAY);
-    s_cfg = cfg;                        // the Lua task reads it under gr_mx (close range, live roles)
-    strlcpy(s_me, gr_id_ok(in.id) ? in.id : "", sizeof(s_me));
+    s_cfg = *cfg;                       // the Lua task reads it under gr_mx (close range, live roles)
+    strlcpy(s_me, gr_id_ok(in->id) ? in->id : "", sizeof(s_me));
     drain_locked();
     if (R.phase == PH_OFFER) {
         if (R.answer == 0 && now - R.offer_seen >= OFFER_ACCEPT_MS) {
@@ -1249,7 +1260,7 @@ typedef struct {
 static void test_hello_parse(void *arg)
 {
     thello_t *t = arg;
-    static gossip_hello_t h;            // OS task only
+    gossip_hello_t h;                   // ~130 B: the OS task has the stack (test mode only)
     cJSON *j = cJSON_Parse(t->json);
     memset(&h, 0, sizeof(h));
     strlcpy(h.id, t->from, sizeof(h.id));
@@ -1529,16 +1540,22 @@ static int cmd_grole(int argc, char **argv)
 
 void gossip_role_init(void)
 {
-    gr_mx = xSemaphoreCreateMutex();
     s_ring = heap_caps_calloc(RING_N, sizeof(rx_t), os_mem_bulk_caps());
     s_bq = heap_caps_calloc(QUEUE_N, sizeof(msg_t), os_mem_bulk_caps());
     s_rq = heap_caps_calloc(QUEUE_N, sizeof(msg_t), os_mem_bulk_caps());
-    if (!s_ring || !s_bq || !s_rq) {
-        ESP_LOGE(TAG, "no memory for the gossip channel");
+    s_msgbuf = heap_caps_calloc(1, sizeof(msg_t), os_mem_bulk_caps());
+    s_rxbuf = heap_caps_calloc(1, sizeof(rx_t), os_mem_bulk_caps());
+    s_role = heap_caps_calloc(1, sizeof(role_t), os_mem_bulk_caps());
+    s_cfgp = heap_caps_calloc(1, sizeof(gossip_cfg_t), os_mem_bulk_caps());
+    s_cfgnext = heap_caps_calloc(1, sizeof(gossip_cfg_t), os_mem_bulk_caps());
+    s_infobuf = heap_caps_calloc(1, sizeof(os_cloud_info_t), os_mem_bulk_caps());
+    if (!s_ring || !s_bq || !s_rq || !s_msgbuf || !s_rxbuf || !s_role || !s_cfgp || !s_cfgnext || !s_infobuf ||
+            !gr_app_init() || !gr_boss_init()) {
+        ESP_LOGE(TAG, "no memory: no roles and no gossip messages on this badge");
+        return;                         // gr_mx stays NULL: every entry point returns at once
     }
     gossip_cfg(&s_cfg);
-    gr_app_init();
-    gr_boss_init();
+    gr_mx = xSemaphoreCreateMutex();
     os_mesh_subscribe(OS_MESH_APP, on_mesh, NULL);
     os_cmd_register("grole", "grole [status|stats reset|test …|claim|bid|cure|vote|answer|end|fork|block|boss|bids|voters]",
                     cmd_grole);

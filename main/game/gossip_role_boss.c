@@ -548,7 +548,8 @@ void gr_boss_stats_reset(void)
     B.votes_in = B.votes_full = 0;
 }
 
-void gr_boss_init(void)
+bool gr_boss_init(void)
 {
     B.fk = -1;
+    return true;
 }
