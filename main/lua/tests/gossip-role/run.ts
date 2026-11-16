@@ -183,6 +183,13 @@ async function status(e: Emu) {
 	await sleep(50);
 	return e.lines.slice(mark).join('\n');
 }
+async function gstatus(e: Emu) {
+	const mark = e.lines.length;
+	e.cmd('gossip status');
+	await e.waitFor(/^ {2}notices: /, 3000, mark);
+	await sleep(50);
+	return e.lines.slice(mark).join('\n');
+}
 // Wait, syncing every 10 s as the node service would (a role without a sync for 90 s ends).
 async function keepAlive(es: Emu[], ms: number, state?: unknown) {
 	const end = Date.now() + ms;
@@ -505,7 +512,12 @@ async function fight(A: Emu, players: Emu[], win: boolean) {
 	const votes = new Map<string, number>();
 	const until = Date.now() + (win ? 40_000 : 30_000);
 	let phase = 1, beat = 0, finBefore = 0;
+	let heldLine = '';
 	while (Date.now() < until && phase === 1) {
+		if (win && !heldLine && beat >= 4) {
+			// Gossip's notices wait while this badge votes in a fight: five in, the last three kept.
+			for (let i = 0; i < 5; i++) heldLine = (await players[0].run('gossip notice', /^gossip notice: /)) ?? '';
+		}
 		for (const p of players) {
 			const l = lock.get(p.id) ?? 0;
 			const nl = win ? Math.min(32, l ? l * 2 : 1) : l ? 0 : 1; // the losing side keeps missing
@@ -521,6 +533,7 @@ async function fight(A: Emu, players: Emu[], win: boolean) {
 		if (phase === 1 && beat < minBeats) finBefore = Math.max(finBefore, vj?.fin ?? 0);
 	}
 	ok(phase === (win ? 2 : 3), win ? 'the players root the block (2/3 finalized)' : 'the boss wins at the end of its beats', `phase ${phase}`);
+	if (win) ok(/ok, held 3, dropped 2/.test(heldLine), 'notices are held during a fight (the last three, the rest counted)', heldLine);
 	if (win) ok(beat >= minBeats && finBefore >= 2, `not before beat minBeats (${minBeats}), though finalized long before`, `rooted at beat ${beat}, ${finBefore} finalized before beat ${minBeats}`);
 	r = await sync(A, boss.state);
 	ok(r.body.role?.boss && r.body.role.boss.won === win && r.body.role.boss.voters >= 3, 'RoleReport.boss with the outcome', JSON.stringify(r.body.role));
@@ -551,7 +564,29 @@ async function fight(A: Emu, players: Emu[], win: boolean) {
 		const m = s.match(/beat jitter: (\d+) pairs, mean (\d+) ms, max (\d+) ms, over 120 ms (\d+)/);
 		console.log(`     ${p.name} ${m ? m[0] : 'no jitter line'}`);
 	}
+	if (win) {
+		// After the fight: no longer held; shown one per service turn (~10 s) while the service runs.
+		const p0 = players[0];
+		let st = '';
+		for (let t = 0; t < 40; t++) {
+			const all = await gstatus(p0);
+			st = all.split('\n').find((l) => /notices: /.test(l)) ?? '';
+			if (/in a fight: no/.test(st) && (/held 0, dropped 0/.test(st) || !/^gossip: on/m.test(all))) break;
+			await sleep(1000);
+		}
+		const on = /^gossip: on/m.test(await gstatus(p0));
+		ok(/in a fight: no/.test(st) && (!on || /held 0, dropped 0/.test(st)), `held notices go out after the fight${on ? '' : ' (gossip off here: only the hold checked)'}`, st.trim());
+	}
 	await sync(A, { ended: { sid, by: 'time', stake: 80, lamps: 0 } });
+	if (win) {
+		// A finished boss stays on the air answering claims; an offer of a new role (the server
+		// makes one only after those 90 s by its own clock) ends that at once.
+		const lingering = (await sync(A, {})).st;
+		const nsid = sid + 100;
+		const o = await sync(A, { offer: { sid: nsid, ro: 'l', until: Date.now() + 30_000 } });
+		ok(lingering?.ro === 'z' && lingering.on_air === true && o.st?.offer?.sid === nsid, 'a lingering boss takes a new offer', JSON.stringify(o.st));
+		await sync(A, { ended: { sid: nsid, by: 'declined', stake: 0, lamps: 0 } });
+	}
 	for (const p of players) await p.run('grole stats reset', /reset/);
 	// Players' lingering fight state must not carry into the next one.
 	await sleep(2000);

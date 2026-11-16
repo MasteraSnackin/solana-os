@@ -2495,6 +2495,7 @@ static void notices(int64_t now)
     unlock();
     if (os_service_notify(SVC_ID, col, "%s", text)) {
         s_notice_at = now;
+        ESP_LOGI(TAG, "notice: %s", text);
     } else if (held) {
         lock();                         // another notice took the service's 10 s: this one next turn
         if (s_nheld < HELD_MAX) {
@@ -2513,6 +2514,7 @@ void gossip_tick(int64_t now)
     if (!S) {
         return;
     }
+
     // Who we are, and whose the card is.
     const char *id = game_badge_id();
     bool claimed = game_claimed();
@@ -3007,6 +3009,18 @@ static void cmd_run(void *arg)
         bench();
         free(line);
         return;
+    } else if (!strcmp(line, "notice")) {
+        // A test notice through the service's one path (held while this badge is in a fight).
+        static int n;
+        char t[32];
+        snprintf(t, sizeof(t), "test notice %d", ++n);
+        bool done = gossip_notice(0, t);
+        lock();
+        printf("gossip notice: %s, held %d, dropped %d\n", done ? "ok" : "not shown (one per 10 s)", s_nheld,
+               s_held_drop);
+        unlock();
+        free(line);
+        return;
     } else if (!strcmp(line, "progs")) {
         lock();
         printf("gossip progs: %d of %d%s\n", S->nprog, s_prog_cap, s_card ? " (card)" : " (RAM)");
@@ -3020,7 +3034,7 @@ static void cmd_run(void *arg)
         free(line);
         return;
     } else if (line[0] && strcmp(line, "status")) {
-        printf("usage: gossip [status|peers|progs|sync|on|off]\n");
+        printf("usage: gossip [status|peers|progs|sync|on|off|notice]\n");
         free(line);
         return;
     }
@@ -3028,6 +3042,7 @@ static void cmd_run(void *arg)
     char st[OS_SERVICE_STATUS_MAX + 1];
     svc_status(NULL, st, sizeof(st));
     int64_t srv = gossip_server_ms();
+    bool fighting = gossip_role_fighting();     // gr_mx before s_mx
     lock();
     printf("gossip: %s (%s), setting %s, %s, clock %s, key %s\n", gossip_on() ? "on" : "off", st,
            os_setting(OS_SET_GOSSIP) ? "on" : "off", s_claimed ? "claimed" : "unclaimed", srv ? "yes" : "no",
@@ -3037,10 +3052,12 @@ static void cmd_run(void *arg)
            S->nimm);
     printf("  waiting: %d records (next %" PRIu32 "), %d actions (next %" PRIu32 "), %d pending; %d programs kept\n",
            S->nrec, s_rn, S->nact, s_an, S->npending, S->nprog);
-    printf("  sync: last HTTP %d, %s, next in %lld ms, every %d ms%s%s\n", s_last_status,
+    printf("  sync: last HTTP %d, %s, next in %lld ms, every %d ms%s%s%s%s\n", s_last_status,
            s_tok ? "in flight" : "idle", (long long)(s_next_sync - now_ms()), sync_interval(),
-           s_why[0] ? ", " : "", s_why);
+           s_why[0] ? ", " : "", s_why, os_api_online() ? "" : ", offline (os_api)", s_run ? "" : ", not running");
     printf("  hello: %s\n", s_extra[0] ? s_extra : "(no gossip fields)");
+    printf("  notices: held %d, dropped %d (in a fight: %s)\n", s_nheld, s_held_drop,
+           fighting ? "yes" : "no");
     printf("  heard: %" PRIu32 " hellos, %" PRIu32 " bad, %" PRIu32 " dropped, %d badges near; checker %s, "
            "last %lld us, stack left %d B\n",
            s_hellos, s_rx_bad, s_hops_dropped, peers_near(), s_verifying ? "running" : "idle",

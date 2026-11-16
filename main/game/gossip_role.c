@@ -741,6 +741,11 @@ static void apply_offer(const cJSON *o, int64_t now)
 {
     long sid = gr_jint(o, "sid", 1, 0x7fffffff, 0);
     const char *ro = game_jstr(o, "ro");
+    if (sid && R.phase == PH_SESSION && R.linger_until && sid != R.sid) {
+        // A finished boss still answering claims: the server offers this badge a new role only
+        // once the fight's claims had their 90 s by its clock (ours started a sync later).
+        role_stop(NULL);
+    }
     if (!sid || !ro_ok(ro[0]) || ro[1] || R.phase == PH_SESSION || sid == R.ended_sid) {
         return;
     }

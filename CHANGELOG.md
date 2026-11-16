@@ -42,7 +42,8 @@ the whole OS.
   Console `api lose <path>` drops the next answer to test it.
 - **Notices wait out a fight**: while the badge votes in a boss fight, or its own boss
   fights, Gossip holds its notices (a toast would cover the fight's lower bars) and shows
-  the last three after the fight, the first with a count of any it dropped.
+  the last three after the fight, the first with a count of any it dropped (`gossip
+  notice` makes a test one; `gossip status` shows what is held).
 - `game/gossip_genome.c`: the genome, base58, PDA, record and HELLO-tag code, free of
   LVGL and Lua; `tests/gossip/genome_test.py` checks it against the contract's vectors.
 
@@ -74,7 +75,8 @@ the whole OS.
 - **Late claims in a full hall**: a finished boss stays on the air 90 s after the server
   ended its session, broadcasting once a second and acknowledging claims; a player's
   automatic claim tries for 90 s, its first try 0-3 s after it hears the end and then
-  every 3-6 s, so a hall doesn't ask at once. A role sends 4 messages a second, two of them
+  every 3-6 s, so a hall doesn't ask at once. A new offer ends that wait (the server makes
+  one only after the 90 s by its clock). A role sends 4 messages a second, two of them
   the beat in a fight: in the emulator 100 claimants were all acknowledged, half by 27 s,
   the last at 53 s.
 - **os_mesh: the senders heard.** A second, light table of every sender a HELLO came from
