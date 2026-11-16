@@ -44,6 +44,7 @@ static const char *TAG = GR_TAG;
 #define BATT_EVERY_MS       10000
 #define MISSES_MAX          2           // answers without `role` in a row before a role is dropped
 #define TALLY_MAX           512
+#define BOSS_LINGER_MS      30000       // a boss whose fight is over answers claims this long after the server ended it
 #define RING_N              24          // messages the mesh task may queue for the OS task
 #define RX_MAX              300         // longest APP message kept (d <= 200 plus the envelope)
 #define QUEUE_N             8           // per sender (badge, role)
@@ -86,6 +87,7 @@ typedef struct {
     gossip_role_pick_t block[BLOCK_MAX];
     int nblock;
     int misses;
+    int64_t linger_until;           // local ms: a finished boss on the air for its fight's claims (0 = no)
     char hello[220];                // the HELLO last handed to os_mesh
     // an end to report
     const char *end;                // "owner", "battery", "busy"
@@ -727,6 +729,7 @@ static void role_stop(const char *end)
     free(R.tally);
     R.tally = NULL;
     R.phase = PH_NONE;
+    R.linger_until = 0;
     cJSON *e = role_ev("off");
     if (end) {
         cJSON_AddStringToObject(e, "by", end);
@@ -772,7 +775,14 @@ static void apply_ended(const cJSON *e)
         return;
     }
     char ro = R.sid == sid ? R.ro : 0;
-    if (R.phase != PH_NONE && R.sid == sid) {
+    if (R.phase == PH_SESSION && R.sid == sid && R.on_air && R.ro == 'z' && gr_boss_over()) {
+        // The server ends a boss the moment its report says how it went, but the players
+        // claim after they hear the end (GOSSIP.md §8): their acks need the role key on the
+        // air a while longer. The server takes a fight's claims until it settles them.
+        if (!R.linger_until) {
+            R.linger_until = gr_ms() + BOSS_LINGER_MS;
+        }
+    } else if (R.phase != PH_NONE && R.sid == sid) {
         role_stop(NULL);
     }
     if (R.end && R.end_sid == sid) {
@@ -1000,7 +1010,7 @@ void gossip_role_sync_done(bool delivered, const cJSON *role)
     if (cJSON_IsObject(role)) {
         R.misses = 0;
         apply_state(role, now);
-    } else if (delivered && R.phase != PH_NONE && ++R.misses >= MISSES_MAX) {
+    } else if (delivered && R.phase != PH_NONE && !R.linger_until && ++R.misses >= MISSES_MAX) {
         // The server no longer lists it: it ended (an admin, a restart of ours it didn't follow).
         ESP_LOGI(TAG, "role %ld: not in the server's answers any more", R.sid);
         role_stop(NULL);
@@ -1079,6 +1089,12 @@ void gossip_role_tick(int64_t now)
         } else if (now - R.offer_seen >= OFFER_FORGET_MS) {
             R.phase = PH_NONE;
             gr_event(role_ev("off"));
+        }
+    } else if (R.phase == PH_SESSION && R.on_air && R.linger_until) {
+        if (now >= R.linger_until || busy_now() || !os_mesh_station_on()) {
+            role_stop(NULL);                // the fight's claims had their time
+        } else {
+            role_hello(now);
         }
     } else if (R.phase == PH_SESSION && R.on_air) {
         int64_t t = gr_server_ms();

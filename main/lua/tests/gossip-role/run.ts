@@ -536,6 +536,7 @@ async function fanin(A: Emu, real: Emu[]) {
 	const crock = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 	const results: string[] = [];
 	let wide100 = -1;
+	let runNo = 0;
 	// `off`: os_mesh's senders table off (`mesh senders off`): the 20-entry peer table's rule
 	// alone, as before 2.4.0's fix (MESH.md "Senders heard").
 	for (const [n, every, off] of [
@@ -546,9 +547,11 @@ async function fanin(A: Emu, real: Emu[]) {
 		[100, 2000, false],
 		[18, 500, false]
 	] as [number, number, boolean][]) {
+		runNo++;
 		await A.run(`mesh senders ${off ? 'off' : 'on'}`, /senders heard/);
 		const voters = Array.from({ length: n }, (_, i) => ({
-			id: `V${crock[(i >> 10) & 31]}${crock[(i >> 5) & 31]}${crock[i & 31]}${crock[(n >> 5) & 31]}${crock[n & 31]}`,
+			// Ids unique per run (a run's ids stay bound to its MACs for 30 s, as real ones would).
+			id: `V${crock[(i >> 5) & 31]}${crock[i & 31]}${crock[runNo & 31]}${crock[(n >> 5) & 31]}${crock[n & 31]}`,
 			mac: `0a${randomBytes(4).toString('hex')}${(i % 24).toString(16).padStart(2, '0')}`,
 			v: 0
 		}));

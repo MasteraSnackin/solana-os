@@ -133,6 +133,11 @@ void gr_boss_start(long sid, int bpm, int beats, int min, int64_t since)
     ESP_LOGI(TAG, "boss %ld: %d bpm, %d beats%s", sid, bpm, beats, B.v ? "" : " (no voter table: no memory)");
 }
 
+bool gr_boss_over(void)
+{
+    return B.on && B.done;
+}
+
 void gr_boss_stop(void)
 {
     B.on = false;
