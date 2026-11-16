@@ -122,5 +122,9 @@ char *gossip_nearby_json(void);
 char *gossip_hearing_json(void);
 // gossip.lead(on): sets OS_SET_LEADER on the OS task and tells the role service.
 void gossip_set_lead(bool on);
+// A Gossip notice (toast + LED, os_service_notify). While this badge is in a boss
+// fight (voting, or its own boss) it is held, and the last three are shown after the
+// fight with a count of the rest. OS task. True when shown or held.
+bool gossip_notice(uint32_t col, const char *text);
 // The rarity's name: "common", "rare", "epic", "legendary".
 const char *gossip_rarity_name(int rarity);

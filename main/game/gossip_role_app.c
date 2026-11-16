@@ -15,6 +15,7 @@
 #include <string.h>
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "core/os_mem.h"
 #include "core/os_mesh.h"
 #include "game.h"
@@ -25,8 +26,10 @@ static const char *TAG = GR_TAG;
 #define CLAIMS_PENDING  4
 #define CLAIMS_DONE     8           // acknowledged, waiting to upload (≤ 4 a sync)
 #define CLAIM_TRIES     7
-#define CLAIM_TRIES_FIGHT 12        // a fight's claim at the end: a hall of claimants shares the boss's four
-                                    // messages a second, and the boss stays on the air 30 s after the end
+#define CLAIM_FIGHT_MS  90000       // a fight's claim at the end tries for 90 s: a hall of claimants shares the
+                                    // boss's four messages a second (two of them its broadcast), ~50 s of acks
+                                    // for 100, and the boss stays on the air 90 s after the end (GOSSIP.md §8)
+#define CLAIM_JITTER_MS 3000        // ... each try 0-3 s later than the plain rhythm, so a hall doesn't ask at once
 #define CLAIM_EVERY_MS  3000        // a retry outlives the role's 5 s rule on its second try
 #define ACK_GAP_MS      5000        // GOSSIP.md §8: one ack per claimant per 5 s
 #define SEEN_N          32          // claimants (and curers) remembered for that rule
@@ -46,6 +49,7 @@ typedef struct {
     int c;
     int tries;
     int64_t next;
+    int64_t until;                  // a fight's claim: no ack by then, give up
     bool fight;                     // the fight's own claim at the end
 } pclaim_t;
 
@@ -216,8 +220,10 @@ static const char *claim_locked(const char *role, int c, bool fight)
     os_mesh_nonce(pc->n);
     pc->c = c;
     pc->tries = 0;
-    pc->next = 0;
     pc->fight = fight;
+    // A fight's claim: the whole hall claims as it hears the end, so the first try waits 0-3 s.
+    pc->next = fight ? gr_ms() + (int64_t)(esp_random() % CLAIM_JITTER_MS) : 0;
+    pc->until = fight ? gr_ms() + CLAIM_FIGHT_MS : 0;
     gossip_sync_soon();                 // the 2 s sync while it waits
     return NULL;
 }
@@ -593,7 +599,7 @@ void gr_app_tick(int64_t now)
         if (now < pc->next) {
             continue;
         }
-        if (pc->tries >= (pc->fight ? CLAIM_TRIES_FIGHT : CLAIM_TRIES)) {
+        if (pc->fight ? now >= pc->until : pc->tries >= CLAIM_TRIES) {
             cJSON *e = ev("ack");
             cJSON_AddStringToObject(e, "role", pc->role);
             cJSON_AddNumberToObject(e, "c", pc->c);
@@ -611,7 +617,7 @@ void gr_app_tick(int64_t now)
             s_n.claims_sent++;
         }
         cJSON_Delete(d);
-        pc->next = now + CLAIM_EVERY_MS;
+        pc->next = now + CLAIM_EVERY_MS + (pc->fight ? (int64_t)(esp_random() % CLAIM_JITTER_MS) : 0);
     }
     for (int i = 0; i < s_npcu; i++) {
         pcure_t *c = &T->pcu[i];

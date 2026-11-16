@@ -34,7 +34,7 @@ static const char *TAG = GR_TAG;
 #define FORK_LEAD_MS    400         // a fork is announced at least this long before its beat
 #define BCAST_MS        500         // twice a second
 #define BCAST_END_MS    1000        // after the end: once a second ...
-#define BCAST_END_FOR   30000       // ... for 30 s, so every player hears how it ended
+#define BCAST_END_FOR   90000       // ... for 90 s, so every player hears how it ended and its claim is answered
 #define HEARD_MS        10000       // a boss not heard for this long is gone
 #define VOTE_EVERY_MS   2000        // a player's summary: one per ~2 s
 #define CLAIM_SILENT_MS 15000       // the boss went quiet after we voted: claim anyway
@@ -72,6 +72,7 @@ static struct {
     char id[OS_MESH_ID_LEN + 1];
     long sid;
     int b, ms, bpm, fk, p, ph, rssi;
+    int mb;                         // the first beat it may root at ("mb"; -1 not sent)
     int64_t at;                     // when the mesh task had it
     int64_t pred_at;                // the beat after b, by the last broadcast (local ms)
     int pred_b;
@@ -250,6 +251,7 @@ cJSON *gr_boss_due(int64_t now)
     cJSON_AddNumberToObject(d, "ms", ms);
     cJSON_AddNumberToObject(d, "bpm", B.bpm);
     cJSON_AddNumberToObject(d, "fk", B.fk);
+    cJSON_AddNumberToObject(d, "mb", B.min_beats);
     cJSON_AddNumberToObject(d, "p", B.p);
     cJSON_AddNumberToObject(d, "ph", ph);
     return d;
@@ -365,6 +367,9 @@ static cJSON *player_obj(int64_t now)
     cJSON_AddNumberToObject(o, "ms", ms);
     cJSON_AddNumberToObject(o, "bpm", P.bpm);
     cJSON_AddNumberToObject(o, "fork", P.fk);
+    if (P.mb >= 0) {
+        cJSON_AddNumberToObject(o, "minBeats", P.mb);
+    }
     cJSON_AddNumberToObject(o, "p", P.p);
     cJSON_AddNumberToObject(o, "phase", P.ph);
     cJSON_AddNumberToObject(o, "rssi", P.rssi);
@@ -388,6 +393,7 @@ static void on_boss(const char *from, os_peer_kind_t kind, int rssi, int64_t at,
     int bpm = gr_jint(d, "bpm", 30, 240, 0), b = gr_jint(d, "b", 0, 100000, -1);
     int ms = gr_jint(d, "ms", 0, 60000, -1), fk = gr_jint(d, "fk", -1, 100000, -2);
     int p = gr_jint(d, "p", 0, 100, -1), ph = gr_jint(d, "ph", 0, 3, -1);
+    int mb = gr_jint(d, "mb", 0, 100000, -1);
     if (!sid || !bpm || b < 0 || ms < 0 || (ph >= 1 && ms > beat_ms_of(bpm)) || fk < -1 || p < 0 || ph < 0) {
         return;
     }
@@ -417,6 +423,7 @@ static void on_boss(const char *from, os_peer_kind_t kind, int rssi, int64_t at,
     P.ms = ms;
     P.bpm = bpm;
     P.fk = fk;
+    P.mb = mb;
     P.p = p;
     P.ph = ph;
     P.rssi = rssi;
@@ -487,6 +494,17 @@ bool gr_boss_fighting(void)
     int64_t now = gr_ms();
     return (P.vto[0] && P.have && now - P.at < HEARD_MS && P.ph <= 1 && now - P.vset_at < HEARD_MS) ||
            (B.on && !B.done);
+}
+
+bool gossip_role_fighting(void)
+{
+    if (!gr_mx) {
+        return false;
+    }
+    xSemaphoreTake(gr_mx, portMAX_DELAY);
+    bool f = gr_boss_fighting();
+    xSemaphoreGive(gr_mx);
+    return f;
 }
 
 char *gossip_role_boss_json(void)

@@ -81,16 +81,18 @@ export type Fight = {
     id: string; sid: number; t0: number; bpm: number; fork: number; p: number; real: boolean;
     end?: number; heard?: boolean; rssi?: number;
     own?: boolean; voters?: number; conf?: number; fin?: number; beats?: number;
+    minBeats?: number; // bossMinBeats: no root before this beat (60 by default)
 };
 export function bossAt(f: Fight, clock: number) {
     const bm = 60000 / f.bpm;
-    if (clock < f.t0) return { id: f.id, sid: f.sid, beat: 0, ms: f.t0 - clock, bpm: f.bpm, fork: f.fork, p: f.p, phase: 0, rssi: f.rssi ?? -60, real: f.real };
+    const minBeats = f.minBeats ?? 60;
+    if (clock < f.t0) return { id: f.id, sid: f.sid, beat: 0, ms: f.t0 - clock, bpm: f.bpm, fork: f.fork, p: f.p, phase: 0, rssi: f.rssi ?? -60, real: f.real, minBeats };
     const e = clock - f.t0;
-    return { id: f.id, sid: f.sid, beat: Math.floor(e / bm), ms: Math.round(bm - (e % bm)), bpm: f.bpm, fork: f.fork, p: f.p, phase: f.end ?? 1, rssi: f.rssi ?? -60, real: f.real };
+    return { id: f.id, sid: f.sid, beat: Math.floor(e / bm), ms: Math.round(bm - (e % bm)), bpm: f.bpm, fork: f.fork, p: f.p, phase: f.end ?? 1, rssi: f.rssi ?? -60, real: f.real, minBeats };
 }
 export function votersAt(f: Fight, clock: number) {
     const b = bossAt(f, clock);
-    return { voters: f.voters ?? 0, conf: f.conf ?? 0, fin: f.fin ?? 0, p: f.p, all: f.voters ?? 0, beat: b.beat, beats: f.beats ?? 300, fork: f.fork, phase: b.phase };
+    return { voters: f.voters ?? 0, conf: f.conf ?? 0, fin: f.fin ?? 0, p: f.p, all: f.voters ?? 0, beat: b.beat, beats: f.beats ?? 300, minBeats: b.minBeats, fork: f.fork, phase: b.phase };
 }
 
 const empty = (): State => ({
@@ -99,6 +101,7 @@ const empty = (): State => ({
         slots: [false, false, false], act: '', inbox: [], held: 0, deployed: 0, deploys: 1, adopted: 0, boost: 0,
         fx: [], imm: [], items: [], itemsN: 0, epoch: { n: 0, ends: 0, obj: [] }, pub: false, earns: false,
         why: 'Link X at solana.com/breakpoint/badge/profile to earn',
+        site: 'https://solana.com/breakpoint/badge',
     },
     programs: { slots: [false, false, false], inbox: [] },
     program: {},
@@ -200,9 +203,9 @@ export const STATES: Record<string, () => State> = {
     },
     offer: () => withRole({ offer: { sid: 41, ro: 'l', until: NOW + 23, left: 23 } }),
     'offer-mev': () => withRole({ offer: { sid: 44, ro: 'm', until: NOW + 12, left: 12 } }),
-    leader: () => withRole(session('l', { st: [addr(20)], boost: 9, block: [{ p: addr(20), by: 'B00X9Q' }], tally: { bids: 1, block: 1 } }), { bids: BIDS }),
+    leader: () => withRole(session('l', { st: [addr(20)], on_air_p: addr(20), boost: 9, block: [{ p: addr(20), by: 'B00X9Q' }], tally: { bids: 1, block: 1 } }), { bids: BIDS }),
     mev: () => withRole(session('m', { until: NOW + 840, left: 840, tally: { pot: 34, near: 5, caught: false } })),
-    anon: () => withRole(session('a', { st: [addr(11)], boost: 3, tally: { found: 1, first: String((NOW - 30) * 1000) } })),
+    anon: () => withRole(session('a', { st: [addr(11)], on_air_p: addr(11), boost: 3, tally: { found: 1, first: String((NOW - 30) * 1000) } })),
     ended: () => withRole({ ended: { sid: 42, ro: 'l', by: 'time', stake: 50, lamps: 10 } }),
     roles: () => ({ ...busy(), nearby: rolesNear() }),
     validator: () => {
@@ -212,7 +215,7 @@ export const STATES: Record<string, () => State> = {
     fight: () => ({ ...busy(), nearby: rolesNear(), fight: { id: 'R0LE04', sid: 77, t0: 3000, bpm: 100, fork: 12, p: 40, real: true } }),
     'boss-own': () => ({
         ...busy(), nearby: nearbyList(),
-        role: session('z', { sid: 78, until: NOW + 180, left: 180, st: [SPAM], boost: 9, boss: { bpm: 100, beats: 300, min: 3, spam: SPAM } }),
+        role: session('z', { sid: 78, until: NOW + 180, left: 180, st: [SPAM], on_air_p: SPAM, boost: 9, boss: { bpm: 100, beats: 300, min: 3, minBeats: 60, spam: SPAM } }),
         fight: { id: 'R0LE04', sid: 78, t0: 2000, bpm: 100, fork: -1, p: 60, real: true, own: true, voters: 5, conf: 3, fin: 1, beats: 300 },
     }),
     ach: () => {

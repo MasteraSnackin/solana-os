@@ -58,7 +58,8 @@ function js2v(x: unknown): V {
   if (typeof x === 'number') return Number.isInteger(x) ? i(x) : { t: 3, v: Math.fround(x) };
   if (typeof x === 'string') return s(x);
   if (x instanceof Uint8Array) return s(x);
-  if (typeof x === 'object' && 't' in (x as object)) return x as V;
+  // An already-encoded value: its `t` is a type number (an event's `t` is a string).
+  if (typeof x === 'object' && typeof (x as { t?: unknown }).t === 'number') return x as V;
   return tbl(x as Record<string, unknown>);
 }
 function v2js(v: V): unknown {

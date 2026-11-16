@@ -170,8 +170,7 @@ export function script(c: Ctx) {
             if (!EVENTS[arg]) fail('no such event');
             else if (!ex.on_gossip) fail('the app exports no on_gossip');
             else {
-                // tbl, not js2v: js2v takes any object with a `t` key for an encoded value.
-                run(`on_gossip(${arg})`, () => ex.on_gossip(), [c.tbl(EVENTS[arg])]);
+                run(`on_gossip(${arg})`, () => ex.on_gossip(), [js2v(EVENTS[arg])]);
                 deliver();
             }
         } else if (op === 'state') {

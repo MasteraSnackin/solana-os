@@ -63,6 +63,9 @@ char *gossip_role_state_json(void);     // gossip.role(): this badge's offer, se
 char *gossip_role_boss_json(void);      // gossip.boss(): the fight heard nearby
 char *gossip_role_bids_json(void);      // gossip.bids(): a Leader's bids (array)
 char *gossip_role_voters_json(void);    // gossip.voters(): a boss's voter counts
+// This badge is in a boss fight: voting in one it hears, or its own boss fight not over
+// (Gossip holds its notices meanwhile). Any task; takes gr_mx.
+bool gossip_role_fighting(void);
 
 // Acting (any task; the Lab's calls): NULL when done or queued, else why not
 // ("not a leader", "too far", "busy" ...), a short ASCII text.

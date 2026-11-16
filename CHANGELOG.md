@@ -9,127 +9,118 @@ site changes that came with them live in the parent repository.
 ## 2.4.0 (unreleased)
 
 Gossip, the event game on the badge mesh (the parent repo's docs/GOSSIP.md), run by the
-OS, with the `gossip` module for apps (permission `gossip`) and its roles. The badge's
-HELLO takes extra fields (`os_mesh_hello_extra`) and a station's HELLO can be replaced
-(`os_mesh_station_hello`); Settings gains Gossip and May become a leader.
+OS, with the `gossip` module for apps (permission `gossip`), roles, and the boss fight.
+Also: fixed TLS record buffers, a Gossip category in the Guide, and one battery reading for
+the whole OS.
 
-<!-- gossip:fw-node -->
+### Gossip: the node
+
 - **The node service** (`game/gossip.c`, built-in service `gossip`, Purple, stoppable,
   starts at boot; Settings > Gossip is the same switch; console
   `gossip [status|peers|progs|sync|on|off|bench]`). While claimed, on, and with a clock (a
-  sync since boot), the badge's HELLO carries `st` and `g` (docs/GOSSIP.md §4, 123 bytes
-  measured, one fragment), the tag recomputed on the OS task when the window, the program,
-  the class or the boost changes; trait 3's programs stay quiet 30 min after adoption. It
-  hears other badges' and roles' `g`, accumulates exposure once a second in integers with
-  the server's `Cfg` (built-in defaults: the server's tuned `thr 6000`, `decay 10`), makes
-  exposure records, flickers the LEDs in the program's colour (not while an app is open)
-  and notifies; it syncs `POST /api/device/gossip/sync` (60 s, 20 s opted in to roles, 2 s
-  in a session, 5 s while the server is taking a queue) and keeps `node.json`, `out.jsonl`
-  and `progs/` in `/sdcard/hh/gossip/` (RAM only without a card: 8 records). Records are
-  checked off the OS task by a short-lived task: the PDA in one try with its bump, then
-  the server's Ed25519 signature (71 ms on a production badge), with the key from
-  `GET /api/device/gossip/key` kept in NVS per server. State: one 16 KB allocation in
-  PSRAM at boot.
-- **`gossip` module, node side** (`lua/lua_gossip.c`): `me`, `programs`, `program`,
-  `genome`, `nearby`, `hearing`; `on_gossip` events `exposed`, `result`, `node`, `event`;
-  the Lab's `set_class`, `activate`, `place`, `drop`, `deploy`, `use`, `name`, `public`,
-  `lead`. `badge.h`: the same as `gossip_*`. Times reach apps as unix seconds.
+  sync since boot), the badge's HELLO carries `st` and `g` (GOSSIP.md §4, 123 bytes
+  measured, one fragment; `os_mesh_hello_extra`), the tag recomputed on the OS task when
+  the window, the program, the class or the boost changes; trait 3's programs stay quiet
+  30 min after adoption. It hears other badges' and roles' `g`, accumulates exposure once
+  a second in integers with the server's `Cfg` (built-in defaults: `thr 6000`,
+  `decay 10`), makes exposure records, flickers the LEDs in the program's colour (not
+  while an app is open) and notifies; it syncs `POST /api/device/gossip/sync` (60 s, 20 s
+  opted in to roles, 2 s in a session, 5 s while the server is taking a queue) and keeps
+  `node.json`, `out.jsonl` and `progs/` in `/sdcard/hh/gossip/` (RAM only without a card:
+  8 records). State: one 16 KB allocation in PSRAM at boot.
+- **Records are checked** off the OS task by a short-lived task: the PDA in one try with
+  its bump, then the server's Ed25519 signature (71 ms on a production badge), with the
+  key from `GET /api/device/gossip/key` kept in NVS per server. A signature that fails
+  fetches the key again (at most every 2 minutes) and checks again what failed: the server
+  signs each record as it serves it, so a key rotation costs a badge one refetch.
+- **Hearing holds a source to little**: its HELLOs count once a second, it holds one
+  hearing entry (a listed role id four) whose newest program takes its place, and a source
+  whose record came back `bad` or `unknown` is not heard for 10 minutes (one badge cycling
+  made-up addresses could otherwise keep all eight entries of every badge near it).
+- **A lost answer no longer stops it**: a sync, or a fetch of the key, with no answer in
+  30 s is given up and goes again (os_api drops an answer when the OS queue stays full).
+  Console `api lose <path>` drops the next answer to test it.
+- **Notices wait out a fight**: while the badge votes in a boss fight, or its own boss
+  fights, Gossip holds its notices (a toast would cover the fight's lower bars) and shows
+  the last three after the fight, the first with a count of any it dropped.
 - `game/gossip_genome.c`: the genome, base58, PDA, record and HELLO-tag code, free of
   LVGL and Lua; `tests/gossip/genome_test.py` checks it against the contract's vectors.
-<!-- /gossip:fw-node -->
 
-Roles:
+### Gossip: roles and the boss fight
 
-<!-- gossip:fw-roles -->
 - **Roles** (`game/gossip_role.c`, `gossip_role_app.c`, `gossip_role_boss.c`): a badge
-  whose owner turned on May become a leader takes the server's offer (it accepts by itself
-  after 30 s unless declined) and puts the role on the air as a second identity, a station
-  with the role HELLO of GOSSIP.md §4 tagged with the session's role key, a Leader's block
-  turning every 10 s. It ends at `until`, by the owner, under 15 % off USB, when a
-  Collaborator takeover or a badge beacon needs the second identity (`busy`), or 90 s
-  without a sync, and reports how through the node service's sync. Never more than the
-  badge's id and one other per MAC.
+  whose owner turned on Settings > May become a leader takes the server's offer (it accepts
+  by itself after 30 s unless declined) and puts the role on the air as a second identity:
+  a station with the role HELLO of GOSSIP.md §4, tagged with the session's role key, a
+  Leader's block turning every 10 s. It ends at `until`, by the owner, under 15 % off USB,
+  when a Collaborator takeover or a badge beacon needs the second identity (`busy`), or
+  90 s without a sync, and reports how with the next sync. A badge keeps one role id from
+  session to session; never more than its own id and one other per MAC.
 - **The `gossip` app id** (MESH.md "Gossip"): the OS's own APP messages, through one
   subscriber that only copies on the mesh task (a 24-entry ring in PSRAM) and parses on
-  the OS task. `claim`/`ack` both ways (the role answers by itself, once per claimant per
-  5 s, at the close range where the role needs it), `bid` to a Leader (≤ 16 kept),
-  `cure`/`cured` (every badge answers a Validator when it holds a listed spam program,
-  signed with its mesh key), and the boss fight: the metronome and its `boss` broadcast
-  twice a second, fork beats (one in eight), a voter table of ≤ 160 in PSRAM, the 2/3
-  finalized win, the report; players follow it, send a vote summary every ~2 s and claim
-  at the end. Sends keep GOSSIP.md §4's rates (a badge 1 a second, 2 in a fight; a role 4).
-- **`gossip` module, role side** (`lua/lua_gossip_role.c`): `role`, `boss` (apps and
-  services), and the Lab's `role_answer`, `role_end`, `block`, `bids`, `fork`, `voters`,
-  `bid`, `claim`, `cure`, `vote`; `on_gossip` events `role`, `boss`, `bid`, `ack`,
-  `cured`. C: `gossip_role`, `gossip_boss`, ... in `badge.h`.
-- **Console** `grole` (status, counters, the fight's beat jitter) and a RAM-only test
-  mode (`grole test on`) that stands in for the node service and the server: one sync
-  round with a given RoleState, a class, a held spam program, a close range, and a vote
-  flood for fan-in measurements. Tests: `main/lua/tests/gossip-role/run.ts` (four
-  emulated badges and a fake server), `tests/t-gossip-role`.
+  the OS task. `claim`/`ack` (the role answers by itself, once per claimant per 5 s, at the
+  close range where the role needs it), `bid` to a Leader (≤ 16 kept), `cure`/`cured`
+  (every badge answers a Validator when it holds a listed spam program, signed with its
+  mesh key). Sends keep §4's rates: a badge 1 a second (2 in a fight), a role 4.
+- **The boss fight**: the metronome and its `boss` broadcast twice a second (with `mb`,
+  the first beat it may root at), fork beats (one in eight), a voter table of ≤ 160 in
+  PSRAM. The block can't be rooted before `RoleState.boss.minBeats` (the server's
+  `bossMinBeats`, 60 by default; a missing one reads as 60), then at 2/3 of the recent
+  voters finalized with at least `min` (`bossMinVoters`). A summary counts only when
+  plausible: a lockout earned (`l ≤ 2^(v-1)`), `v` at most the beats so far + 1, none
+  before beat 0, and a voter only once heard in two vote periods (three made-up ids sending
+  `{v:1,l:32}` could otherwise end a fight at once). Players follow the broadcast, send a
+  vote summary every ~2 s and claim at the end by themselves.
+- **Late claims in a full hall**: a finished boss stays on the air 90 s after the server
+  ended its session, broadcasting once a second and acknowledging claims; a player's
+  automatic claim tries for 90 s, its first try 0-3 s after it hears the end and then
+  every 3-6 s, so a hall doesn't ask at once. A role sends 4 messages a second, two of them
+  the beat in a fight: in the emulator 100 claimants were all acknowledged, half by 27 s,
+  the last at 53 s.
+- **os_mesh: the senders heard.** A second, light table of every sender a HELLO came from
+  (192 entries in PSRAM, under a lock), the HELLOs the 20-entry peer table had no room for
+  too. It admits APP messages from senders the peer table left out, and an APP message to
+  an id the peer table lacks goes to the MAC that id's HELLO bound there (`os_mesh_send`,
+  `os_mesh_station_send`, `os_mesh_near`): in a full hall a boss takes the votes and
+  answers the claims of players past its 20 peers, and a player whose table has no room
+  for the boss still votes, bids and claims. Only a HELLO binds an id to a MAC; the peer
+  table still decides what is listed. Emulator, 100 voters: 144 of 1000 votes without it,
+  all with it. Without PSRAM: the peer table's rule alone. `mesh status` counts it, `mesh
+  senders on|off` (RAM) switches it to measure.
+- **os_mesh: a newer station id from a MAC replaces the older** after 3 HELLOs over 6 s
+  with none of the older between, as an id's MAC change (`os_mesh_station_hello` replaces
+  a station's HELLO): a badge's next role is heard about 6 s after its first HELLO, and a
+  MAC spoofer can't knock a live role off its listeners' tables.
+- **Console** `grole` (status, counters, the fight's beat jitter) and a RAM-only test mode
+  (`grole test on`) that stands in for the node service and the server. Tests:
+  `main/lua/tests/gossip-role/run.ts` (four emulated badges, a fake server, the fan-in
+  measurement), `main/lua/tests/gossip/run.ts`, `tests/t-gossip-role`.
 - Measured on two production badges side by side (−41 dBm): the beat a player predicts
   from one `boss` broadcast to the next moves by 0 ms on average, 3 ms at most; votes from
-  one badge into a boss at up to 200 a second all arrived (no radio queue or ring drops);
-  a boss session costs ~0.3 KB of SRAM and ~6 KB of PSRAM.
-<!-- /gossip:fw-roles -->
+  one badge into a boss at up to 200 a second all arrived; a boss session costs ~0.3 KB of
+  SRAM and ~6 KB of PSRAM.
 
-Integration (the parts against the real server):
+### Gossip: the module
 
-- **os_mesh: the senders heard.** A second, light table of every sender a HELLO came
-  from (192 entries in PSRAM, mesh task only), the HELLOs the 20-entry peer table had no
-  room for too, admits APP messages from senders the peer table left out; only a HELLO
-  binds an id to a MAC there too, and the peer table still decides what is listed. A boss
-  in the emulator took 137 of 1000 votes from 100 voters before (13.7 %), 1000 of 1000
-  with it. Without PSRAM: the peer table's rule alone. `mesh status` counts it, `mesh
-  senders on|off` (RAM) switches it to measure.
-- **os_mesh: a newer station id replaces the older** from the same MAC at once (never the
-  badge's own id): a badge's next role, or a Collaborator station after a role, is heard
-  without waiting 30 s. The server keeps one role id per badge across sessions too.
-- **A finished boss answers its fight's claims** for 30 s after the server ended its
-  session (the server ends it on the report that says how the fight went; the players
-  claim after they hear the end, and their acks need the role key on the air).
-- `gossip.me()` gains `lead`, `name_nodes` (Cfg `nameNodes`) and `ach` (Node `ach`);
-  items carry `pick` (the Upgrade Authority+); `gossip.role()`'s boss gains `min`
-  (`bossMinVoters`, which the boss now roots the block with); a Leader's own program in
-  its block goes up with its badge id (the server refused the whole report for an empty
-  `by`); `grole test` writes no NVS any more and yields to the node service while gossip
-  is on. C: `gossip_me_t` gains `lead`, `name_nodes`, `ach_n`, `ach_pts`.
+- **`gossip`** (`lua/lua_gossip.c`, `lua/lua_gossip_role.c`; C: `gossip_*` in `badge.h`).
+  Reading (any app with the permission, services too): `me` (the Node plus `id`, `on`,
+  `synced`, `incubating`, `lead`, `name_nodes`, `close`, `site`, `ach`; items carry `pick`
+  for the Upgrade Authority+; empty slots are `false`), `programs`, `program`, `genome`,
+  `nearby` (roles too, `spam` on a badge carrying live spam), `hearing`, `role` (offer,
+  session with `on_air_p`, the program in its HELLO now, and for a boss `min` and
+  `minBeats`; or what an ended role paid), `boss` (the fight heard nearby, beat and ms
+  moved to the read, `minBeats`). Events through `on_gossip`: `exposed`, `result`, `node`,
+  `event`, `role`, `boss`, `bid`, `ack`, `cured`. Acting, for the Lab (`gossip-lab`)
+  alone: `set_class`, `activate`, `place`, `drop`, `deploy`, `use`, `name`, `public`,
+  `lead`, `role_answer`, `role_end`, `block`, `bids`, `fork`, `voters`, `bid`, `claim`,
+  `cure`, `vote`. Times reach apps as unix seconds. C: `gossip_me_t` gains `lead`,
+  `name_nodes`, `ach_n`, `ach_pts`, `site`; `gossip_role_t` `min_beats`, `on_air_p`;
+  `gossip_boss_t` and `gossip_voters_t` `min_beats`.
+- The SDK's mock host (`sdk/c/tests/mock-host.ts`) takes a value as already encoded only
+  when its `t` is a type number, so an `on_gossip` event (whose `t` is a string) reaches a
+  mocked app; `tests/gossip/` mocks the module for the Lab (`lab-mock.ts`, 23 scenarios).
 
-Review fixes (before release):
-
-- **The boss can't be rooted before `minBeats`** (`RoleState.boss.minBeats`, the server's
-  `bossMinBeats`, 60 by default; a missing one reads as 60). Three players finalized the
-  block in six votes (~4 s) and the server then ruled their claims lost (`c × 4 ≥ beats`).
-  `gossip.role()`'s boss and `gossip.voters()` gain `minBeats`; C: `min_beats` in
-  `gossip_role_t` and `gossip_voters_t`.
-- **The boss believes less of a vote summary**: a lockout must have been earned
-  (`l ≤ 2^(v-1)`), none before beat 0, and a voter counts toward the 2/3 only once heard
-  in two vote periods. Three made-up ids sending `{v:1,l:32}` ended a fight at once.
-- **The senders heard answer too.** An APP message to an id the peer table lacks goes to
-  the MAC that id's HELLO bound in the senders table (`os_mesh_send`, `os_mesh_station_send`,
-  new `os_mesh_near`), under a lock now that other tasks read it: in a full hall a boss
-  acknowledges claimants past its 20 peers, and a player whose table has no room for the
-  boss still votes, bids and claims (and a Validator cures). Emulator, 100 voters with the
-  boss in neither real player's table and 20 of them in its own: all votes in, 100 of 100
-  claimants acknowledged (2 of 100 before), both real players voting and claiming ("not near"
-  before). A role still sends 4 messages a second, two of them the boss's beat during a
-  fight: 100 claimants take about 50 s of acks while it runs, about 35 s after it ends. A queued ack or cured answer the
-  role's queue had no room for no longer counts against the claimant's 5 s; a fight's
-  claim at the end tries for 36 s (12 tries).
-- **A newer station id from a MAC replaces the older after 3 HELLOs over 6 s** with no
-  HELLO of the older between, as an id's MAC change (it was at once, so a MAC spoofer
-  could keep knocking a live role off its listeners' tables): a badge's next role is heard
-  about 6 s after its first HELLO.
-- **Hearing holds a source to little**: its HELLOs count once a second, it holds one hearing
-  entry (a listed role id four) and its newest program takes that entry's place, and a
-  source whose record came back `bad` or `unknown` is not heard for 10 minutes. One badge
-  cycling made-up addresses kept all eight entries of every badge near it.
-- **A lost sync answer no longer stops Gossip syncing**: a sync, or a fetch of the server's
-  key, with no answer in 30 s is given up and goes again (os_api drops an answer when the OS
-  queue stays full; nothing cleared the request in flight). Console `api lose <path>` drops
-  the next answer to test it.
-
-Also in 2.4.0:
+### Also in 2.4.0
 
 - **TLS: fixed record buffers.** mbedTLS's dynamic buffers are off
   (`CONFIG_MBEDTLS_DYNAMIC_BUFFER=n`, with its `DYNAMIC_FREE_*` options), as a security
@@ -146,12 +137,10 @@ Also in 2.4.0:
 - **Guide: a ninth category, Gossip** (Purple), last in its list: the game and the
   Solana ideas behind it. Older badges get its pages as Tech docs from the server; a
   category the server adds later no longer lands on Events' counts.
-
 - **Console: room for 32 commands** (`os_cmd.c`, 16 before). 2.4.0 registers 19 (`gossip`,
-  `grole` and `batt` are new), and the 17th onwards was dropped with an error at boot: on the
-  merged build that was `svc`.
+  `grole` and `batt` are new); the 17th onwards used to be dropped at boot.
 
-Battery:
+### Battery
 
 - **The battery percentage, fixed** (`core/os_battery.c`, `core/battery_calc.c`). Before,
   every reader (the status bar every second, HW Debug, the updater, app services,

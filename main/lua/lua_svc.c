@@ -1101,14 +1101,12 @@ static void svc_libs(lua_State *L)
     // gossip (2.4.0): the reading functions of docs/GOSSIP.md §10. Each
     // builder adds its own names on its own line, so the lists merge.
     static const char *const gossip[] = {
-        // gossip:fw-node (me, programs, program, genome, nearby, hearing)
+        // the node side (me, programs, program, genome, nearby, hearing)
         "me", "programs", "program", "genome", "nearby", "hearing",
-        // /gossip:fw-node
 
         // The role side's reads:
-        // gossip:fw-roles (role, boss)
+        // the role side (role, boss)
         "role", "boss",
-        // /gossip:fw-roles
         NULL,
     };
     keep(L, "gossip", gossip);

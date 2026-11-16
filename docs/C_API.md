@@ -1246,7 +1246,6 @@ export work; `mail_send` returns `BADGE_ERR`: only the app on the screen sends.
 The Lua module's functions as `gossip_*` in `badge.h`, with the same rules: reads for any
 app with `gossip` (services too), the acting calls for the Lab (`gossip-lab`) only.
 
-<!-- gossip:fw-node -->
 ```c
 gossip_me_t me;            gossip_me(&me);                  // 0, or BADGE_ERR "not linked"
                            gossip_me_json(buf, cap);        // the whole Node as JSON
@@ -1264,7 +1263,8 @@ gossip_public(1);       gossip_lead(1);
 
 - `gossip_me_t` holds the Node's numbers, `act`, `nslots`/`ninbox`, `why`, `lead` (the
   "May become a leader" setting), `name_nodes` (adoptions before a program can be named)
-  and `ach_n`/`ach_pts` (achievements); `gossip_me_json` also has `close` (the dBm a role
+  `ach_n`/`ach_pts` (achievements) and `site` (the website's address from hello, `""` before
+  the first); `gossip_me_json` also has `close` (the dBm a role
   claim needs), and `gossip.nearby()`'s entries read through `sos_global` a badge's `spam`
   (live spam a Validator may cure); its items (with `pick` for the Upgrade Authority+
   that takes a trait), effects, immunity, objectives and the newest achievements' names are
@@ -1279,11 +1279,9 @@ gossip_public(1);       gossip_lead(1);
   `role`, `boss`, `bid`, `ack`, `cured`), with the same fields. No ABI change.
 - Each wrapper reads through the Lua module (one call and a table walk): read once per
   frame at most, not per creature.
-<!-- /gossip:fw-node -->
 
 The role side:
 
-<!-- gossip:fw-roles -->
 ```c
 gossip_role_t r;
 if (gossip_role(&r) == 1 && !strcmp(r.kind, "offer")) {   // "offer", "session", "ended"
@@ -1300,8 +1298,8 @@ void on_gossip(void) { /* badge_arg(1): {t = "boss", ...}: gossip_boss_arg(&b) *
 | Function | Lua | Returns |
 |---|---|---|
 | `gossip_role(&r)` | `gossip.role()` | 1 filled, 0 none. `r.kind` `""`/`"offer"`/`"session"`/`"ended"`; `since`, `until` unix seconds, `left` seconds |
-| `gossip_boss(&b)`, `gossip_boss_arg(&b)` | `gossip.boss()`, an `on_gossip` `boss` event | 1 filled, 0 none (`gossip_boss_arg` in `on_gossip`) |
-| `gossip_voters(&v)` | `gossip.voters()` | 1 while this badge is the boss, else 0 (`v.min_beats`, and `r.min_beats` of a boss's `gossip_role`: the first beat the block can be rooted at) |
+| `gossip_boss(&b)`, `gossip_boss_arg(&b)` | `gossip.boss()`, an `on_gossip` `boss` event | 1 filled, 0 none (`gossip_boss_arg` in `on_gossip`); `b.min_beats`: no root before this beat |
+| `gossip_voters(&v)` | `gossip.voters()` | 1 while this badge is the boss, else 0 (`v.min_beats`, and `r.min_beats` of a boss's `gossip_role`: the first beat the block can be rooted at; `r.on_air_p`: the program in the role's HELLO now) |
 | `gossip_bids(out, max)` | `gossip.bids()` | how many filled (`gossip_bid_t`), 0 when not a Leader |
 | `gossip_role_answer(yes)`, `gossip_role_end()` | `gossip.role_answer`, `gossip.role_end` | 0, or `BADGE_ERR` with `badge_error()` |
 | `gossip_bid(role, addr, fee)`, `gossip_claim(role, c)`, `gossip_cure(id)` | the same | 0 or `BADGE_ERR` |
@@ -1312,7 +1310,6 @@ The rules are the Lua reference's: `gossip_role` and `gossip_boss` for any app w
 `gossip` and in a service; the rest for the Lab (`gossip-lab`) only, others get
 `BADGE_ERR` and `"lab only"` (`gossip_bids` and `gossip_voters` return `BADGE_ERR` too).
 Nothing here blocks or reaches the server; the role key never reaches the app.
-<!-- /gossip:fw-roles -->
 
 ### `service` (permission `background`, Solana OS 2.3.0, [Lua](LUA_API.md#service-permission-background-solana-os-230))
 

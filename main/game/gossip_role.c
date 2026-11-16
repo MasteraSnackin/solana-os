@@ -44,7 +44,7 @@ static const char *TAG = GR_TAG;
 #define BATT_EVERY_MS       10000
 #define MISSES_MAX          2           // answers without `role` in a row before a role is dropped
 #define TALLY_MAX           512
-#define BOSS_LINGER_MS      30000       // a boss whose fight is over answers claims this long after the server ended it
+#define BOSS_LINGER_MS      90000       // a boss whose fight is over answers claims this long after the server ended it (GOSSIP.md §8)
 #define RING_N              24          // messages the mesh task may queue for the OS task
 #define RX_MAX              300         // longest APP message kept (d <= 200 plus the envelope)
 #define QUEUE_N             8           // per sender (badge, role)
@@ -480,7 +480,7 @@ static void gr_flush(void)
         cJSON_Delete(ev[i]);
     }
     if (notice[0]) {
-        os_service_notify("gossip", led, "%s", notice);
+        gossip_notice(led, notice);     // held while this badge is in a fight
         ESP_LOGI(TAG, "notice: %s", notice);
     }
 }
@@ -1161,6 +1161,11 @@ char *gossip_role_state_json(void)
         }
         cJSON_AddNumberToObject(o, "boost", R.boost);
         cJSON_AddBoolToObject(o, "on_air", R.on_air);
+        if (R.on_air && R.nst && R.ro != 'm') {
+            // The program in its HELLO this moment (a Leader's block turns every 10 s), as update_hello() picks it.
+            cJSON_AddStringToObject(o, "on_air_p",
+                                    R.ro == 'l' ? R.st[((gr_ms() - R.on_air_at) / LEADER_TURN_MS) % R.nst] : R.st[0]);
+        }
         if (R.ro == 'z') {
             cJSON *b = cJSON_AddObjectToObject(o, "boss");
             cJSON_AddNumberToObject(b, "bpm", R.bpm);

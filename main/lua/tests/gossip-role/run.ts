@@ -223,7 +223,7 @@ function frame(src: string, type: number, json: string) {
 	h.writeUInt16LE(data.length, 14);
 	return Buffer.concat([h, data]).toString('base64');
 }
-type Fake = { id: string; mac: string; v: number; sent?: number; h?: number; claimN?: string; claimAt?: number; acked?: boolean };
+type Fake = { id: string; mac: string; v: number; sent?: number; h?: number; claimN?: string; claimNext?: number; acked?: boolean; ackedAt?: number };
 const sendAs = (x: { id: string; mac: string }, type: number, json: string) =>
 	air.postMessage({ from: x.mac, to: 'ffffffffffff', ch: 1, data: frame(x.id, type, json) });
 const helloAs = (x: { id: string; mac: string }) => sendAs(x, 1, `{"k":"b","n":"${x.id}","lv":1}`);
@@ -675,8 +675,11 @@ async function fanin(A: Emu, real: Emu[]) {
 		let sent = 0;
 		const t0 = Date.now();
 		// The wide run's claims: a role sends 4 messages a second and the boss's beat takes two,
-		// so 100 claimants need ~50 s of acks while the fight runs (~35 s after it ends).
-		const dur = wide ? 75_000 : 20_000;
+		// so 100 claimants need ~50 s of acks. They all claim at once from 10 s on, as a hall does
+		// when it hears the end, paced as the firmware paces a fight's claim (GOSSIP.md §8): the
+		// first try 0-3 s later, then every 3-6 s, for 90 s.
+		const CLAIM_FROM = 10_000, CLAIM_WINDOW = 90_000;
+		const dur = wide ? CLAIM_FROM + CLAIM_WINDOW + 2000 : 20_000;
 		let nextHello = t0 + 10_000;
 		let realVotes = 0, nextReal = t0;
 		const airMark = heardOnAir.length;
@@ -692,11 +695,14 @@ async function fanin(A: Emu, real: Emu[]) {
 					appTo(x, boss.id, { t: 'vote', v: Math.min(x.v, 1), l: 1 });
 					sent++;
 				}
-				// The claims (from 10 s on in the wide run): each voter claims, and again every 4 s until acknowledged.
-				if (wide && slot > 10_000 && !x.acked && (!x.claimAt || Date.now() - x.claimAt > 4000)) {
-					x.claimN = x.claimN ?? randomBytes(8).toString('hex');
-					x.claimAt = Date.now();
-					appTo(x, boss.id, { t: 'claim', n: x.claimN, c: 1 });
+				// The claims (the wide run): each voter claims until acknowledged or the window closes.
+				if (wide && slot > CLAIM_FROM && slot < CLAIM_FROM + CLAIM_WINDOW && !x.acked) {
+					x.claimNext ??= t0 + CLAIM_FROM + Math.random() * 3000;
+					if (Date.now() >= x.claimNext) {
+						x.claimN ??= randomBytes(8).toString('hex');
+						x.claimNext = Date.now() + 3000 + Math.random() * 3000;
+						appTo(x, boss.id, { t: 'claim', n: x.claimN, c: 1 });
+					}
 				}
 			}
 			for (let i = 0; i < voters.length; i++) {
@@ -710,7 +716,10 @@ async function fanin(A: Emu, real: Emu[]) {
 			if (wide) {
 				for (const a of heardOnAir.slice(airMark)) {
 					const x = a.json?.d?.t === 'ack' ? voters.find((v) => v.mac === a.to && v.claimN === a.json.d.n) : undefined;
-					if (x && a.src === boss.id && a.json.to === x.id && tag(boss.key, `claim|${boss.id}|${x.id}|${x.claimN}|1|${a.json.d.r}`) === a.json.d.g) x.acked = true;
+					if (x && !x.acked && a.src === boss.id && a.json.to === x.id && tag(boss.key, `claim|${boss.id}|${x.id}|${x.claimN}|1|${a.json.d.r}`) === a.json.d.g) {
+						x.acked = true;
+						x.ackedAt = Date.now() - t0 - CLAIM_FROM;
+					}
 				}
 				heardOnAir.splice(airMark);
 				// The real players vote too, as the Lab would (the service sends one summary per ~2 s).
@@ -738,8 +747,10 @@ async function fanin(A: Emu, real: Emu[]) {
 		let extra = '';
 		if (wide) {
 			wide100 = (100 * rxVote) / sent;
-			acked100 = voters.filter((x) => x.acked).length;
-			extra = `; claims acknowledged ${acked100} of ${n}`;
+			acked100 = voters.filter((x) => x.acked && x.ackedAt! <= CLAIM_WINDOW).length;
+			const at = voters.filter((x) => x.acked).map((x) => x.ackedAt!).sort((a, b) => a - b);
+			const pct = (q: number) => (at.length ? (at[Math.min(at.length - 1, Math.floor(q * at.length))] / 1000).toFixed(1) : '-');
+			extra = `; claims acknowledged ${acked100} of ${n} within ${CLAIM_WINDOW / 1000} s (half by ${pct(0.5)} s, 95 % by ${pct(0.95)} s, last ${pct(1)} s)`;
 			// The real players: the boss is in neither one's peer table, yet they vote and claim.
 			const parts: string[] = [];
 			let good = 0;
@@ -768,7 +779,7 @@ async function fanin(A: Emu, real: Emu[]) {
 	console.log(`     the boss's mesh counters after: ${mesh.slice(-4).join(' | ')}`);
 	ok(results.length === 6, 'fan-in measured');
 	ok(wide100 >= 90, 'fan-in: a boss takes >= 90 % of the votes of 100 voters (the senders table)', `${wide100.toFixed(1)} %`);
-	ok(acked100 >= 90, 'fan-in: >= 90 % of 100 claimants outside the boss\'s peer table are acknowledged', `${acked100} of 100`);
+	ok(acked100 >= 95, 'fan-in: >= 95 % of 100 claimants outside the boss\'s peer table are acknowledged within 90 s', `${acked100} of 100`);
 	ok(realOk === `${real.length}/${real.length}`, 'fan-in: players whose full peer tables lack the boss still vote and claim', realOk);
 	await sync(A, { ended: { sid, by: 'time', stake: 0, lamps: 0 } });
 }

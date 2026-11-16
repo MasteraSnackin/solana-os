@@ -96,7 +96,7 @@ static const char *TAG = "gossip";
 #define RETRY_MS        10000
 #define BODY_MAX        4096        // §7
 #define RESP_CAP        4096
-#define KEY_RETRY_MS    (10 * 60 * 1000)    // a failed signature fetches the key again, at most this often
+#define KEY_RETRY_MS    (2 * 60 * 1000)     // a failed signature fetches the key again, at most this often (a rotation: §3)
 #define ANSWER_LOST_MS  30000       // a sync or key request with no answer by then is given up (os_api drops an
                                     // answer when the OS queue stays full; the request itself gives up in 10 s)
 #define NOTICE_GAP_MS   10500       // os_service_notify takes one per 10 s
@@ -235,6 +235,14 @@ static int64_t s_tok_at;
 static int s_last_status;           // HTTP status of the last sync (0 = none)
 static char s_why[48];              // the status line's reason when it isn't running well
 static int64_t s_last_sec, s_notice_at;
+// Notices held while this badge is in a boss fight (a toast would cover the fight's lower
+// bars): the last HELD_MAX, the rest counted. Under s_mx; shown after the fight, one a turn.
+#define HELD_MAX        3
+static struct {
+    char text[81];
+    uint32_t col;
+} s_held[HELD_MAX];
+static int s_nheld, s_held_drop;
 static char s_extra[GOSSIP_ADDR_MAX + GOSSIP_G_MAX + 24];  // the HELLO fields set last
 static int64_t s_extra_w = -1;
 static uint8_t s_key[32];
@@ -1482,7 +1490,9 @@ static void exposed(hear_t *h, int64_t srv)
     if (!lua_host_running()) {
         game_led_flash(col);
     }
-    os_service_notify(SVC_ID, 0, "exposed to %s", name[0] ? name : shown);
+    char note[64];
+    snprintf(note, sizeof(note), "exposed to %s", name[0] ? name : shown);
+    gossip_notice(0, note);
     char ev[200];
     snprintf(ev, sizeof(ev), "{\"t\":\"exposed\",\"a\":\"%s\",\"from\":\"%s\",\"rarity\":\"%s\"}", h->a, h->from,
              gossip_rarity_name(h->gen.rarity));
@@ -2419,23 +2429,81 @@ void gossip_set_lead(bool on)
 // ---------------------------------------------------------------------------
 // The tick (OS task, every 250 ms)
 
+static void hold_locked(uint32_t col, const char *text)
+{
+    if (s_nheld == HELD_MAX) {
+        memmove(&s_held[0], &s_held[1], sizeof(s_held[0]) * (HELD_MAX - 1));
+        s_nheld--;
+        s_held_drop++;                  // the oldest goes: only the last three are shown
+    }
+    strlcpy(s_held[s_nheld].text, text, sizeof(s_held[0].text));
+    s_held[s_nheld].col = col;
+    s_nheld++;
+}
+
+bool gossip_notice(uint32_t col, const char *text)
+{
+    if (!S) {
+        return false;
+    }
+    if (gossip_role_fighting()) {       // gr_mx, then s_mx: the module's lock order
+        lock();
+        hold_locked(col, text);
+        unlock();
+        return true;
+    }
+    return os_service_notify(SVC_ID, col, "%s", text);
+}
+
 static void notices(int64_t now)
 {
+    if (gossip_role_fighting()) {
+        lock();                         // the queue's notices wait with the others
+        for (int i = 0; i < S->nev; i++) {
+            hold_locked(S->ev[i].col, S->ev[i].text);
+        }
+        S->nev = 0;
+        unlock();
+        return;
+    }
     if (now - s_notice_at < NOTICE_GAP_MS) {
         return;
     }
     lock();
-    if (!S->nev) {
+    char text[112];
+    uint32_t col;
+    bool held = s_nheld > 0;
+    if (held) {                      // after a fight: what it held first, oldest first
+        col = s_held[0].col;
+        strlcpy(text, s_held[0].text, sizeof(text));
+        if (s_held_drop) {
+            size_t n = strlen(text);
+            snprintf(text + n, sizeof(text) - n, " (+%d more in the fight)", s_held_drop);
+            s_held_drop = 0;
+        }
+        memmove(&s_held[0], &s_held[1], sizeof(s_held[0]) * (HELD_MAX - 1));
+        s_nheld--;
+    } else if (S->nev) {
+        col = S->ev[0].col;
+        strlcpy(text, S->ev[0].text, sizeof(text));
+        memmove(&S->ev[0], &S->ev[1], sizeof(S->ev[0]) * (EV_MAX - 1));
+        S->nev--;
+    } else {
         unlock();
         return;
     }
-    char text[81];
-    uint32_t col = S->ev[0].col;
-    strlcpy(text, S->ev[0].text, sizeof(text));
-    memmove(&S->ev[0], &S->ev[1], sizeof(S->ev[0]) * (EV_MAX - 1));
-    S->nev--;
     unlock();
     if (os_service_notify(SVC_ID, col, "%s", text)) {
+        s_notice_at = now;
+    } else if (held) {
+        lock();                         // another notice took the service's 10 s: this one next turn
+        if (s_nheld < HELD_MAX) {
+            memmove(&s_held[1], &s_held[0], sizeof(s_held[0]) * s_nheld);
+            strlcpy(s_held[0].text, text, sizeof(s_held[0].text));
+            s_held[0].col = col;
+            s_nheld++;
+        }
+        unlock();
         s_notice_at = now;
     }
 }
@@ -2716,6 +2784,13 @@ char *gossip_me_json(void)
     cJSON_AddNumberToObject(o, "name_nodes", name_nodes);
     cJSON_DeleteItemFromObject(o, "close");
     cJSON_AddNumberToObject(o, "close", close);                         // Cfg close: claims' range (dBm)
+    os_cloud_info_t *ci = malloc(sizeof(*ci));                         // ~1 KB: not on the Lua task's stack
+    cJSON_DeleteItemFromObject(o, "site");
+    if (ci) {
+        os_cloud_get_info(ci);
+        cJSON_AddStringToObject(o, "site", ci->site);                   // hello "site": the website's address, "" not told yet
+        free(ci);
+    }
     if (!cJSON_IsObject(cJSON_GetObjectItem(o, "ach"))) {
         cJSON *a = cJSON_AddObjectToObject(o, "ach");   // Node.ach before the server sent one
         cJSON_AddNumberToObject(a, "n", 0);

@@ -1952,7 +1952,6 @@ the permission `gossip` read the badge's part of it and hear `on_gossip(ev)`; ap
 read it too. Only the Lab (`gossip-lab`) acts. Nothing here reaches the server by itself or
 blocks. The store refuses `gossip` apps to badges below 2.4.0.
 
-<!-- gossip:fw-node -->
 ```lua
 gossip.me()           -- the node, or nil while the badge is unclaimed:
                       -- {id = "7K2Q9M", on = true, synced = 1794795000, incubating = 1,
@@ -1966,6 +1965,7 @@ gossip.me()           -- the node, or nil while the badge is unclaimed:
                       --  pub = false, earns = false, why = "Link X at <site>/profile to earn",
                       --  lead = false (the "May become a leader" setting), name_nodes = 50 (adoptions
                       --  before a program can be named), close = -55 (the dBm a role claim needs, 2.4.0),
+                      --  site = "https://..." (the website's address from hello, "" before the first),
                       --  ach = {n = 3, pts = 45, last = {"Voter", ...}}}
 gossip.programs()     -- {slots = {p, false, p}, inbox = {p, ...}}: each p a program table (below)
 gossip.program(a)     -- a program this badge holds a record of, else nil:
@@ -2030,11 +2030,9 @@ gossip.lead(true)             -- the "May become a leader" setting (Settings sho
 - Off (Settings > Gossip, or the Gossip service stopped): `gossip.me().on` is false,
   nothing is heard and the badge's HELLO carries nothing of Gossip's. Emulated badges play
   between tabs of one browser and earn nothing.
-<!-- /gossip:fw-node -->
 
 The role side (offers, sessions, the boss fight, claims, bids and cures):
 
-<!-- gossip:fw-roles -->
 A badge whose owner turned on Settings > May become a leader can be offered a **role** by
 the server: a second identity it broadcasts for a while (Leader `l`, MEV Bot `m`, Anonymous
 Deployer `a`, Byzantine Leader `z`, the boss). The OS's role service runs it: the station on
@@ -2046,11 +2044,13 @@ answers the offer or ends it; no app ever holds the role's key or signs for it.
 gossip.role()        -- nil, or one of:
                      --   {offer = {sid, ro, until, left = s to accept by itself | answer = true/false}}
                      --   {sid, ro, id, n, since, until, left, st = {addresses}, boost, on_air,
-                     --    boss = {bpm, beats, min, minBeats, spam} (a boss: min = the fewest voters
+                     --    on_air_p (the program in its HELLO this moment, when on the air: a Leader's
+                     --    block turns every 10 s), boss = {bpm, beats, min, minBeats, spam} (a boss: min = the fewest voters
                      --    that can root the block, minBeats = the first beat it can be rooted at),
                      --    block = {{p, by}, ...} (a Leader), tally}
                      --   {ended = {sid, ro, by, stake, lamps}}   (for 10 minutes after the end)
-gossip.boss()        -- the fight heard nearby, or nil: {id, sid, beat, ms, bpm, fork, p, phase, rssi, real}
+gossip.boss()        -- the fight heard nearby, or nil: {id, sid, beat, ms, bpm, fork, p, phase, rssi, real,
+                     --    minBeats (no root before this beat)}
 
 -- Acting (the Lab only; others get nil, "lab only"): true, or nil and why
 gossip.role_answer(yes)        -- answer the offer now (it accepts by itself after 30 s): "no offer", "answered"
@@ -2082,7 +2082,7 @@ gossip.vote(votes, lockout)    -- during a fight: your votes in time and lockout
   10 s each in turn), `since`/`until` unix seconds (`left`: seconds to go). It ends at
   `until`, by the owner, under 15 % battery off USB, when a Collaborator takeover or a badge
   beacon takes the second identity, or 90 s without a sync; then `{ended = ...}` shows what
-  it paid. A boss whose fight is over stays on the air 30 s after the server ended it, to
+  it paid. A boss whose fight is over stays on the air 90 s after the server ended it, to
   answer the players' claims. A badge keeps one role id from session to session.
 - **Claims.** The role's service answers a claim by itself, at most once per claimant per
   5 s, and where the role needs closeness (MEV Bot, Anonymous Deployer) only when it hears
@@ -2093,18 +2093,21 @@ gossip.vote(votes, lockout)    -- during a fight: your votes in time and lockout
   fight, 2 the players rooted the block, 3 the boss won. `fork` is the beat that is a fork
   (−1 none): a vote on it resets your lockout. `p` is the share of voters now confirmed
   (0-100); `real` says the server lists that role as live. Vote with SELECT inside ±120 ms
-  of a beat and give the service your count and lockout; at the end it claims for you with
-  `c` = your votes in time (`on_gossip` `ack` when the boss answered).
+  of a beat and give the service your count and lockout (earned: `lockout ≤ 2^(votes-1)`,
+  or the boss ignores the summary); at the end it claims for you with `c` = your votes in
+  time, retrying for 90 s (`on_gossip` `ack` when the boss answered). The block can't be
+  rooted before beat `minBeats` (the server's `bossMinBeats`, 60 by default): before it, a
+  room at 2/3 finalized hasn't won yet. The result is `phase`. While you vote (or your own
+  boss fights), Gossip holds its notices and shows the last three after the fight.
 - **Events** (`on_gossip(ev)`, the role side): `{t = "role", state = "offer" | "session" |
   "off" | "declined" | "ended", sid, ro, by?, stake?, lamps?}`; `{t = "boss", id, sid, beat,
   ms, bpm, fork, p, phase, rssi, real}` at most four a second (the boss's own owner gets
   `{t = "boss", own = true, sid, phase, voters, fin}` at the end); `{t = "bid", from, name,
   p, fee, rssi}` (a Leader); `{t = "ack", role, c, r, ok}` (`ok = false`: no answer after
-  7 tries); `{t = "cured", peer, p, ok}` (a Validator; `ok = false`: no answer).
+  7 tries, a fight's after 90 s); `{t = "cured", peer, p, ok}` (a Validator; `ok = false`: no answer).
 - **Services** keep `gossip.role` and `gossip.boss`; the acting calls are the Lab's.
 - **Rates.** The service sends at most one `gossip` message a second for the badge (two in a
   fight) and four for a role, whatever the Lab asks.
-<!-- /gossip:fw-roles -->
 
 ### Build on the badge, sign on a phone
 

@@ -3416,7 +3416,6 @@ static inline int service_notify(const char *text, uint32_t led)
 // gossip (permission "gossip", Solana OS 2.4.0; docs/C_API.md "gossip")
 // ============================================================================
 
-/* gossip:fw-node */
 // Reading (any app with "gossip", services too). Times are unix seconds.
 
 #define GOSSIP_ADDR 45      // a base58 address and its NUL
@@ -3438,6 +3437,7 @@ typedef struct {
     int lead;               // the "May become a leader" setting
     int32_t name_nodes;     // adoptions before a program can be named (Cfg nameNodes)
     int32_t ach_n, ach_pts; // achievements earned and their points (Node.ach)
+    char site[96];          // the website's address from hello ("" not told yet), for a "how to play" link
 } gossip_me_t;
 
 // The node: 0, or BADGE_ERR while the badge is unclaimed ("not linked").
@@ -3479,6 +3479,7 @@ static inline int gossip_me(gossip_me_t *out)
         badge_field_str(m, "why", out->why, sizeof out->why);
         out->lead = badge_field_bool(m, "lead");
         out->name_nodes = badge_field_int(m, "name_nodes", 50);
+        badge_field_str(m, "site", out->site, sizeof out->site);
         badge_val a = badge_push_field(m, "ach");
         if (badge_type(a) == SOS_TABLE) {
             out->ach_n = badge_field_int(a, "n", 0);
@@ -3791,11 +3792,9 @@ static inline int gossip_lead(int on)
     sos_push_bool(on);
     return badge__call_ok(1);
 }
-/* /gossip:fw-node */
 
 // The role side:
 
-/* gossip:fw-roles */
 // This badge's role (gossip.role()): kind "" (none), "offer", "session" or "ended".
 typedef struct {
     char kind[8];
@@ -3812,6 +3811,7 @@ typedef struct {
     int nst;
     int32_t bpm, beats;     // a boss
     int32_t min_beats;      // a boss: the block can't be rooted before this beat (2.4.0, bossMinBeats)
+    char on_air_p[45];      // session: the program in its HELLO now ("" none; a Leader's block turns every 10 s)
     char by[12];            // ended: why ("time", "owner" ...)
     int32_t stake, lamps;   // ended: what it paid
 } gossip_role_t;
@@ -3864,6 +3864,7 @@ static inline int gossip_role(gossip_role_t *out)
         out->until = badge_field_int(t, "until", 0);
         out->left = badge_field_int(t, "left", 0);
         out->on_air = badge_field_bool(t, "on_air");
+        badge_field_str(t, "on_air_p", out->on_air_p, sizeof out->on_air_p);
         out->boost = badge_field_int(t, "boost", 0);
         if (badge_field_type(t, "st") == SOS_TABLE) {
             badge_val st = badge_push_field(t, "st");
@@ -3897,6 +3898,7 @@ typedef struct {
     int32_t p, phase;       // p: % of voters confirmed; phase 0 countdown, 1 fight, 2 players won, 3 boss won
     int32_t rssi;
     int real;               // the server lists that role as live
+    int32_t min_beats;      // the block can't be rooted before this beat (bossMinBeats; 60 when not heard)
 } gossip_boss_t;
 
 static inline void badge__gossip_boss(badge_val b, gossip_boss_t *out)
@@ -3911,6 +3913,7 @@ static inline void badge__gossip_boss(badge_val b, gossip_boss_t *out)
     out->phase = badge_field_int(b, "phase", 0);
     out->rssi = badge_field_int(b, "rssi", 0);
     out->real = badge_field_bool(b, "real");
+    out->min_beats = badge_field_int(b, "minBeats", 60);
 }
 
 // 1 and *out filled while a fight is heard, else 0.
@@ -4080,7 +4083,6 @@ static inline int gossip_voters(gossip_voters_t *out)
     sos_pop(1);
     return 1;
 }
-/* /gossip:fw-roles */
 
 #ifdef __cplusplus
 }
