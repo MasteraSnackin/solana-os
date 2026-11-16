@@ -100,3 +100,26 @@ bool gossip_action(const char *json);
 void gossip_sync_soon(void);
 
 // ---- end of seam -----------------------------------------------------------
+
+// ---- the node service's own (fw-node) --------------------------------------
+// For lua/lua_gossip.c and the console. Each returns compact JSON in memory
+// the caller frees (free()), built under the service's lock, or NULL. Any task.
+
+// gossip.me(): the last Node plus {id, on, synced, incubating}; NULL while
+// unclaimed (or out of memory).
+char *gossip_me_json(void);
+// gossip.programs(): {"slots":[...],"inbox":[...]}, each a program object
+// (gossip_program_json's) or false.
+char *gossip_programs_json(void);
+// gossip.program(a): the record and its genome; NULL when no record is held.
+char *gossip_program_json(const char *addr);
+// gossip.genome(a): the decoded genome alone; NULL for an invalid address.
+char *gossip_genome_json(const char *addr);
+// gossip.nearby(): ≤ 20 badges and roles heard, strongest first.
+char *gossip_nearby_json(void);
+// gossip.hearing(): ≤ 8 programs being heard.
+char *gossip_hearing_json(void);
+// gossip.lead(on): sets OS_SET_LEADER on the OS task and tells the role service.
+void gossip_set_lead(bool on);
+// The rarity's name: "common", "rare", "epic", "legendary".
+const char *gossip_rarity_name(int rarity);
