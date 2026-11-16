@@ -14,6 +14,28 @@ HELLO takes extra fields (`os_mesh_hello_extra`) and a station's HELLO can be re
 (`os_mesh_station_hello`); Settings gains Gossip and May become a leader.
 
 <!-- gossip:fw-node -->
+- **The node service** (`game/gossip.c`, built-in service `gossip`, Purple, stoppable,
+  starts at boot; Settings > Gossip is the same switch; console
+  `gossip [status|peers|progs|sync|on|off|bench]`). While claimed, on, and with a clock (a
+  sync since boot), the badge's HELLO carries `st` and `g` (docs/GOSSIP.md §4, 123 bytes
+  measured, one fragment), the tag recomputed on the OS task when the window, the program,
+  the class or the boost changes; trait 3's programs stay quiet 30 min after adoption. It
+  hears other badges' and roles' `g`, accumulates exposure once a second in integers with
+  the server's `Cfg` (built-in defaults: the server's tuned `thr 6000`, `decay 10`), makes
+  exposure records, flickers the LEDs in the program's colour (not while an app is open)
+  and notifies; it syncs `POST /api/device/gossip/sync` (60 s, 20 s opted in to roles, 2 s
+  in a session, 5 s while the server is taking a queue) and keeps `node.json`, `out.jsonl`
+  and `progs/` in `/sdcard/hh/gossip/` (RAM only without a card: 8 records). Records are
+  checked off the OS task by a short-lived task: the PDA in one try with its bump, then
+  the server's Ed25519 signature (71 ms on a production badge), with the key from
+  `GET /api/device/gossip/key` kept in NVS per server. State: one 16 KB allocation in
+  PSRAM at boot.
+- **`gossip` module, node side** (`lua/lua_gossip.c`): `me`, `programs`, `program`,
+  `genome`, `nearby`, `hearing`; `on_gossip` events `exposed`, `result`, `node`, `event`;
+  the Lab's `set_class`, `activate`, `place`, `drop`, `deploy`, `use`, `name`, `public`,
+  `lead`. `badge.h`: the same as `gossip_*`. Times reach apps as unix seconds.
+- `game/gossip_genome.c`: the genome, base58, PDA, record and HELLO-tag code, free of
+  LVGL and Lua; `tests/gossip/genome_test.py` checks it against the contract's vectors.
 <!-- /gossip:fw-node -->
 
 Roles:

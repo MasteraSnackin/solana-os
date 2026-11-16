@@ -1104,6 +1104,7 @@ static void svc_libs(lua_State *L)
     // builder adds its own names on its own line, so the lists merge.
     static const char *const gossip[] = {
         // gossip:fw-node (me, programs, program, genome, nearby, hearing)
+        "me", "programs", "program", "genome", "nearby", "hearing",
         // /gossip:fw-node
 
         // The role side's reads:

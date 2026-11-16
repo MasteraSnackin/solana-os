@@ -1953,6 +1953,72 @@ read it too. Only the Lab (`gossip-lab`) acts. Nothing here reaches the server b
 blocks. The store refuses `gossip` apps to badges below 2.4.0.
 
 <!-- gossip:fw-node -->
+```lua
+gossip.me()           -- the node, or nil while the badge is unclaimed:
+                      -- {id = "7K2Q9M", on = true, synced = 1794795000, incubating = 1,
+                      --  cls = "r", clsAt = 1794880000, stake = 120, rank = 1, credits = 3,
+                      --  slots = {"59qk...", false, false}, act = "59qk...", inbox = {...},
+                      --  held, deployed, deploys, adopted, boost = 0,
+                      --  fx = {{k = "fee", until = 1794795600, p = nil}, ...},
+                      --  imm = {{p = "G2Qq...", until = ...}, ...},
+                      --  items = {{id, k, n}, ...}, itemsN, epoch = {n, ends, obj = {{id, text, have, need}}},
+                      --  pub = false, earns = false, why = "Link X at <site>/profile to earn"}
+gossip.programs()     -- {slots = {p, false, p}, inbox = {p, ...}}: each p a program table (below)
+gossip.program(a)     -- a program this badge holds a record of, else nil:
+                      -- {a, par = "" (a root), gen, name = nil (unnamed), nodes (when known),
+                      --  verified = true, spam = false, genesis, hybrid,
+                      --  colour = 0xF040FF, hue, body, eyes, marks, mark_seed,
+                      --  traits = {2, 4, 0}, vir, hard, stab, rarity = "rare"}
+gossip.genome(a)      -- the looks and traits alone, for any valid address (pure), else nil
+gossip.nearby()       -- the radar, strongest first, <= 20 heard in the last 30 s:
+                      -- {{id, name, kind = "badge" | "role", role = "l" (roles only), real = true,
+                      --   class = "v" (nil: none), rssi = -48, st = "59qk..." ("" none), boost = 0}, ...}
+gossip.hearing()      -- <= 8 programs being heard: {{a, pct = 0..100,
+                      --   state = "hearing" | "exposed" | "incubating", from = "9XQ3TT", rssi}, ...}
+function on_gossip(ev) end
+                      -- {t = "exposed", a, from, rarity}   the badge caught a program (a record waits)
+                      -- {t = "result", n, p, r = "adopted" | "forked" | "seen" | "immune" | "blocked"
+                      --   | "missed" | "unknown" | "own" | "bad" | "cool", fork, stake}   the server's word on one
+                      -- {t = "result", n, act = "deploy", ok = true, error}   the answer to an action
+                      -- {t = "node", seq}   gossip.me() changed
+                      -- {t = "event", kind = "rank" | "milestone" | "drop" | "lamps" | "named" | "cured"
+                      --   | "mev" | "boss" | "page", text, col = 0x9945FF}   the badge also shows it as a notice
+```
+
+- **Times are unix seconds** (Lua's numbers on the badge are 32-bit: the server's
+  milliseconds wouldn't survive). `synced` is the last sync since the badge started, 0
+  before one; until then the badge has no clock and doesn't spread.
+- **Looks are trustworthy, the rest waits for the server.** A program's genome decodes from
+  its address alone (the same on the badge, the server, the web and in the Lab); `verified`
+  is true once the server's signed record checked on the badge, which happens off the app's
+  time a little after the record arrives. Unverified programs still accumulate exposure:
+  only the server adopts. Everything `gossip.nearby()` says beyond the id and the signal is
+  what other badges claim, unchecked.
+- **Acting** (`gossip-lab` only; other apps get `nil, "lab only"`). Each call queues one
+  action for the next sync, which the OS asks for soon, and returns `true`, or `nil` and why
+  (`"busy"` with 4 waiting, `"gossip is off"`, or the argument that's wrong). The answer
+  arrives as `on_gossip {t = "result", act = ...}`; the node changes with `{t = "node"}`.
+  Slots are numbered from 1.
+
+```lua
+gossip.set_class("v")         -- "r" RPC Node, "v" Validator, "i" Indexer, "b" Builder (once a day)
+gossip.activate(a)            -- the program it gossips
+gossip.place(a, 2)            -- from the inbox (or another slot) into slot 2
+gossip.drop(3)                -- empty slot 3
+gossip.deploy()               -- its own root program; deploy(item) with a Deploy Buffer or Genesis Relic
+gossip.use(item, {p = a, q = b, trait = 4})   -- an item (docs/GOSSIP.md §9), with what it needs
+gossip.name(a, "Turbine Toad")  -- 1-16 printable ASCII, a program of its own with 50 adoptions
+gossip.public(true)           -- "Show me on the Network board"
+gossip.lead(true)             -- the "May become a leader" setting (Settings shows it too)
+```
+
+- **Costs**: each read charges the callback about 300 instructions plus one per 4 bytes it
+  returns; `genome` and `program` 400 more. An app service keeps `me`, `programs`,
+  `program`, `genome`, `nearby` and `hearing` (and the role side's reads), and hears
+  `on_gossip` like the app.
+- Off (Settings > Gossip, or the Gossip service stopped): `gossip.me().on` is false,
+  nothing is heard and the badge's HELLO carries nothing of Gossip's. Emulated badges play
+  between tabs of one browser and earn nothing.
 <!-- /gossip:fw-node -->
 
 The role side (offers, sessions, the boss fight, claims, bids and cures):
