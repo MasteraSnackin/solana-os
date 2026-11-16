@@ -186,6 +186,19 @@ bool os_mesh_station_id(char out[OS_MESH_ID_LEN + 1]);     // false when none
 // never sends anything tagged. ESP_ERR_INVALID_STATE without a station or off
 // the mesh channel, ESP_ERR_NOT_FOUND for an unknown peer. Any task.
 esp_err_t os_mesh_station_send(const char *to_id, const char *json);
+// Replaces the station's HELLO while a station id is set (a Gossip role, 2.4.0,
+// docs/GOSSIP.md §4): a whole JSON object, <= 200 bytes, copied; NULL or "" goes
+// back to {"k":"s","n":name}. os_mesh_station() resets it. Any task.
+void os_mesh_station_hello(const char *json);
+
+// Extra fields of the badge's own HELLO (Gossip, 2.4.0, docs/GOSSIP.md §4): a
+// ready fragment such as "st":"…","g":"…", appended after "lv". <= 160 bytes of
+// printable ASCII with no braces (anything else clears it), copied under the
+// lock; the HELLO stays one fragment (232 bytes), and a HELLO that wouldn't fit
+// goes out without them. NULL or "" clears. Any task. Receivers don't get these
+// fields through os_mesh_peer_t or on_hello: whoever needs them parses the raw
+// HELLO in its own OS_MESH_HELLO subscriber (game/gossip.c).
+void os_mesh_hello_extra(const char *fields);
 
 typedef struct {
     char id[OS_MESH_ID_LEN + 1];

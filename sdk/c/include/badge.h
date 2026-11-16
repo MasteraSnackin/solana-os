@@ -3412,6 +3412,18 @@ static inline int service_notify(const char *text, uint32_t led)
     return 0;
 }
 
+// ============================================================================
+// gossip (permission "gossip", Solana OS 2.4.0; docs/C_API.md "gossip")
+// ============================================================================
+
+/* gossip:fw-node */
+/* /gossip:fw-node */
+
+// The role side:
+
+/* gossip:fw-roles */
+/* /gossip:fw-roles */
+
 #ifdef __cplusplus
 }
 #endif

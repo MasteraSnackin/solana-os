@@ -6,6 +6,21 @@ update only to a newer one. Dates are commit dates. The contracts these builds
 implement (`docs/LUA_API.md`, `docs/MESH.md`, `server/API.md`) and the server and
 site changes that came with them live in the parent repository.
 
+## 2.4.0 (unreleased)
+
+Gossip, the event game on the badge mesh (the parent repo's docs/GOSSIP.md), run by the
+OS, with the `gossip` module for apps (permission `gossip`) and its roles. The badge's
+HELLO takes extra fields (`os_mesh_hello_extra`) and a station's HELLO can be replaced
+(`os_mesh_station_hello`); Settings gains Gossip and May become a leader.
+
+<!-- gossip:fw-node -->
+<!-- /gossip:fw-node -->
+
+Roles:
+
+<!-- gossip:fw-roles -->
+<!-- /gossip:fw-roles -->
+
 ## 2.3.0 (unreleased)
 
 C apps, background services with the first two built on them (Mailbox and

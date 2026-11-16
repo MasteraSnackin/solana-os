@@ -164,9 +164,15 @@ static bool s_keep_station;             // a Collaborator station's session ride
 static bool s_awake;                    // what os_radio_stay_awake() was last told
 
 // Collaborator station (os_mesh_station), s_lock: its id and HELLO ("" = none).
-#define STATION_HELLO_MAX 64
+#define STATION_HELLO_MAX 200         // os_mesh_station_hello() (2.4.0); the default is ~40
 static char s_station[OS_MESH_ID_LEN + 1];
 static char s_station_hello[STATION_HELLO_MAX + 1];
+static char s_station_default[STATION_HELLO_MAX + 1];  // {"k":"s","n":name}, for os_mesh_station_hello(NULL)
+
+// Extra fields of the badge's own HELLO (os_mesh_hello_extra, 2.4.0), s_lock: a
+// ready fragment such as "st":"…","g":"…" ("" = none).
+#define HELLO_EXTRA_MAX 160
+static char s_hello_extra[HELLO_EXTRA_MAX + 1];
 static bool s_log;                      // console "mesh log on"
 
 static struct {
@@ -1137,7 +1143,8 @@ esp_err_t os_mesh_send(os_mesh_type_t type, const char *to_id, const char *json)
 
 static void send_hello(void)
 {
-    char json[64];
+    char json[FRAG_DATA + 1];               // one fragment (2.4.0: room for os_mesh_hello_extra)
+    static char extra[HELLO_EXTRA_MAX + 1]; // mesh task only
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s_beacon[0]) {
         // Playing a beacon: its HELLO, or silence until it has one.
@@ -1153,9 +1160,19 @@ static void send_hello(void)
     cJSON_AddStringToObject(j, "k", "b");
     cJSON_AddStringToObject(j, "n", s_label);
     cJSON_AddNumberToObject(j, "lv", s_level);
+    strlcpy(extra, s_hello_extra, sizeof(extra));
     xSemaphoreGive(s_lock);
     bool ok = j && cJSON_PrintPreallocated(j, json, sizeof(json), false);
     cJSON_Delete(j);
+    size_t len = ok ? strlen(json) : 0;
+    size_t add = strlen(extra);
+    if (add && len >= 2 && json[len - 1] == '}' && len + 1 + add <= FRAG_DATA) {
+        // {"k":"b",…} -> {"k":"b",…,<extra>}: still one fragment, else the base HELLO alone
+        json[len - 1] = ',';
+        memcpy(json + len, extra, add);
+        json[len + add] = '}';
+        json[len + add + 1] = 0;
+    }
     if (ok && send_to(NULL, OS_MESH_HELLO, json) == ESP_OK) {
         s_n.hello_tx++;
     }
@@ -1196,6 +1213,7 @@ void os_mesh_station(const char *id, const char *name)
     bool was = s_station[0] != 0;
     strlcpy(s_station, on ? id : "", sizeof(s_station));
     strlcpy(s_station_hello, on ? hj : "", sizeof(s_station_hello));
+    strlcpy(s_station_default, on ? hj : "", sizeof(s_station_default));
     xSemaphoreGive(s_lock);
     if (on != was) {
         if (on) {
@@ -1206,6 +1224,36 @@ void os_mesh_station(const char *id, const char *name)
         keep_set(&s_keep_station, on);
         awake_apply();
     }
+}
+
+void os_mesh_station_hello(const char *json)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_station[0]) {
+        strlcpy(s_station_hello, json && json[0] && strlen(json) <= STATION_HELLO_MAX ? json : s_station_default,
+                sizeof(s_station_hello));
+    }
+    xSemaphoreGive(s_lock);
+}
+
+void os_mesh_hello_extra(const char *fields)
+{
+    char f[HELLO_EXTRA_MAX + 1] = "";
+    if (fields && strlen(fields) <= HELLO_EXTRA_MAX) {
+        bool ok = true;
+        for (const char *c = fields; *c; c++) {
+            if (*c < 0x20 || *c > 0x7e || *c == '{' || *c == '}') {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            strlcpy(f, fields, sizeof(f));
+        }
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    strlcpy(s_hello_extra, f, sizeof(s_hello_extra));
+    xSemaphoreGive(s_lock);
 }
 
 bool os_mesh_station_on(void)

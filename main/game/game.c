@@ -15,6 +15,8 @@
 #include "collab.h"
 #include "beacon.h"
 #include "mailbox.h"
+#include "gossip.h"
+#include "gossip_role.h"
 
 static const char *TAG = "game";
 
@@ -64,6 +66,8 @@ static void tick(void *arg)
     quests_tick(now);
     beacon_tick(now);
     mailbox_tick(now);
+    gossip_tick(now);
+    gossip_role_tick(now);
 }
 
 static void tick_timer(void *arg)
@@ -192,6 +196,8 @@ void game_init(void)
     game_services_init();
     mailbox_init();         // Mailbox (2.3.0): a built-in background service
     collab_init();                      // Collaborator (2.3.0): registers its service
+    gossip_init();                      // Gossip (2.4.0): the node service
+    gossip_role_init();                 // ... and its roles
     os_mesh_subscribe(OS_MESH_XDEX, on_mesh, NULL);
     os_mesh_subscribe(OS_MESH_TRADE, on_mesh, NULL);
     os_mesh_subscribe(OS_MESH_RELAY_RESP, on_mesh, NULL);

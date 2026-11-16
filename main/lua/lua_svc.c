@@ -405,7 +405,8 @@ static bool post_to_service(const char *id, const char *fn, const char *json, ui
 static uint32_t s_app_gen;
 static int s_app_waiting;
 
-static bool post_to_app(const char *id, const char *fn, const char *json)
+// id NULL: whichever app is on screen, if it asks for every permission in need_perms.
+static bool post_to_app(const char *id, const char *fn, const char *json, uint32_t need_perms)
 {
     char *data = call_data(fn, json, false);
     if (!data) {
@@ -413,7 +414,7 @@ static bool post_to_app(const char *id, const char *fn, const char *json)
     }
     xSemaphoreTake(lh_mx, portMAX_DELAY);
     lh_t *a = lh_cur;
-    bool ok = a && !a->failed && !strcmp(a->pkg.id, id);
+    bool ok = a && !a->failed && (!id || !strcmp(a->pkg.id, id)) && (a->pkg.perms & need_perms) == need_perms;
     if (ok && s_app_gen != a->gen) {
         s_app_gen = a->gen;
         s_app_waiting = 0;
@@ -452,8 +453,32 @@ bool lua_host_call(const char *app, const char *fn, const char *json)
         return false;
     }
     bool a = post_to_service(app, fn, json, 0);
-    bool b = post_to_app(app, fn, json);
+    bool b = post_to_app(app, fn, json, 0);
     return a || b;
+}
+
+bool lua_host_broadcast(const char *fn, const char *json, uint32_t need_perms)
+{
+    if (!s_mx || !need_perms || !fn_name_ok(fn) || (json && strlen(json) > LUA_SVC_MSG_MAX)) {
+        return false;
+    }
+    char ids[LUA_SVC_MAX][LUA_PKG_ID_MAX + 1] = { 0 };
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    for (int i = 0; i < LUA_SVC_MAX; i++) {
+        if (s_slot[i] && s_slot[i]->state == SV_RUNNING && s_slot[i]->s
+            && (s_slot[i]->s->pkg.perms & need_perms) == need_perms) {
+            strlcpy(ids[i], s_slot[i]->s->pkg.id, sizeof(ids[i]));
+        }
+    }
+    xSemaphoreGive(s_mx);
+    bool any = false;
+    for (int i = 0; i < LUA_SVC_MAX; i++) {
+        if (ids[i][0]) {
+            any |= post_to_service(ids[i], fn, json, need_perms);
+        }
+    }
+    any |= post_to_app(NULL, fn, json, need_perms);
+    return any;
 }
 
 bool lua_svc_call(const char *app, const char *fn, const char *json, uint32_t need_perms)
@@ -978,7 +1003,7 @@ static int l_svc_send(lua_State *L)
     if (!json) {
         return 2;
     }
-    bool ok = !s->ui_off && post_to_app(s->pkg.id, "on_service", json);
+    bool ok = !s->ui_off && post_to_app(s->pkg.id, "on_service", json, 0);
     free(json);
     lua_pushboolean(L, ok);
     return 1;
@@ -1060,6 +1085,7 @@ static void svc_libs(lua_State *L)
     lh_open_crypto(L);
     lh_open_mail(L);                        // mail: the reads only (LUA_API.md "service" and "mail")
     lh_open_files(L);                       // files: the reads only (LUA_API.md "service" and "files")
+    lh_open_gossip(L);                      // gossip: the reads only (LUA_API.md "service" and "gossip", 2.4.0)
     static const char *const sys[] = {"millis", "time", "battery", "memory", NULL};
     static const char *const lamps[] = {"balance", NULL};
     static const char *const items[] = {"list", "all", NULL};
@@ -1074,6 +1100,18 @@ static void svc_libs(lua_State *L)
     keep(L, "mail", mail);
     static const char *const files[] = {"dir", "list", "size", "read", NULL};
     keep(L, "files", files);
+    // gossip (2.4.0): the reading functions of docs/GOSSIP.md §10. Each
+    // builder adds its own names on its own line, so the lists merge.
+    static const char *const gossip[] = {
+        // gossip:fw-node (me, programs, program, genome, nearby, hearing)
+        // /gossip:fw-node
+
+        // The role side's reads:
+        // gossip:fw-roles (role, boss)
+        // /gossip:fw-roles
+        NULL,
+    };
+    keep(L, "gossip", gossip);
     static const char *const none[] = {"ui", "led", "wifi", "ble", "ws", "quest", NULL};
     for (int i = 0; none[i]; i++) {
         lua_pushnil(L);

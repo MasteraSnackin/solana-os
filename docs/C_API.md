@@ -1241,6 +1241,19 @@ installed the app, queued through the outbox, the same caps, nothing in it trust
 service instance (`background`) `mail_count`, `mail_item`, `mail_get` and the `on_mail`
 export work; `mail_send` returns `BADGE_ERR`: only the app on the screen sends.
 
+### `gossip` (permission `gossip`, Solana OS 2.4.0, [Lua](LUA_API.md#gossip-permission-gossip-solana-os-240))
+
+The Lua module's functions as `gossip_*` in `badge.h`, with the same rules: reads for any
+app with `gossip` (services too), the acting calls for the Lab (`gossip-lab`) only.
+
+<!-- gossip:fw-node -->
+<!-- /gossip:fw-node -->
+
+The role side:
+
+<!-- gossip:fw-roles -->
+<!-- /gossip:fw-roles -->
+
 ### `service` (permission `background`, Solana OS 2.3.0, [Lua](LUA_API.md#service-permission-background-solana-os-230))
 
 A C app's service is a second instance of the same module, with its own linear memory,

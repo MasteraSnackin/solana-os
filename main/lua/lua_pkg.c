@@ -22,7 +22,7 @@
 
 static const char *const s_perm_names[LUA_PERM_COUNT] = {
     "led", "wifi", "mesh", "lamps", "items", "profile", "quest", "http", "rpc", "ble", "mail", "background", "files",
-    "inventory",
+    "inventory", "gossip",
 };
 
 static const char *const s_perm_texts[LUA_PERM_COUNT] = {
@@ -40,6 +40,7 @@ static const char *const s_perm_texts[LUA_PERM_COUNT] = {
     "Runs in the background",
     "Read the files you copy to its folder",
     "See the items and Guide pages you hold",
+    "See your Gossip programs and what is nearby",
 };
 
 const char *lua_perm_name(int i)

@@ -100,6 +100,15 @@ bool lua_host_call(const char *app, const char *fn, const char *json);
 // asks for every permission in need_perms (lua_perm_t bits; 0 = none). For a
 // caller that reaches the app on screen its own way (Mailbox: lua_host_mail).
 bool lua_svc_call(const char *app, const char *fn, const char *json, uint32_t need_perms);
+// The same, for every app that asks for every permission in need_perms (not
+// 0): each running service, and the app on screen whichever it is (2.4.0, for
+// on_gossip: lua_host_gossip). Any task; true if at least one queued it.
+bool lua_host_broadcast(const char *fn, const char *json, uint32_t need_perms);
+// on_gossip(ev) (docs/GOSSIP.md §10, LUA_API.md "gossip"): ev_json is the
+// event as a JSON object ({"t":"exposed",...}, ≤ 1024 bytes) for the app on
+// screen and every app service with the `gossip` permission. Any task; the
+// gossip services (game/gossip.c, game/gossip_role.c) call it.
+bool lua_host_gossip(const char *ev_json);
 
 // A service state of app <id> exists (starting, running or stopping): its
 // files are in use. Any task.

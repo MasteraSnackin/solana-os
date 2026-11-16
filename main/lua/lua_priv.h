@@ -497,6 +497,17 @@ void lh_open_mail(lua_State *L);
 void lh_mail_event(lh_t *s, const char *data);          // Lua task: LH_EV_MAIL, on_mail(m)
 void lh_mail_opened(lh_t *s);                           // Lua task, after the top-level chunk: the mail it was opened on
 
+// lua_gossip.c (builder fw-node) + lua_gossip_role.c (builder fw-roles): the
+// gossip module (2.4.0, docs/GOSSIP.md §10, LUA_API.md "gossip"). Seam:
+// lh_open_gossip makes the `gossip` table with the node functions, then calls
+// lh_gossip_role_open(L) with that table on top of the stack (it adds the role
+// functions with lua_setfield and leaves the stack as it found it), then sets
+// the global. Each function checks the permission itself (lh_need_perm).
+// LH_GOSSIP_SVC_KEEP: the reading functions an app service keeps (lua_svc.c
+// svc_libs); each builder adds its names on its own line there.
+void lh_open_gossip(lua_State *L);
+void lh_gossip_role_open(lua_State *L);
+
 // lua_svc.c: background services (2.3.0, LUA_API.md "service")
 struct lh_svc;
 void lua_svc_init(void);                                // lua_host_init

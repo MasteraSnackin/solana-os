@@ -542,6 +542,7 @@ static int boot(lua_State *L)
     lh_open_files(L);
     lh_open_crypto(L);
     lh_open_mail(L);
+    lh_open_gossip(L);
     lh_open_service(L);
     lh_storage_load(s);
 

@@ -47,9 +47,10 @@ typedef enum {
     LUA_PERM_BACKGROUND = 1 << 11,  // a service.lua that runs while the app is closed (2.3.0)
     LUA_PERM_FILES = 1 << 12,       // 2.3.0: the app's folder on the card (lua_files.c)
     LUA_PERM_INVENTORY = 1 << 13,   // 2.3.0: profile.items / profile.pages, the owner's items and Guide pages
+    LUA_PERM_GOSSIP = 1 << 14,      // 2.4.0: the gossip module (docs/GOSSIP.md §10), on_gossip
 } lua_perm_t;
 
-#define LUA_PERM_COUNT  14
+#define LUA_PERM_COUNT  15
 
 typedef struct {
     char id[LUA_PKG_ID_MAX + 1];

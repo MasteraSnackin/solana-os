@@ -69,7 +69,7 @@ Update it from the site's firmware flasher (`/stock`, a USB-C cable) or, from 0.
 Settings > Software update when it's offered. An app with the `rpc` permission needs
 0.5.2: on 0.5.0 and 0.5.1 its details say so, and buying and downloads are refused with
 "Update Solana OS to 0.5.2 or later to install this app". An app with the `ble` permission
-needs 1.0.0 in the same way ("Update Solana OS to 1.0.0 or later to install this app"). An app with `mail` (or `background`, `files` or `inventory`) needs 2.3.0.
+needs 1.0.0 in the same way ("Update Solana OS to 1.0.0 or later to install this app"). An app with `mail` (or `background`, `files` or `inventory`) needs 2.3.0, and one with `gossip` needs 2.4.0.
 
 The manifest, as the badge stores it:
 
@@ -83,7 +83,7 @@ The manifest, as the badge stores it:
   "icon": "play",                   // one of the icon names below
   "accent": "14F195",               // hex colour, no '#'
   "category": "games",              // games | tools | social | quests | demos
-  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc mail background files inventory
+  "permissions": ["lamps", "items", "http"],  // led wifi mesh ble lamps items profile quest http rpc mail background files inventory gossip
   "hosts": ["api.example.com"],     // what `http` and `ws` may call (only with the `http` permission)
   "files": 2,                       // bundled files (the store fills it in)
   "filesSize": 5120,                // their bytes together
@@ -1943,6 +1943,22 @@ to 30 days) sets when it expires. The answers and limits are in server/API.md "M
 Badges below 2.3.0 have no `mail`: the store refuses `mail` apps to them (server/API.md
 "Mail apps"). In the emulator mail goes through the same server: two tabs
 (`/emulator` and `/emulator?badge=2`) signed in as two people can mail each other.
+
+### `gossip` (permission `gossip`, Solana OS 2.4.0)
+
+Gossip, the event game on the badge mesh (the parent repo's docs/GOSSIP.md): every badge
+spreads and catches *programs* from the badges around it, and the OS runs it. Apps with
+the permission `gossip` read the badge's part of it and hear `on_gossip(ev)`; app services
+read it too. Only the Lab (`gossip-lab`) acts. Nothing here reaches the server by itself or
+blocks. The store refuses `gossip` apps to badges below 2.4.0.
+
+<!-- gossip:fw-node -->
+<!-- /gossip:fw-node -->
+
+The role side (offers, sessions, the boss fight, claims, bids and cures):
+
+<!-- gossip:fw-roles -->
+<!-- /gossip:fw-roles -->
 
 ### Build on the badge, sign on a phone
 
