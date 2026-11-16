@@ -20,7 +20,10 @@ Fixes from the review of solana-os#23 (2.3.0 on main). Nothing new for apps.
   collecting from 0, where it used to ask the new server for ids after the old server's last
   and could acknowledge mail it never collected. A page or an acknowledgement answered by the
   old server after a change (`os_cloud_server_gen()`) counts as a failed collection. An index
-  from 2.3.0, without `server`, is the current server's.
+  from 2.3.0, without `server`, is the current server's. The origin is read with
+  `os_cloud_get_server()`, which copies it under the lock and allocates nothing, so a badge
+  short of memory can't read it as "" and take its own server for another; with no server
+  configured the mail stays and keeps its server's name.
 - **Saved data survives a replace cut short** (`os_data.c`):
   - `os_data_write` puts a leftover `.tmp` (the only complete copy) back in place before
     writing; when that rename fails it now writes nothing, where it used to truncate the copy.
