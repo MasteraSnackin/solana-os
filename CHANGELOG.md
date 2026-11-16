@@ -6,7 +6,7 @@ update only to a newer one. Dates are commit dates. The contracts these builds
 implement (`docs/LUA_API.md`, `docs/MESH.md`, `server/API.md`) and the server and
 site changes that came with them live in the parent repository.
 
-## 2.3.0 (unreleased)
+## 2.3.0 (2026-11-15)
 
 C apps, background services with the first two built on them (Mailbox and
 Collaborator), and apps' reads of the player's inventory, on 2.2.0's ESP-IDF master. Two
@@ -406,7 +406,7 @@ server features of the same release show on the badge unchanged: the update ques
   handler copies what it needs under its lock; a Collaborator image arriving during a
   decode waits for it; `sys.tick`'s timer and Collaborator's two are made at boot.
 
-## 2.2.0 (unreleased)
+## 2.2.0 (2026-11-15)
 
 Only the move to ESP-IDF master; nothing else changes from 2.1.0.
 
