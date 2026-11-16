@@ -34,7 +34,7 @@ let logMark = 0;
 let lastList: { f: any; n: number } | null = null;
 let clock = 1000;
 let period = 30;
-export const millis = () => clock;
+export const millis = () => clock++; // a real clock moves within a callback too
 
 const ACTING = ['set_class', 'activate', 'place', 'drop', 'deploy', 'use', 'name', 'public', 'lead', 'bid', 'claim', 'cure', 'vote',
     'role_answer', 'role_end', 'block', 'fork'];
