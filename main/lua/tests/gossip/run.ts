@@ -11,10 +11,11 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startFake } from './fake';
+import { randomBytes } from 'node:crypto';
+import { base58, startFake } from './fake';
 
 const here = import.meta.dir;
-const emuDir = join(here, '../../../../../web/static/emulator');
+const emuDir = process.env.EMU_DIR ?? join(here, '../../../../../web/static/emulator');
 const fake = startFake(Number(process.env.PORT ?? 3211), { thr: 60, next: 4000, coolOnce: true });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -102,6 +103,9 @@ const until = async (e: Emu, test: (s: string) => boolean, ms: number) => {
 
 const a = await boot('A');
 const b = await boot('B');
+// F5: B's first answer with the server's key is lost (as when the OS queue stays full):
+// it asks again after 30 s instead of waiting for it forever.
+b.cmd('api lose /api/device/gossip/key');
 for (const e of [a, b]) {
 	e.cmd('wifi connect "Emulator Guest"');
 }
@@ -148,7 +152,7 @@ const cool = fake.syncs.findIndex((x) => x.answer.res?.some((r: any) => r.r === 
 ok(cool >= 0 && fake.syncs.slice(cool + 1).some((x) => x.body.rec?.some((r: any) => r.p === prog && r.n === fake.syncs[cool].answer.res[0].n)),
 	'B: a cooled record stays unacknowledged and goes again with a later sync');
 let progs = '';
-for (let t = 0; t < 20 && !progs.includes('verified'); t++) {
+for (let t = 0; t < 50 && !progs.includes('verified'); t++) {
 	mark = b.lines.length;
 	b.cmd('gossip progs');
 	await b.waitFor(/gossip progs:/, 3000, mark);
@@ -156,7 +160,8 @@ for (let t = 0; t < 20 && !progs.includes('verified'); t++) {
 	progs = b.since(mark).join('\n');
 	if (!progs.includes(`${prog} verified`)) await sleep(1000);
 }
-ok(progs.includes(`${prog} verified`), 'B: the record\'s PDA and signature check (the checker task)');
+ok(progs.includes(`${prog} verified`), 'B: the record\'s PDA and signature check (the checker task), after a lost key answer');
+ok(b.lines.some((l) => /dropped the answer to GET \/api\/device\/gossip\/key/.test(l)), 'B: its first key answer was the one dropped');
 
 // 3. The reads on B (not the Lab).
 b.put('t-gossip', join(here, '../t-gossip'));
@@ -214,6 +219,75 @@ ok(a.since(mark).some((l) => /^gossip .*stopped|^gossip .*Off/i.test(l)), `Servi
 a.cmd('gossip on');
 sa = await until(a, (s) => s.includes(`"st":"${prog}"`), 15000);
 ok(sa.includes(`"st":"${prog}"`), 'A on again: st and g back in the HELLO');
+
+// 5. F5: a lost sync answer (the OS queue stayed full) does not stop syncing.
+{
+	const bId = fake.syncs.find((x) => x.body.rec?.length)?.id ?? '';   // B sent the records; A never
+	const n0 = fake.syncs.filter((x) => x.id === bId).length;
+	b.cmd('api lose /api/device/gossip/sync');
+	let n = n0;
+	for (let t = 0; t < 55 && n < n0 + 2; t++) {
+		await sleep(1000);
+		n = fake.syncs.filter((x) => x.id === bId).length;
+	}
+	ok(n >= n0 + 2, `B: syncs again after a lost sync answer (${n - n0} since)`);
+}
+
+// 6. F3: a hostile badge cycling through eight made-up programs holds one hearing
+// entry of B's, not all eight; another badge's program is still heard; once B's
+// record from it comes back bad, B ignores it.
+{
+	const crock = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+	const mk = (p: string) => ({ id: p + Array.from(randomBytes(5), (x) => crock[x & 31]).join(''), mac: `0e${randomBytes(4).toString('hex')}00` });
+	const X = mk('X'), Y = mk('Y');
+	const air = new BroadcastChannel('solana-os-mesh');
+	let m16 = 0;
+	const send = (who: { id: string; mac: string }, json: string) => {
+		const data = Buffer.from(json), h = Buffer.alloc(16);
+		h.write('HG', 0); h[2] = 1; h[3] = 1; h.write(who.id, 4); h.writeUInt16LE(m16++ & 0xffff, 10); h[12] = 0; h[13] = 1; h.writeUInt16LE(data.length, 14);
+		air.postMessage({ from: who.mac, to: 'ffffffffffff', ch: 1, data: Buffer.concat([h, data]).toString('base64') });
+	};
+	const hello = (who: { id: string; mac: string }, st: string) =>
+		send(who, JSON.stringify({ k: 'b', n: who.id, lv: 1, st, g: `r9.${Math.floor(Date.now() / 30000)}.${randomBytes(8).toString('hex')}` }));
+	const fakes = Array.from({ length: 8 }, () => base58(randomBytes(32)));
+	const yProg = base58(randomBytes(32));
+	// Hearing entries (one exposed and waiting for its answer is not one: §5 keeps it until then).
+	const entries = async (who: string) => (await status(b)).split('\n').filter((l) => l.includes(` from ${who} `) && / hearing /.test(l)).length;
+	const recsFrom = (who: string) => fake.syncs.flatMap((x) => x.body.rec ?? []).filter((r: any) => r.f === who).length;
+	const t0 = Date.now();
+	let maxX = 0, sawY = false, i = 0;
+	// 12 s: X says hello five times a second, a new program each time; Y says hello every 2 s.
+	while (Date.now() - t0 < 12_000) {
+		hello(X, fakes[i++ % fakes.length]);
+		if (i % 10 === 0) hello(Y, yProg);
+		await sleep(200);
+		if (i % 10 === 5) {
+			maxX = Math.max(maxX, await entries(X.id));
+			sawY ||= (await status(b)).split('\n').some((l) => l.includes(` from ${Y.id} `));   // any state: it is exposed in seconds here
+		}
+	}
+	ok(maxX === 1, `F3: a hostile badge cycling 8 programs holds one of B's hearing entries (at most ${maxX})`);
+	ok(sawY, 'F3: another badge\'s program is still heard meanwhile');
+	// Keep going until B's record from X comes back (the fake answers bad: X has no key there).
+	let bad = false;
+	for (let t = 0; t < 90 && !bad; t++) {
+		hello(X, fakes[0]);
+		await sleep(1000);
+		bad = fake.syncs.some((x) => x.answer.res?.some((r: any) => r.r === 'bad' && x.body.rec?.some((e: any) => e.f === X.id && e.n === r.n)));
+	}
+	ok(bad, 'F3: B made a record from the hostile badge and the server said bad');
+	const before = recsFrom(X.id);
+	await sleep(6000);
+	const t1 = Date.now();
+	let after = 0;
+	while (Date.now() - t1 < 25_000) {
+		hello(X, fakes[(i++) % fakes.length]);
+		await sleep(250);
+		if (i % 20 === 0) after = Math.max(after, await entries(X.id));
+	}
+	ok(after === 0 && recsFrom(X.id) === before, `F3: after the bad answer B ignores that badge (entries ${after}, records ${recsFrom(X.id) - before} more)`);
+	air.close();
+}
 
 console.log(failures ? `${failures} FAILED` : 'all passed');
 for (const e of [a, b]) {

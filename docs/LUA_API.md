@@ -2044,8 +2044,9 @@ answers the offer or ends it; no app ever holds the role's key or signs for it.
 gossip.role()        -- nil, or one of:
                      --   {offer = {sid, ro, until, left = s to accept by itself | answer = true/false}}
                      --   {sid, ro, id, n, since, until, left, st = {addresses}, boost, on_air,
-                     --    boss = {bpm, beats, min, spam} (a boss: min = the fewest voters that can
-                     --    root the block), block = {{p, by}, ...} (a Leader), tally}
+                     --    boss = {bpm, beats, min, minBeats, spam} (a boss: min = the fewest voters
+                     --    that can root the block, minBeats = the first beat it can be rooted at),
+                     --    block = {{p, by}, ...} (a Leader), tally}
                      --   {ended = {sid, ro, by, stake, lamps}}   (for 10 minutes after the end)
 gossip.boss()        -- the fight heard nearby, or nil: {id, sid, beat, ms, bpm, fork, p, phase, rssi, real}
 
@@ -2057,7 +2058,8 @@ gossip.block({{p = a, by = id}, ...})   -- a Leader's block, <= 4 programs and w
 gossip.bids()                  -- a Leader's bids heard, latest per badge (<= 16):
                                -- {{from, name, p, fee, rssi, age}, ...}, or nil when not a Leader
 gossip.fork()                  -- the boss's owner throws a fork: "not the boss", "no fight", "too soon", "too late"
-gossip.voters()                -- the boss's voters: {voters, conf, fin, p, all, beat, beats, fork, phase}, or nil
+gossip.voters()                -- the boss's voters: {voters, conf, fin, p, all, beat, beats, minBeats, fork, phase}, or nil
+                               -- (voters, conf, fin: heard in the last 10 s and in two vote periods at least)
 gossip.bid(role, a, fee)       -- bid program a to a Leader near you (fee: queue a Priority Fee Action too):
                                -- "not near", "not a leader", "bad program", "busy"
 gossip.claim(role, c)          -- "I am here, with this count": the service repeats it until the role

@@ -79,7 +79,7 @@ typedef struct {
     char st[ST_MAX][GOSSIP_ADDR_MAX + 1];
     int nst;
     int boost;
-    int bpm, beats, min;            // the boss: RoleState.boss (min = bossMinVoters)
+    int bpm, beats, min, min_beats; // the boss: RoleState.boss (min = bossMinVoters, min_beats = bossMinBeats)
     char spam[GOSSIP_ADDR_MAX + 1];
     char *tally;                    // the server's tally as JSON text, or NULL
     bool on_air;
@@ -449,7 +449,7 @@ static void gr_flush(void)
         if (badge) {
             os_mesh_peer_t p;
             // Unicast only, and never over a bridge: bridges carry no gossip (GOSSIP.md §1).
-            esp_err_t err = os_mesh_peer(m->to, &p) && !p.bridged ? os_mesh_send(OS_MESH_APP, m->to, m->json)
+            esp_err_t err = os_mesh_near(m->to, &p) && !p.bridged ? os_mesh_send(OS_MESH_APP, m->to, m->json)
                                                                  : ESP_ERR_NOT_FOUND;
             err == ESP_OK ? gr_stats.tx_badge++ : gr_stats.tx_fail++;
             sent = true;
@@ -696,7 +696,7 @@ static void role_start(int64_t now)
     role_hello(now);
     gr_app_session(R.sid);
     if (R.ro == 'z') {
-        gr_boss_start(R.sid, R.bpm, R.beats, R.min, R.since);
+        gr_boss_start(R.sid, R.bpm, R.beats, R.min, R.min_beats, R.since);
     }
     char t[96];
     snprintf(t, sizeof(t), "you are on the air as %s", role_name(R.ro));
@@ -858,6 +858,7 @@ static void apply_session(const cJSON *s, int64_t now)
     R.bpm = gr_jint(boss, "bpm", 30, 240, 100);
     R.beats = gr_jint(boss, "beats", 1, 2000, 300);
     R.min = gr_jint(boss, "min", 1, 160, 3);
+    R.min_beats = gr_jint(boss, "minBeats", 0, 600, 60);   // missing (an older server): 60
     const char *spam = game_jstr(boss, "spam");
     strlcpy(R.spam, gr_addr_ok(spam) ? spam : "", sizeof(R.spam));
     free(R.tally);
@@ -1165,6 +1166,7 @@ char *gossip_role_state_json(void)
             cJSON_AddNumberToObject(b, "bpm", R.bpm);
             cJSON_AddNumberToObject(b, "beats", R.beats);
             cJSON_AddNumberToObject(b, "min", R.min);
+            cJSON_AddNumberToObject(b, "minBeats", R.min_beats);
             cJSON_AddStringToObject(b, "spam", R.spam);
         }
         if (R.ro == 'l') {

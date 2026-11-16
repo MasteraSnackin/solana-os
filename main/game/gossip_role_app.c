@@ -25,6 +25,8 @@ static const char *TAG = GR_TAG;
 #define CLAIMS_PENDING  4
 #define CLAIMS_DONE     8           // acknowledged, waiting to upload (≤ 4 a sync)
 #define CLAIM_TRIES     7
+#define CLAIM_TRIES_FIGHT 12        // a fight's claim at the end: a hall of claimants shares the boss's four
+                                    // messages a second, and the boss stays on the air 30 s after the end
 #define CLAIM_EVERY_MS  3000        // a retry outlives the role's 5 s rule on its second try
 #define ACK_GAP_MS      5000        // GOSSIP.md §8: one ack per claimant per 5 s
 #define SEEN_N          32          // claimants (and curers) remembered for that rule
@@ -124,6 +126,16 @@ static bool tag_ok(const char *g)
     return true;
 }
 
+// The answer seen_allow let through could not be queued: the id may ask again.
+static void seen_undo(seen_t *t, const char *id)
+{
+    for (int i = 0; i < SEEN_N; i++) {
+        if (!strcmp(t[i].id, id)) {
+            t[i].at = 0;
+        }
+    }
+}
+
 // True (and noted) if id may have one more answer now: one per id per gap.
 static bool seen_allow(seen_t *t, const char *id, int64_t now, int gap)
 {
@@ -155,10 +167,11 @@ static const heard_t *heard_get(const char *id)
     return NULL;
 }
 
-// A role on the air near us, as the radio says (a station, not over a bridge).
+// A role on the air near us, as the radio says (a station, not over a bridge):
+// in the peer table or, in a crowded hall, the senders heard (MESH.md).
 static bool role_peer(const char *id, os_mesh_peer_t *p)
 {
-    return gr_id_ok(id) && os_mesh_peer(id, p) && p->kind == OS_PEER_STATION && !p->bridged;
+    return gr_id_ok(id) && os_mesh_near(id, p) && p->kind == OS_PEER_STATION && !p->bridged;
 }
 
 static cJSON *ev(const char *t)
@@ -262,6 +275,8 @@ static void on_claim(const char *from, os_peer_kind_t kind, int rssi, const cJSO
     if (gr_send_role(from, a)) {
         s_n.acks_sent++;
         s_acks++;
+    } else {
+        seen_undo(T->acked, from);      // the queue was full: its retry gets the ack, not the 5 s rule
     }
     cJSON_Delete(a);
 }
@@ -435,7 +450,7 @@ const char *gossip_role_cure(const char *id)
         err = "gossip is off";
     } else if (gr_class() != 'v') {
         err = "not a validator";
-    } else if (!id || !gr_id_ok(id) || !os_mesh_peer(id, &p) || p.kind != OS_PEER_BADGE || p.bridged) {
+    } else if (!id || !gr_id_ok(id) || !os_mesh_near(id, &p) || p.kind != OS_PEER_BADGE || p.bridged) {
         err = "not near";
     } else {
         for (int i = 0; i < s_npcu && !err; i++) {
@@ -480,6 +495,8 @@ static void on_cure(const char *from, os_peer_kind_t kind, const cJSON *d)
     cJSON_AddStringToObject(a, "g", tag);
     if (gr_send_badge(from, a)) {
         s_n.cured_sent++;
+    } else {
+        seen_undo(T->cured_for, from);  // not queued: its retry gets the answer
     }
     cJSON_Delete(a);
 }
@@ -576,7 +593,7 @@ void gr_app_tick(int64_t now)
         if (now < pc->next) {
             continue;
         }
-        if (pc->tries >= CLAIM_TRIES) {
+        if (pc->tries >= (pc->fight ? CLAIM_TRIES_FIGHT : CLAIM_TRIES)) {
             cJSON *e = ev("ack");
             cJSON_AddStringToObject(e, "role", pc->role);
             cJSON_AddNumberToObject(e, "c", pc->c);

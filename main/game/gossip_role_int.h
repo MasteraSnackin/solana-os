@@ -88,7 +88,7 @@ bool gr_boss_init(void);
 void gr_boss_rx(const char *t, const char *from, os_peer_kind_t kind, int rssi, int64_t at, bool to_role,
                 const cJSON *d);
 void gr_boss_tick(int64_t now);
-void gr_boss_start(long sid, int bpm, int beats, int min, int64_t since);   // this badge is the boss
+void gr_boss_start(long sid, int bpm, int beats, int min, int min_beats, int64_t since);   // this badge is the boss
 bool gr_boss_over(void);                            // ... and its fight ended (rooted or lost)
 void gr_boss_stop(void);
 void gr_boss_report(cJSON *role);                   // RoleReport.boss

@@ -3811,6 +3811,7 @@ typedef struct {
     char st[4][45];         // session: the program(s) it gossips
     int nst;
     int32_t bpm, beats;     // a boss
+    int32_t min_beats;      // a boss: the block can't be rooted before this beat (2.4.0, bossMinBeats)
     char by[12];            // ended: why ("time", "owner" ...)
     int32_t stake, lamps;   // ended: what it paid
 } gossip_role_t;
@@ -3880,6 +3881,7 @@ static inline int gossip_role(gossip_role_t *out)
             badge_val b = badge_push_field(t, "boss");
             out->bpm = badge_field_int(b, "bpm", 0);
             out->beats = badge_field_int(b, "beats", 0);
+            out->min_beats = badge_field_int(b, "minBeats", 60);
             sos_pop(1);
         }
     }
@@ -4046,6 +4048,7 @@ static inline int gossip_bids(gossip_bid_t *out, int max)
 typedef struct {
     int32_t voters, conf, fin, p;   // the last 10 s: voters, confirmed, finalized, % confirmed
     int32_t all, beat, beats, fork, phase;
+    int32_t min_beats;              // no rooting before this beat
 } gossip_voters_t;
 static inline int gossip_voters(gossip_voters_t *out)
 {
@@ -4073,6 +4076,7 @@ static inline int gossip_voters(gossip_voters_t *out)
     out->beats = badge_field_int(v, "beats", 0);
     out->fork = badge_field_int(v, "fork", -1);
     out->phase = badge_field_int(v, "phase", 0);
+    out->min_beats = badge_field_int(v, "minBeats", 60);
     sos_pop(1);
     return 1;
 }

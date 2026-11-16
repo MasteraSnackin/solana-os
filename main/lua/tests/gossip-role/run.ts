@@ -15,14 +15,14 @@
 // it handed out, as the server would.
 //
 // Exit code 1 when anything is off.
-import { createHmac, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FakeServer, tag } from './fake';
 
 const here = import.meta.dir;
-const emuDir = join(here, '../../../../../web/static/emulator');
+const emuDir = process.env.EMU_DIR ?? join(here, '../../../../../web/static/emulator');
 const only = process.argv[2] ?? '';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -203,6 +203,46 @@ const P1 = '59qkXRBPMBADVrovwJYTsqXF21MvW9YYSGofQneQMruo';
 const P2 = 'G2QqkHaYPwAg64t6soMZvrDDT48gH3SF8DYsfutQ2JWC';
 const SPAM = '31UFvJfpgAT4Paado1LNpEor9LL5DXMFAiCYzE2j5Cdj';
 
+// ---------------------------------------------------------------------------
+// Synthetic badges: frames posted straight into the emulated radio (a
+// BroadcastChannel), and the frames the emulated badges send them read back.
+
+const air = new BroadcastChannel('solana-os-mesh');
+let msgCounter = 0;
+const CROCK = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+function frame(src: string, type: number, json: string) {
+	const data = Buffer.from(json);
+	const h = Buffer.alloc(16);
+	h.write('HG', 0);
+	h[2] = 1;
+	h[3] = type;
+	h.write(src, 4);
+	h.writeUInt16LE(msgCounter++ & 0xffff, 10);
+	h[12] = 0;
+	h[13] = 1;
+	h.writeUInt16LE(data.length, 14);
+	return Buffer.concat([h, data]).toString('base64');
+}
+type Fake = { id: string; mac: string; v: number; sent?: number; h?: number; claimN?: string; claimAt?: number; acked?: boolean };
+const sendAs = (x: { id: string; mac: string }, type: number, json: string) =>
+	air.postMessage({ from: x.mac, to: 'ffffffffffff', ch: 1, data: frame(x.id, type, json) });
+const helloAs = (x: { id: string; mac: string }) => sendAs(x, 1, `{"k":"b","n":"${x.id}","lv":1}`);
+const appTo = (x: { id: string; mac: string }, to: string, d: unknown) => sendAs(x, 6, JSON.stringify({ app: 'gossip', to, d }));
+// APP messages sent to a MAC (unicast), decoded: [{to, src, json}].
+const heardOnAir: { to: string; src: string; json: any }[] = [];
+air.onmessage = (e: MessageEvent) => {
+	const m = e.data as { from: string; to: string; data: string };
+	if (!m || m.to === 'ffffffffffff' || typeof m.data !== 'string') return;
+	const b = Buffer.from(m.data, 'base64');
+	if (b.length < 16 || b[3] !== 6 || b[13] !== 1) return;
+	try {
+		heardOnAir.push({ to: m.to, src: b.subarray(4, 10).toString(), json: JSON.parse(b.subarray(16).toString()) });
+		if (heardOnAir.length > 5000) heardOnAir.splice(0, 1000);
+	} catch {
+		/* not JSON */
+	}
+};
+
 const emus: Emu[] = [];
 try {
 	const t0 = Date.now();
@@ -210,7 +250,10 @@ try {
 	const B = await boot('B', 2); // close
 	const C = await boot('C', 30); // far
 	const D = await boot('D', 4); // close
-	emus.push(A, B, C, D);
+	// E: the fan-in's boss, weaker than most of the crowd (about -62 dBm), so
+	// crowded players' peer tables have no room for it (MESH.md "Senders heard").
+	const E = await boot('E', 20);
+	emus.push(A, B, C, D, E);
 	for (const e of emus) await online(e);
 	console.log(`booted ${emus.map((e) => `${e.name}=${e.id}`).join(' ')} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 
@@ -219,17 +262,20 @@ try {
 	const peers = await A.run('mesh peers', new RegExp(D.id), 3000);
 	ok(!!peers, 'A hears the other badges');
 
-	if (only !== 'fanin') {
+	if (only !== 'fanin' && only !== 'spoofs') {
 		await luaModule(B);
 		await roles(A, B, C, D);
 		await fight(A, [B, C, D], true);
 		await fight(A, [B, C, D], false);
+		await spoofs(A, B);
 	}
-	if (only !== 'nofanin') await fanin(A, [B]);
+	if (only === 'spoofs') await spoofs(A, B);
+	if (only !== 'nofanin' && only !== 'spoofs') await fanin(E, [B, D]);
 } catch (err) {
 	console.log(`FAIL ${(err as Error).stack}`);
 	failures++;
 } finally {
+	air.close();
 	for (const e of emus) e.halt();
 	server.stop();
 }
@@ -422,11 +468,12 @@ async function roles(A: Emu, B: Emu, C: Emu, D: Emu) {
 async function fight(A: Emu, players: Emu[], win: boolean) {
 	const sid = win ? 21 : 22;
 	const beats = win ? 120 : 30; // 30 beats at 100 bpm: 18 s
+	const minBeats = 20; // RoleState.boss.minBeats: no rooting before beat 20 (12 s at 100 bpm)
 	// Beat 0 in 34 s: the previous role id ages out of the peer tables meanwhile (phase 0, the countdown).
-	const boss = server.session(sid, 'z', { st: [SPAM], boost: 9, since: Date.now() + 34_000, boss: { bpm: 100, beats, spam: SPAM } });
+	const boss = server.session(sid, 'z', { st: [SPAM], boost: 9, since: Date.now() + 34_000, boss: { bpm: 100, beats, spam: SPAM, min: 3, minBeats } });
 	const markA = A.lines.length;
 	let r = await sync(A, boss.state);
-	ok(r.st?.ro === 'z' && r.st.boss?.bpm === 100, `boss ${sid} on the air`, JSON.stringify(r.st));
+	ok(r.st?.ro === 'z' && r.st.boss?.bpm === 100 && r.st.boss.minBeats === minBeats, `boss ${sid} on the air (minBeats in gossip.role())`, JSON.stringify(r.st));
 	await keepAlive([A], 31_000, boss.state);
 	// Players hear the fight; each "Lab" votes on every beat it hears.
 	let heard = 0, countdown = 0;
@@ -457,7 +504,7 @@ async function fight(A: Emu, players: Emu[], win: boolean) {
 	const lock = new Map<string, number>();
 	const votes = new Map<string, number>();
 	const until = Date.now() + (win ? 40_000 : 30_000);
-	let phase = 1;
+	let phase = 1, beat = 0, finBefore = 0;
 	while (Date.now() < until && phase === 1) {
 		for (const p of players) {
 			const l = lock.get(p.id) ?? 0;
@@ -470,8 +517,11 @@ async function fight(A: Emu, players: Emu[], win: boolean) {
 		const v = await A.run('grole voters', /^grole voters /);
 		const vj = v ? JSON.parse(v.slice('grole voters '.length)) : null;
 		phase = vj?.phase ?? 1;
+		beat = vj?.beat ?? beat;
+		if (phase === 1 && beat < minBeats) finBefore = Math.max(finBefore, vj?.fin ?? 0);
 	}
 	ok(phase === (win ? 2 : 3), win ? 'the players root the block (2/3 finalized)' : 'the boss wins at the end of its beats', `phase ${phase}`);
+	if (win) ok(beat >= minBeats && finBefore >= 2, `not before beat minBeats (${minBeats}), though finalized long before`, `rooted at beat ${beat}, ${finBefore} finalized before beat ${minBeats}`);
 	r = await sync(A, boss.state);
 	ok(r.body.role?.boss && r.body.role.boss.won === win && r.body.role.boss.voters >= 3, 'RoleReport.boss with the outcome', JSON.stringify(r.body.role));
 	ok(events(A, markA, 'boss').some((e) => e.own && e.phase === (win ? 2 : 3)), "on_gossip boss for the boss's owner");
@@ -507,35 +557,92 @@ async function fight(A: Emu, players: Emu[], win: boolean) {
 	await sleep(2000);
 }
 
+// Spoofed vote summaries (F4): with no minimum beats at all, three made-up
+// voters claiming lockout 32 at once, or summaries a voter sent only once, never
+// make the boss count them finalized.
+async function spoofs(A: Emu, B: Emu) {
+	const sid = 23;
+	const boss = server.session(sid, 'z', { st: [SPAM], boost: 9, since: Date.now() + 34_000, boss: { bpm: 100, beats: 200, spam: SPAM, min: 3, minBeats: 0 } });
+	await sync(A, boss.state);
+	await keepAlive([A], 33_000, boss.state);
+	const fakes: Fake[] = [0, 1, 2].map((i) => ({ id: `S${CROCK[i]}${CROCK[sid & 31]}${CROCK[(Date.now() >> 5) & 31]}Q9`, mac: `0c${randomBytes(4).toString('hex')}0${i}`, v: 0 }));
+	for (let k = 0; k < 2; k++) {
+		for (const x of fakes) helloAs(x);
+		await sleep(500);
+	}
+	const voters = async () => {
+		const v = await A.run('grole voters', /^grole voters /);
+		return v ? JSON.parse(v.slice('grole voters '.length)) : null;
+	};
+	let vj = await voters();
+	for (let i = 0; i < 20 && vj && vj.phase === 0; i++) {
+		await sleep(250);
+		vj = await voters();
+	}
+	ok(vj?.phase === 1 && vj.beat <= 3, 'a fight with minBeats 0 has begun', JSON.stringify(vj));
+	// F6: a station HELLO with a fresh id from the role badge's MAC (a MAC spoofer) does not
+	// knock the live role id off listeners' tables; a new station id needs 3 HELLOs over 6 s.
+	const peersOf = async (e: Emu) => {
+		const pm = e.lines.length;
+		e.cmd('mesh peers');
+		await sleep(400);
+		return e.lines.slice(pm).join('\n');
+	};
+	const listedBefore = (await peersOf(B)).includes(boss.id);
+	// The emulator's radio MAC: its NVS id with the multicast bit cleared and the local bit set.
+	const radioMac = ((parseInt(A.mac.slice(0, 2), 16) & 0xfe) | 0x02).toString(16).padStart(2, '0') + A.mac.slice(2);
+	const fakeStation = { id: `F${CROCK[(Date.now() >> 7) & 31]}${CROCK[(Date.now() >> 12) & 31]}Z9Q`, mac: radioMac };
+	// 8 s of a station HELLO with a fresh id from the role's MAC four times a second, B's table sampled meanwhile.
+	let fakeSeen = 0, roleGone = 0, samples = 0;
+	const tS = Date.now();
+	const spoofer = setInterval(() => sendAs(fakeStation, 1, '{"k":"s","n":"Fake"}'), 250);
+	while (Date.now() - tS < 8000) {
+		const ps = await peersOf(B);
+		samples++;
+		fakeSeen += ps.includes(fakeStation.id) ? 1 : 0;
+		roleGone += ps.includes(boss.id) ? 0 : 1;
+	}
+	clearInterval(spoofer);
+	ok(listedBefore && !fakeSeen && !roleGone, "a spoofed station id from the role's MAC never replaces the live role id", `${samples} samples: fake listed ${fakeSeen}, role missing ${roleGone}`);
+	// 1. {v:1,l:32} at the first beats: a lockout of 32 needs six votes in time behind it.
+	for (let k = 0; k < 4; k++) {
+		for (const x of fakes) appTo(x, boss.id, { t: 'vote', v: 1, l: 32 });
+		await sleep(700);
+		if (k === 1) for (const x of fakes) helloAs(x);
+	}
+	await sleep(600);
+	vj = await voters();
+	ok(vj?.phase === 1 && vj.fin === 0, 'implausible summaries ({v:1,l:32}) never count as finalized', JSON.stringify(vj));
+	// 2. Plausible summaries (v up to the beats so far, l <= 2^(v-1)), but each voter heard once: not yet counted.
+	await sleep(4000);
+	for (const x of fakes) helloAs(x);
+	vj = await voters();
+	const v1 = Math.max(6, (vj?.beat ?? 6) - 1);
+	for (const x of fakes) appTo(x, boss.id, { t: 'vote', v: v1, l: 32 });
+	await sleep(800);
+	vj = await voters();
+	ok(vj?.phase === 1 && vj.fin === 0, 'a voter heard in only one vote period does not count toward the 2/3', JSON.stringify(vj));
+	await sync(A, { ended: { sid, by: 'time', stake: 0, lamps: 0 } });
+	await sleep(1000);
+}
+
 // ---------------------------------------------------------------------------
 // Fan-in: many voters into one boss. Synthetic badges (HELLO, then votes to the
 // role id) are injected straight into the emulated radio at a chosen rate, next
 // to the real emulated players, and the boss's counters say what arrived.
+// The boss (E, about -62 dBm) is weaker than most of the crowd, so the real
+// players' 20-entry peer tables fill with synthetic voters and drop it, and its
+// own holds 20 of the 100: votes, acks and claims must go by the senders table
+// (MESH.md "Senders heard"; the review's F2).
 
 async function fanin(A: Emu, real: Emu[]) {
 	const sid = 31;
-	const boss = server.session(sid, 'z', { st: [SPAM], boost: 9, boss: { bpm: 100, beats: 1000, spam: SPAM } });
+	const boss = server.session(sid, 'z', { st: [SPAM], boost: 9, boss: { bpm: 100, beats: 1000, spam: SPAM, min: 3, minBeats: 600 } });
 	await sync(A, boss.state);
 	await keepAlive([A], 33_000, boss.state);
-	const bc = new BroadcastChannel('solana-os-mesh');
-	let msgCounter = 0;
-	const frame = (src: string, type: number, json: string) => {
-		const data = Buffer.from(json);
-		const h = Buffer.alloc(16);
-		h.write('HG', 0);
-		h[2] = 1;
-		h[3] = type;
-		h.write(src, 4);
-		const m = msgCounter++ & 0xffff;
-		h.writeUInt16LE(m, 10);
-		h[12] = 0;
-		h[13] = 1;
-		h.writeUInt16LE(data.length, 14);
-		return Buffer.concat([h, data]).toString('base64');
-	};
-	const crock = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 	const results: string[] = [];
-	let wide100 = -1;
+	let wide100 = -1, acked100 = -1;
+	let realOk = '';
 	let runNo = 0;
 	// `off`: os_mesh's senders table off (`mesh senders off`): the 20-entry peer table's rule
 	// alone, as before 2.4.0's fix (MESH.md "Senders heard").
@@ -548,48 +655,69 @@ async function fanin(A: Emu, real: Emu[]) {
 		[18, 500, false]
 	] as [number, number, boolean][]) {
 		runNo++;
-		await A.run(`mesh senders ${off ? 'off' : 'on'}`, /senders heard/);
-		const voters = Array.from({ length: n }, (_, i) => ({
+		const wide = n === 100 && !off;
+		for (const e of [A, ...real]) await e.run(`mesh senders ${off ? 'off' : 'on'}`, /senders heard/);
+		const voters: Fake[] = Array.from({ length: n }, (_, i) => ({
 			// Ids unique per run (a run's ids stay bound to its MACs for 30 s, as real ones would).
-			id: `V${crock[(i >> 5) & 31]}${crock[i & 31]}${crock[runNo & 31]}${crock[(n >> 5) & 31]}${crock[n & 31]}`,
+			id: `V${CROCK[(i >> 5) & 31]}${CROCK[i & 31]}${CROCK[runNo & 31]}${CROCK[(n >> 5) & 31]}${CROCK[n & 31]}`,
 			mac: `0a${randomBytes(4).toString('hex')}${(i % 24).toString(16).padStart(2, '0')}`,
 			v: 0
 		}));
-		const hello1 = (x: { id: string; mac: string }) =>
-			bc.postMessage({ from: x.mac, to: 'ffffffffffff', ch: 1, data: frame(x.id, 1, `{"k":"b","n":"${x.id}","lv":1}`) });
 		// Say hello the way badges do: each every ~2 s, spread out, never all at once.
 		for (let i = 0; i < 2; i++) {
 			for (const x of voters) {
-				hello1(x);
+				helloAs(x);
 				await sleep(Math.max(2, 2000 / voters.length));
 			}
 		}
 		await A.run('grole stats reset', /reset/);
-		const before = (await A.run('mesh status', /drop|rx/, 2000)) ?? '';
-		void before;
+		for (const e of real) await e.run('grole stats reset', /reset/);
 		let sent = 0;
 		const t0 = Date.now();
-		const dur = 20_000;
+		// The wide run's claims: a role sends 4 messages a second and the boss's beat takes two,
+		// so 100 claimants need ~50 s of acks while the fight runs (~35 s after it ends).
+		const dur = wide ? 75_000 : 20_000;
 		let nextHello = t0 + 10_000;
+		let realVotes = 0, nextReal = t0;
+		const airMark = heardOnAir.length;
 		// Spread the voters over the interval, as real badges would be.
 		while (Date.now() - t0 < dur) {
 			const slot = Date.now() - t0;
 			for (let i = 0; i < voters.length; i++) {
 				const due = Math.floor((slot - (i * every) / voters.length) / every);
-				const x = voters[i] as any;
+				const x = voters[i];
 				if (due >= 0 && (x.sent ?? -1) < due) {
 					x.sent = due;
 					x.v++;
-					bc.postMessage({ from: x.mac, to: 'ffffffffffff', ch: 1, data: frame(x.id, 6, `{"app":"gossip","to":"${boss.id}","d":{"t":"vote","v":${Math.min(x.v, 1)},"l":1}}`) });
+					appTo(x, boss.id, { t: 'vote', v: Math.min(x.v, 1), l: 1 });
 					sent++;
+				}
+				// The claims (from 10 s on in the wide run): each voter claims, and again every 4 s until acknowledged.
+				if (wide && slot > 10_000 && !x.acked && (!x.claimAt || Date.now() - x.claimAt > 4000)) {
+					x.claimN = x.claimN ?? randomBytes(8).toString('hex');
+					x.claimAt = Date.now();
+					appTo(x, boss.id, { t: 'claim', n: x.claimN, c: 1 });
 				}
 			}
 			for (let i = 0; i < voters.length; i++) {
-				const x = voters[i] as any;
+				const x = voters[i];
 				const due = Math.floor((slot - (i * 2000) / voters.length) / 2000);
 				if (due >= 0 && (x.h ?? -1) < due) {
 					x.h = due;
-					hello1(x);
+					helloAs(x);
+				}
+			}
+			if (wide) {
+				for (const a of heardOnAir.slice(airMark)) {
+					const x = a.json?.d?.t === 'ack' ? voters.find((v) => v.mac === a.to && v.claimN === a.json.d.n) : undefined;
+					if (x && a.src === boss.id && a.json.to === x.id && tag(boss.key, `claim|${boss.id}|${x.id}|${x.claimN}|1|${a.json.d.r}`) === a.json.d.g) x.acked = true;
+				}
+				heardOnAir.splice(airMark);
+				// The real players vote too, as the Lab would (the service sends one summary per ~2 s).
+				if (Date.now() >= nextReal) {
+					realVotes++;
+					for (const e of real) e.cmd(`grole vote ${Math.min(realVotes, 1)} 1`);
+					nextReal += 1000;
 				}
 			}
 			if (Date.now() > nextHello) {
@@ -607,20 +735,40 @@ async function fanin(A: Emu, real: Emu[]) {
 		A.cmd('mesh status');
 		await sleep(500);
 		const refused = A.lines.slice(mm).find((l) => /refused:/.test(l))?.trim() ?? '';
-		const ms = refused;
-		if (n === 100 && !off) wide100 = (100 * rxVote) / sent;
-		const line = `${off ? '[senders off] ' : ''}${n} voters, one vote each per ${every / 1000} s (${((n * 1000) / every).toFixed(1)} msg/s): sent ${sent}, the boss took ${rxVote} (${((100 * rxVote) / sent).toFixed(1)} %), ring drops ${drops}, voters seen ${vin?.[2] ?? '?'} (recent ${vin?.[1] ?? '?'}); mesh ${refused}`;
+		let extra = '';
+		if (wide) {
+			wide100 = (100 * rxVote) / sent;
+			acked100 = voters.filter((x) => x.acked).length;
+			extra = `; claims acknowledged ${acked100} of ${n}`;
+			// The real players: the boss is in neither one's peer table, yet they vote and claim.
+			const parts: string[] = [];
+			let good = 0;
+			for (const e of real) {
+				const pm = e.lines.length;
+				e.cmd('mesh peers');
+				await sleep(400);
+				const listed = e.lines.slice(pm).some((l) => /^\s*(badge|station|beacon)\s/.test(l) && l.includes(boss.id));
+				const st = await status(e);
+				const tx = st.match(/tx badge (\d+) role \d+ fail (\d+)/);
+				const mark = e.lines.length;
+				const c = await e.run(`grole claim ${boss.id} 1`, /grole claim: /);
+				const ack = /ok/.test(c ?? '') ? await e.waitFor(/^grole ev .*"t":"ack".*"ok":true/, 20_000, mark) : undefined;
+				parts.push(`${e.name}: boss listed ${listed}, tx badge ${tx?.[1]} fail ${tx?.[2]}, claim "${c}", ack ${!!ack}`);
+				good += !listed && Number(tx?.[1] ?? 0) > 0 && Number(tx?.[2] ?? 1) === 0 && !!ack ? 1 : 0;
+			}
+			realOk = `${good}/${real.length}`;
+			extra += `; real players ${parts.join(' | ')}`;
+		}
+		const line = `${off ? '[senders off] ' : ''}${n} voters, one vote each per ${every / 1000} s (${((n * 1000) / every).toFixed(1)} msg/s): sent ${sent}, the boss took ${rxVote} (${((100 * rxVote) / sent).toFixed(1)} %), ring drops ${drops}, voters seen ${vin?.[2] ?? '?'} (recent ${vin?.[1] ?? '?'}); mesh ${refused}${extra}`;
 		results.push(line);
 		console.log(`     ${line}`);
-		void ms;
 		await sleep(3000);
 	}
 	const mesh = A.lines.slice(-40).filter((l) => /rx|drop|spoof/.test(l));
-	console.log(`     A's mesh counters after: ${mesh.slice(-4).join(' | ')}`);
-	bc.close();
+	console.log(`     the boss's mesh counters after: ${mesh.slice(-4).join(' | ')}`);
 	ok(results.length === 6, 'fan-in measured');
 	ok(wide100 >= 90, 'fan-in: a boss takes >= 90 % of the votes of 100 voters (the senders table)', `${wide100.toFixed(1)} %`);
-	void real;
-	void createHmac;
+	ok(acked100 >= 90, 'fan-in: >= 90 % of 100 claimants outside the boss\'s peer table are acknowledged', `${acked100} of 100`);
+	ok(realOk === `${real.length}/${real.length}`, 'fan-in: players whose full peer tables lack the boss still vote and claim', realOk);
 	await sync(A, { ended: { sid, by: 'time', stake: 0, lamps: 0 } });
 }

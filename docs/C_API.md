@@ -1299,7 +1299,7 @@ void on_gossip(void) { /* badge_arg(1): {t = "boss", ...}: gossip_boss_arg(&b) *
 |---|---|---|
 | `gossip_role(&r)` | `gossip.role()` | 1 filled, 0 none. `r.kind` `""`/`"offer"`/`"session"`/`"ended"`; `since`, `until` unix seconds, `left` seconds |
 | `gossip_boss(&b)`, `gossip_boss_arg(&b)` | `gossip.boss()`, an `on_gossip` `boss` event | 1 filled, 0 none (`gossip_boss_arg` in `on_gossip`) |
-| `gossip_voters(&v)` | `gossip.voters()` | 1 while this badge is the boss, else 0 |
+| `gossip_voters(&v)` | `gossip.voters()` | 1 while this badge is the boss, else 0 (`v.min_beats`, and `r.min_beats` of a boss's `gossip_role`: the first beat the block can be rooted at) |
 | `gossip_bids(out, max)` | `gossip.bids()` | how many filled (`gossip_bid_t`), 0 when not a Leader |
 | `gossip_role_answer(yes)`, `gossip_role_end()` | `gossip.role_answer`, `gossip.role_end` | 0, or `BADGE_ERR` with `badge_error()` |
 | `gossip_bid(role, addr, fee)`, `gossip_claim(role, c)`, `gossip_cure(id)` | the same | 0 or `BADGE_ERR` |
