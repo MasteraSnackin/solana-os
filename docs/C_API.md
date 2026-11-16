@@ -1247,6 +1247,30 @@ The Lua module's functions as `gossip_*` in `badge.h`, with the same rules: read
 app with `gossip` (services too), the acting calls for the Lab (`gossip-lab`) only.
 
 <!-- gossip:fw-node -->
+```c
+gossip_me_t me;            gossip_me(&me);                  // 0, or BADGE_ERR "not linked"
+                           gossip_me_json(buf, cap);        // the whole Node as JSON
+gossip_program_t p;        gossip_program(addr, &p);        // a held record: 0, or "unknown"
+                           gossip_genome(addr, &p);         // looks alone: 0, or "bad address"
+                           gossip_slot(i, &p);  gossip_inbox(i, &p);   // 1 filled, 0 empty or past the end
+gossip_peer_t r[20];       int n = gossip_nearby(r, 20);    // strongest first
+gossip_heard_t h[8];       int k = gossip_hearing(h, 8);    // GOSSIP_HEARING / _EXPOSED / _INCUBATING
+// in on_gossip():         gossip_event_kind(buf, cap);  gossip_event_json(buf, cap);
+// the Lab only (0, or BADGE_ERR "lab only", "busy", ...):
+gossip_set_class('v');  gossip_activate(a);  gossip_place(a, slot);  gossip_drop(slot);
+gossip_deploy(NULL);    gossip_use(item, p, q, trait /* -1 none */);  gossip_name(a, "Turbine Toad");
+gossip_public(1);       gossip_lead(1);
+```
+
+- `gossip_me_t` holds the Node's numbers, `act`, `nslots`/`ninbox`, `why`; its items,
+  effects, immunity and objectives are in `gossip_me_json`. Times are unix seconds.
+- `gossip_program_t`: `a`, `par`, `name`, `gen`, `nodes` (-1 unknown), `verified`, `spam`,
+  `colour` (0xRRGGBB), `hue`, `body`, `eyes`, `marks`, `mark_seed`, `traits[3]` and
+  `ntraits`, `vir`, `hard`, `stab`, `rarity` (`GOSSIP_COMMON` .. `GOSSIP_LEGENDARY`).
+- **Slots are 0-based in C** (1-based in Lua). The export `on_gossip` (void, the event as
+  `badge_arg(1)`) needs no ABI change: any C app with the permission has it.
+- Each wrapper reads through the Lua module (one call and a table walk): read once per
+  frame at most, not per creature.
 <!-- /gossip:fw-node -->
 
 The role side:
