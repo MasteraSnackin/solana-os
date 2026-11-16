@@ -253,6 +253,9 @@ ok(sa.includes(`"st":"${prog}"`), 'A on again: st and g back in the HELLO');
 	const yProg = base58(randomBytes(32));
 	// Hearing entries (one exposed and waiting for its answer is not one: §5 keeps it until then).
 	const entries = async (who: string) => (await status(b)).split('\n').filter((l) => l.includes(` from ${who} `) && / hearing /.test(l)).length;
+	// Any state: at the test's low threshold its one entry is exposed within a second or two.
+	const anyFrom = async (who: string) => (await status(b)).split('\n').filter((l) => l.includes(` from ${who} `) && / (hearing|exposed|incubating) /.test(l)).length;
+	let seenX = 0;
 	const recsFrom = (who: string) => fake.syncs.flatMap((x) => x.body.rec ?? []).filter((r: any) => r.f === who).length;
 	const t0 = Date.now();
 	let maxX = 0, sawY = false, i = 0;
@@ -263,10 +266,11 @@ ok(sa.includes(`"st":"${prog}"`), 'A on again: st and g back in the HELLO');
 		await sleep(200);
 		if (i % 10 === 5) {
 			maxX = Math.max(maxX, await entries(X.id));
+			seenX = Math.max(seenX, await anyFrom(X.id));
 			sawY ||= (await status(b)).split('\n').some((l) => l.includes(` from ${Y.id} `));   // any state: it is exposed in seconds here
 		}
 	}
-	ok(maxX === 1, `F3: a hostile badge cycling 8 programs holds one of B's hearing entries (at most ${maxX})`);
+	ok(maxX <= 1 && seenX >= 1, `F3: a hostile badge cycling 8 programs holds at most one of B's hearing entries (at most ${maxX} hearing, ${seenX} in all with one exposed awaiting its answer)`);
 	ok(sawY, 'F3: another badge\'s program is still heard meanwhile');
 	// Keep going until B's record from X comes back (the fake answers bad: X has no key there).
 	let bad = false;
