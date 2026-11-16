@@ -379,6 +379,12 @@ const api: Record<string, V> = {
   'solana.pda': fn((a) => (want(a, 't s', 'solana.pda'), [s(new Uint8Array(32).fill(7)), i(254)])),
 };
 
+// A module mock (--mock file.ts, e.g. gossip/gossip-mock.ts): install(ctx) adds to the API before the
+// app starts, script(ctx) runs its own steps after the keys.
+const mockPath = opt('--mock', '');
+const mock = mockPath ? await import(require('node:path').resolve(mockPath)) : null;
+const mockCtx = () => ({ api, fn, tbl, s, i, b, NIL, want, later, obj, bug, js2v, v2js, str, args, run, deliver, ex, problems });
+
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 function b58(bytes: Uint8Array) {
   let n = 0n;
@@ -712,6 +718,7 @@ function deliver() {
   }
 }
 
+mock?.install?.(mockCtx());
 if (ex.badge_abi && ex.badge_abi() !== 1) problems.push(`badge_abi() = ${ex.badge_abi()}`);
 run('_initialize', () => ex._initialize?.());
 run('on_start', () => ex.on_start());
@@ -726,6 +733,7 @@ for (const k of keyList) {
   if (ex.on_key) run(`on_key(${k})`, () => ex.on_key(keyIds[k], 0));
   deliver();
 }
+mock?.script?.(mockCtx());
 if (ex.on_mesh) {
   run('on_mesh', () => ex.on_mesh(), [s('7K2Q9M'), tbl({ ping: 1, x: 3, name: 'ann' })]);
   deliver();
