@@ -109,6 +109,9 @@ Also in 2.4.0:
   100 B. `os_http` and `os_ws` refuse a new handshake below 68 KB free (52 KB to resume)
   or a 17 KB block, up from 56 KB (40 KB) and 8 KB: limits that bind only on a chip
   without PSRAM.
+- **Guide: a ninth category, Gossip** (Purple), last in its list: the game and the
+  Solana ideas behind it. Older badges get its pages as Tech docs from the server; a
+  category the server adds later no longer lands on Events' counts.
 
 ## 2.3.0 (unreleased)
 
