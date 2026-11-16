@@ -624,7 +624,7 @@ const badgeImports = {
     return n;
   },
   keys: () => heldKeys,
-  millis: () => (millis += 30),
+  millis: () => (mock?.millis ? mock.millis() : (millis += 30)), // a module mock may keep the clock (gossip's fight)
   log: (p: number, n: number) => out(`[app] ${cstr(p, n)}`),
   fail: (p: number, n: number) => {
     throw new AppBug(`sos_fail: ${cstr(p, n)}`);

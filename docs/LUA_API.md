@@ -1965,7 +1965,8 @@ gossip.me()           -- the node, or nil while the badge is unclaimed:
                       --  epoch = {n, ends, obj = {{id, text, have, need}}},
                       --  pub = false, earns = false, why = "Link X at <site>/profile to earn",
                       --  lead = false (the "May become a leader" setting), name_nodes = 50 (adoptions
-                      --  before a program can be named), ach = {n = 3, pts = 45, last = {"Voter", ...}}}
+                      --  before a program can be named), close = -55 (the dBm a role claim needs, 2.4.0),
+                      --  ach = {n = 3, pts = 45, last = {"Voter", ...}}}
 gossip.programs()     -- {slots = {p, false, p}, inbox = {p, ...}}: each p a program table (below)
 gossip.program(a)     -- a program this badge holds a record of, else nil:
                       -- {a, par = "" (a root), gen, name = nil (unnamed), nodes (when known),
@@ -1975,7 +1976,8 @@ gossip.program(a)     -- a program this badge holds a record of, else nil:
 gossip.genome(a)      -- the looks and traits alone, for any valid address (pure), else nil
 gossip.nearby()       -- the radar, strongest first, <= 20 heard in the last 30 s:
                       -- {{id, name, kind = "badge" | "role", role = "l" (roles only), real = true,
-                      --   class = "v" (nil: none), rssi = -48, st = "59qk..." ("" none), boost = 0}, ...}
+                      --   class = "v" (nil: none), rssi = -48, st = "59qk..." ("" none), boost = 0,
+                      --   spam = true (st is live spam a Validator may cure; nil otherwise)}, ...}
 gossip.hearing()      -- <= 8 programs being heard: {{a, pct = 0..100,
                       --   state = "hearing" | "exposed" | "incubating", from = "9XQ3TT", rssi}, ...}
 function on_gossip(ev) end

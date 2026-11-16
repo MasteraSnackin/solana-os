@@ -1264,7 +1264,9 @@ gossip_public(1);       gossip_lead(1);
 
 - `gossip_me_t` holds the Node's numbers, `act`, `nslots`/`ninbox`, `why`, `lead` (the
   "May become a leader" setting), `name_nodes` (adoptions before a program can be named)
-  and `ach_n`/`ach_pts` (achievements); its items (with `pick` for the Upgrade Authority+
+  and `ach_n`/`ach_pts` (achievements); `gossip_me_json` also has `close` (the dBm a role
+  claim needs), and `gossip.nearby()`'s entries read through `sos_global` a badge's `spam`
+  (live spam a Validator may cure); its items (with `pick` for the Upgrade Authority+
   that takes a trait), effects, immunity, objectives and the newest achievements' names are
   in `gossip_me_json`. Times are unix seconds, countdowns (`left`) seconds.
 - `gossip_program_t`: `a`, `par`, `name`, `gen`, `nodes` (-1 unknown), `verified`, `spam`,
