@@ -21,6 +21,10 @@ Roles:
 <!-- gossip:fw-roles -->
 <!-- /gossip:fw-roles -->
 
+The Guide gains a ninth category, Gossip (Purple), last in its list: the game and the Solana
+ideas behind it. Older badges get its pages as Tech docs from the server; a category the
+server adds later no longer lands on Events' counts.
+
 ## 2.3.0 (unreleased)
 
 C apps, background services with the first two built on them (Mailbox and
