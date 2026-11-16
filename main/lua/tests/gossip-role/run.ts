@@ -16,7 +16,8 @@
 //
 // Exit code 1 when anything is off.
 import { createHmac, randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FakeServer, tag } from './fake';
 
@@ -30,6 +31,28 @@ const ok = (cond: boolean, what: string, extra = '') => {
 	console.log(`${cond ? 'ok  ' : 'FAIL'} ${what}${extra ? `  (${extra})` : ''}`);
 	if (!cond) failures++;
 };
+
+// The C twin (tests/gossip-role/c), built as the store would when the C toolchain is here.
+const cOut = mkdtempSync(join(tmpdir(), 'gossip-role-c-'));
+const badgeCc = join(here, '../../../../tools/cc/badge-cc');
+const haveCc = existsSync(join(here, '../../../../tools/cc/.toolchain/wasi-sdk/bin/clang'));
+if (haveCc) {
+	const r = Bun.spawnSync(['sh', badgeCc, join(here, 'c'), '-o', join(cOut, 'app.wasm'), '-q']);
+	if (r.exitCode !== 0) throw new Error(`badge-cc: ${r.stderr.toString()}${r.stdout.toString()}`);
+	Bun.write(join(cOut, 'app.json'), readFileSync(join(here, 'c/app.json'), 'utf8'));
+} else {
+	console.log('skip the C twin: no C toolchain (bun run cc)');
+}
+async function runC(e: Emu): Promise<string[]> {
+	e.put('t-c-gossip-role', cOut, 'gossip-lab');
+	const mark = e.lines.length;
+	e.cmd('lua run gossip-lab');
+	await e.waitFor(/t-c-gossip-role done/, 15_000, mark);
+	const out = e.lines.slice(mark).filter((l) => l.includes('t-c-gossip-role '));
+	e.cmd('open home');
+	await sleep(800);
+	return out;
+}
 
 const server = new FakeServer(Number(process.env.PORT ?? 32012));
 const url = server.url;
@@ -108,7 +131,12 @@ async function boot(name: string, mac5: number): Promise<Emu> {
 					/* exists */
 				}
 			}
-			for (const f of ['main.lua', 'app.json']) {
+			for (const f of ['main.lua', 'app.json', 'app.wasm']) {
+				if (!existsSync(join(dir, f))) continue;
+				if (f === 'app.wasm') {
+					mod.FS.writeFile(`${dest}/${f}`, readFileSync(join(dir, f)));
+					continue;
+				}
 				let t = readFileSync(join(dir, f), 'utf8');
 				if (rename && f === 'app.json') t = t.replace(`"${id}"`, `"${rename}"`);
 				mod.FS.writeFile(`${dest}/${f}`, t);
@@ -225,6 +253,15 @@ async function luaModule(e: Emu) {
 		e.cmd('open home');
 		await sleep(800);
 	}
+	if (haveCc) {
+		const out = await runC(e);
+		const done = out.find((l) => /done/.test(l));
+		const said = (w: string) => out.find((l) => l.includes(`t-c-gossip-role ${w}:`)) ?? '';
+		ok(!!done && /0 failed/.test(done), 'the C twin runs as the Lab', done);
+		ok(/role 0 kind  /.test(out.join('\n')) && /voters 0:/.test(out.join('\n')), 'C: no role, no voters');
+		ok(['vote', 'claim', 'cure', 'bid', 'block', 'answer', 'fork'].every((w) => /: -1 \S/.test(said(w)) && !/lab only/.test(said(w))),
+			'C: each acting call says why (never "lab only" for the Lab)', out.filter((l) => /: -1/.test(l)).join(' | '));
+	}
 }
 
 async function roles(A: Emu, B: Emu, C: Emu, D: Emu) {
@@ -232,7 +269,7 @@ async function roles(A: Emu, B: Emu, C: Emu, D: Emu) {
 	// 1. An offer: it waits for the owner, the Lab's yes goes with the next sync.
 	let mark = A.lines.length;
 	let r = await sync(A, { offer: { sid: 7, ro: 'l', until: now() + 30_000 } });
-	ok(r.st?.offer?.sid === 7 && r.st.offer.ro === 'l' && r.st.offer.left > 25_000, 'an offer shows, 30 s to answer', JSON.stringify(r.st));
+	ok(r.st?.offer?.sid === 7 && r.st.offer.ro === 'l' && r.st.offer.left >= 29, 'an offer shows, 30 s to answer', JSON.stringify(r.st));
 	ok(events(A, mark, 'role').some((x) => x.state === 'offer'), 'on_gossip role: offer');
 	r = await sync(A, { offer: { sid: 7, ro: 'l', until: now() + 30_000 } });
 	ok(!r.body.role, 'no answer before the owner gives one', JSON.stringify(r.body));
@@ -438,6 +475,11 @@ async function fight(A: Emu, players: Emu[], win: boolean) {
 	r = await sync(A, boss.state);
 	ok(r.body.role?.boss && r.body.role.boss.won === win && r.body.role.boss.voters >= 3, 'RoleReport.boss with the outcome', JSON.stringify(r.body.role));
 	ok(events(A, markA, 'boss').some((e) => e.own && e.phase === (win ? 2 : 3)), "on_gossip boss for the boss's owner");
+	if (haveCc && win) {
+		const out = (await runC(A)).join('\n');
+		ok(new RegExp(`role 1 kind session sid ${sid} ro z id ${boss.id} bpm 100 beats ${beats} nst 1`).test(out) && /voters 1: 3 recent, \d+ fin, beat \d+\/120 phase 2/.test(out),
+			'C: gossip_role and gossip_voters on the boss', out.split('\n').filter((l) => /role 1|voters/.test(l)).join(' | '));
+	}
 	// Each player claims by itself with its votes in time; the acks verify.
 	let claims = 0;
 	for (const p of players) {
@@ -553,8 +595,12 @@ async function fanin(A: Emu, real: Emu[]) {
 		const rxVote = Number(s.match(/vote (\d+) boss/)?.[1] ?? -1);
 		const drops = Number(s.match(/ring drops (\d+)/)?.[1] ?? -1);
 		const vin = s.match(/voters (\d+) recent of (\d+)/);
-		const ms = await A.run('mesh status', /rx/, 2000);
-		const line = `${n} voters, one vote each per ${every / 1000} s (${((n * 1000) / every).toFixed(1)} msg/s): sent ${sent}, the boss took ${rxVote} (${((100 * rxVote) / sent).toFixed(1)} %), ring drops ${drops}, voters seen ${vin?.[2] ?? '?'} (recent ${vin?.[1] ?? '?'})`;
+		const mm = A.lines.length;
+		A.cmd('mesh status');
+		await sleep(500);
+		const refused = A.lines.slice(mm).find((l) => /refused:/.test(l))?.trim() ?? '';
+		const ms = refused;
+		const line = `${n} voters, one vote each per ${every / 1000} s (${((n * 1000) / every).toFixed(1)} msg/s): sent ${sent}, the boss took ${rxVote} (${((100 * rxVote) / sent).toFixed(1)} %), ring drops ${drops}, voters seen ${vin?.[2] ?? '?'} (recent ${vin?.[1] ?? '?'}); mesh ${refused}`;
 		results.push(line);
 		console.log(`     ${line}`);
 		void ms;

@@ -1104,12 +1104,13 @@ char *gossip_role_state_json(void)
         cJSON *of = cJSON_AddObjectToObject(o, "offer");
         cJSON_AddNumberToObject(of, "sid", R.sid);
         cJSON_AddStringToObject(of, "ro", ro);
-        cJSON_AddNumberToObject(of, "until", (double)R.offer_until);
+        // Times for apps are unix seconds: Lua's numbers are 32-bit (LUA_32BITS).
+        cJSON_AddNumberToObject(of, "until", (double)(R.offer_until / 1000));
         if (R.answer) {
             cJSON_AddBoolToObject(of, "answer", R.answer > 0);
         } else {
             int64_t left = OFFER_ACCEPT_MS - (now - R.offer_seen);
-            cJSON_AddNumberToObject(of, "left", left > 0 ? (double)left : 0);
+            cJSON_AddNumberToObject(of, "left", left > 0 ? (double)((left + 999) / 1000) : 0);
         }
     } else if (R.phase == PH_SESSION) {
         o = cJSON_CreateObject();
@@ -1117,8 +1118,12 @@ char *gossip_role_state_json(void)
         cJSON_AddStringToObject(o, "ro", ro);
         cJSON_AddStringToObject(o, "id", R.id);       // the role id is public: it is on the air
         cJSON_AddStringToObject(o, "n", R.name);
-        cJSON_AddNumberToObject(o, "since", (double)R.since);
-        cJSON_AddNumberToObject(o, "until", (double)R.until);
+        cJSON_AddNumberToObject(o, "since", (double)(R.since / 1000));
+        cJSON_AddNumberToObject(o, "until", (double)(R.until / 1000));
+        int64_t t = gr_server_ms();
+        if (t && R.until) {
+            cJSON_AddNumberToObject(o, "left", R.until > t ? (double)((R.until - t) / 1000) : 0);
+        }
         cJSON *st = cJSON_AddArrayToObject(o, "st");
         for (int i = 0; i < R.nst; i++) {
             cJSON_AddItemToArray(st, cJSON_CreateString(R.st[i]));

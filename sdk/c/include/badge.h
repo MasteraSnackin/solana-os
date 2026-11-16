@@ -3422,6 +3422,286 @@ static inline int service_notify(const char *text, uint32_t led)
 // The role side:
 
 /* gossip:fw-roles */
+// This badge's role (gossip.role()): kind "" (none), "offer", "session" or "ended".
+typedef struct {
+    char kind[8];
+    int32_t sid;
+    char ro;                // 'l' Leader, 'm' MEV Bot, 'a' Anonymous Deployer, 'z' Byzantine Leader
+    char id[8];             // session: the role's id on the air
+    char name[25];          // session: its name on the air
+    int32_t since, until;   // unix seconds (offer: until only)
+    int32_t left;           // offer: seconds before it accepts by itself; session: seconds to go
+    int answer;             // offer: 1 yes, 0 no, -1 not answered yet
+    int on_air;
+    int32_t boost;
+    char st[4][45];         // session: the program(s) it gossips
+    int nst;
+    int32_t bpm, beats;     // a boss
+    char by[12];            // ended: why ("time", "owner" ...)
+    int32_t stake, lamps;   // ended: what it paid
+} gossip_role_t;
+
+// 1 and *out filled when there is an offer, a session or a recent end; 0 when none.
+static inline int gossip_role(gossip_role_t *out)
+{
+    memset(out, 0, sizeof *out);
+    out->answer = -1;
+    badge__fn("gossip.role");
+    if (badge__call(0, 1)) {
+        return BADGE_ERR;
+    }
+    if (sos_type(-1) != SOS_TABLE) {
+        sos_pop(1);
+        return 0;
+    }
+    badge_val t = badge_top();
+    const char *kinds[] = {"offer", "ended"};
+    int found = 0;
+    for (int k = 0; k < 2 && !found; k++) {
+        if (badge_field_type(t, kinds[k]) == SOS_TABLE) {
+            badge_val o = badge_push_field(t, kinds[k]);
+            strcpy(out->kind, kinds[k]);
+            out->sid = badge_field_int(o, "sid", 0);
+            char ro[4] = "";
+            badge_field_str(o, "ro", ro, sizeof ro);
+            out->ro = ro[0];
+            out->until = badge_field_int(o, "until", 0);
+            out->left = badge_field_int(o, "left", 0);
+            if (badge_field_type(o, "answer") != SOS_NIL) {
+                out->answer = badge_field_bool(o, "answer");
+            }
+            badge_field_str(o, "by", out->by, sizeof out->by);
+            out->stake = badge_field_int(o, "stake", 0);
+            out->lamps = badge_field_int(o, "lamps", 0);
+            sos_pop(1);
+            found = 1;
+        }
+    }
+    if (!found) {
+        strcpy(out->kind, "session");
+        out->sid = badge_field_int(t, "sid", 0);
+        char ro[4] = "";
+        badge_field_str(t, "ro", ro, sizeof ro);
+        out->ro = ro[0];
+        badge_field_str(t, "id", out->id, sizeof out->id);
+        badge_field_str(t, "n", out->name, sizeof out->name);
+        out->since = badge_field_int(t, "since", 0);
+        out->until = badge_field_int(t, "until", 0);
+        out->left = badge_field_int(t, "left", 0);
+        out->on_air = badge_field_bool(t, "on_air");
+        out->boost = badge_field_int(t, "boost", 0);
+        if (badge_field_type(t, "st") == SOS_TABLE) {
+            badge_val st = badge_push_field(t, "st");
+            uint32_t n = badge_len(st);
+            for (uint32_t i = 0; i < n && i < 4; i++) {
+                badge_val a = badge_push_index(st, (int32_t)i);
+                if (badge_str(a, out->st[out->nst], sizeof out->st[0]) >= 0) {
+                    out->nst++;
+                }
+                sos_pop(1);
+            }
+            sos_pop(1);
+        }
+        if (badge_field_type(t, "boss") == SOS_TABLE) {
+            badge_val b = badge_push_field(t, "boss");
+            out->bpm = badge_field_int(b, "bpm", 0);
+            out->beats = badge_field_int(b, "beats", 0);
+            sos_pop(1);
+        }
+    }
+    sos_pop(1);
+    return 1;
+}
+
+// The fight heard nearby (gossip.boss()), beat and ms moved forward to now.
+typedef struct {
+    char id[8];             // the boss's role id
+    int32_t sid, beat, ms;  // ms: to the next beat (phase 0: to beat 0)
+    int32_t bpm, fork;      // fork: the fork beat, -1 none
+    int32_t p, phase;       // p: % of voters confirmed; phase 0 countdown, 1 fight, 2 players won, 3 boss won
+    int32_t rssi;
+    int real;               // the server lists that role as live
+} gossip_boss_t;
+
+static inline void badge__gossip_boss(badge_val b, gossip_boss_t *out)
+{
+    badge_field_str(b, "id", out->id, sizeof out->id);
+    out->sid = badge_field_int(b, "sid", 0);
+    out->beat = badge_field_int(b, "beat", 0);
+    out->ms = badge_field_int(b, "ms", 0);
+    out->bpm = badge_field_int(b, "bpm", 0);
+    out->fork = badge_field_int(b, "fork", -1);
+    out->p = badge_field_int(b, "p", 0);
+    out->phase = badge_field_int(b, "phase", 0);
+    out->rssi = badge_field_int(b, "rssi", 0);
+    out->real = badge_field_bool(b, "real");
+}
+
+// 1 and *out filled while a fight is heard, else 0.
+static inline int gossip_boss(gossip_boss_t *out)
+{
+    memset(out, 0, sizeof *out);
+    badge__fn("gossip.boss");
+    if (badge__call(0, 1)) {
+        return BADGE_ERR;
+    }
+    int have = sos_type(-1) == SOS_TABLE;
+    if (have) {
+        badge__gossip_boss(badge_top(), out);
+    }
+    sos_pop(1);
+    return have;
+}
+
+// In on_gossip() with t "boss": the fight as gossip_boss gives it.
+static inline void gossip_boss_arg(gossip_boss_t *out)
+{
+    memset(out, 0, sizeof *out);
+    badge__gossip_boss(badge_arg(1), out);
+}
+
+// The Lab only (others: BADGE_ERR, "lab only"). 0 when done or queued, else
+// BADGE_ERR and badge_error() says why (LUA_API.md "gossip").
+static inline int gossip_role_answer(int yes)
+{
+    badge__fn("gossip.role_answer");
+    sos_push_bool(yes);
+    return badge__call_ok(1);
+}
+static inline int gossip_role_end(void)
+{
+    badge__fn("gossip.role_end");
+    return badge__call_ok(0);
+}
+static inline int gossip_bid(const char *role, const char *addr, int fee)
+{
+    badge__fn("gossip.bid");
+    sos_push_cstr(role ? role : "");
+    sos_push_cstr(addr ? addr : "");
+    sos_push_bool(fee);
+    return badge__call_ok(3);
+}
+static inline int gossip_claim(const char *role, int32_t c)
+{
+    badge__fn("gossip.claim");
+    sos_push_cstr(role ? role : "");
+    sos_push_int(c);
+    return badge__call_ok(2);
+}
+static inline int gossip_cure(const char *id)
+{
+    badge__fn("gossip.cure");
+    sos_push_cstr(id ? id : "");
+    return badge__call_ok(1);
+}
+// During a fight: your votes in time and lockout (0-32); the OS paces the sends.
+static inline int gossip_vote(int32_t votes, int32_t lockout)
+{
+    badge__fn("gossip.vote");
+    sos_push_int(votes);
+    sos_push_int(lockout);
+    return badge__call_ok(2);
+}
+static inline int gossip_fork(void)
+{
+    badge__fn("gossip.fork");
+    return badge__call_ok(0);
+}
+
+// A Leader's block: <= 4 programs and the badge whose bid each was ("" none).
+typedef struct {
+    char p[45];
+    char by[8];
+} gossip_pick_t;
+static inline int gossip_block(const gossip_pick_t *picks, int n)
+{
+    badge__fn("gossip.block");
+    sos_new_table();
+    for (int i = 0; i < n; i++) {
+        sos_new_table();
+        badge_set_str("p", picks[i].p);
+        badge_set_str("by", picks[i].by);
+        sos_seti(-2, i + 1);
+    }
+    return badge__call_ok(1);
+}
+
+// A Leader's bids heard, latest per badge: how many filled (<= max), 0 when
+// not a Leader, or BADGE_ERR.
+typedef struct {
+    char from[8];
+    char name[25];
+    char p[45];
+    int fee;
+    int32_t rssi, age;      // age: seconds since it came
+} gossip_bid_t;
+static inline int gossip_bids(gossip_bid_t *out, int max)
+{
+    badge__fn("gossip.bids");
+    if (badge__call(0, 2)) {
+        return BADGE_ERR;
+    }
+    if (sos_type(-2) != SOS_TABLE) {
+        int err = sos_type(-1) == SOS_STR;
+        if (err) {
+            sos_to_str(-1, badge__err, sizeof badge__err);
+        }
+        sos_pop(2);
+        return err ? BADGE_ERR : 0;
+    }
+    sos_pop(1);                         // the second result (nil)
+    badge_val t = badge_top();
+    int n = (int)badge_len(t);
+    n = n < max ? n : max;
+    for (int i = 0; i < n; i++) {
+        badge_val b = badge_push_index(t, i);
+        memset(&out[i], 0, sizeof out[i]);
+        badge_field_str(b, "from", out[i].from, sizeof out[i].from);
+        badge_field_str(b, "name", out[i].name, sizeof out[i].name);
+        badge_field_str(b, "p", out[i].p, sizeof out[i].p);
+        out[i].fee = badge_field_bool(b, "fee");
+        out[i].rssi = badge_field_int(b, "rssi", 0);
+        out[i].age = badge_field_int(b, "age", 0);
+        sos_pop(1);
+    }
+    sos_pop(1);
+    return n;
+}
+
+// The boss's voters: 1 and *out filled while this badge is the boss, else 0.
+typedef struct {
+    int32_t voters, conf, fin, p;   // the last 10 s: voters, confirmed, finalized, % confirmed
+    int32_t all, beat, beats, fork, phase;
+} gossip_voters_t;
+static inline int gossip_voters(gossip_voters_t *out)
+{
+    memset(out, 0, sizeof *out);
+    badge__fn("gossip.voters");
+    if (badge__call(0, 2)) {
+        return BADGE_ERR;
+    }
+    if (sos_type(-2) != SOS_TABLE) {
+        int err = sos_type(-1) == SOS_STR;
+        if (err) {
+            sos_to_str(-1, badge__err, sizeof badge__err);
+        }
+        sos_pop(2);
+        return err ? BADGE_ERR : 0;
+    }
+    sos_pop(1);
+    badge_val v = badge_top();
+    out->voters = badge_field_int(v, "voters", 0);
+    out->conf = badge_field_int(v, "conf", 0);
+    out->fin = badge_field_int(v, "fin", 0);
+    out->p = badge_field_int(v, "p", 0);
+    out->all = badge_field_int(v, "all", 0);
+    out->beat = badge_field_int(v, "beat", 0);
+    out->beats = badge_field_int(v, "beats", 0);
+    out->fork = badge_field_int(v, "fork", -1);
+    out->phase = badge_field_int(v, "phase", 0);
+    sos_pop(1);
+    return 1;
+}
 /* /gossip:fw-roles */
 
 #ifdef __cplusplus
