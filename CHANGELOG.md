@@ -113,6 +113,10 @@ Also in 2.4.0:
   Solana ideas behind it. Older badges get its pages as Tech docs from the server; a
   category the server adds later no longer lands on Events' counts.
 
+- **Console: room for 32 commands** (`os_cmd.c`, 16 before). 2.4.0 registers 19 (`gossip`,
+  `grole` and `batt` are new), and the 17th onwards was dropped with an error at boot: on the
+  merged build that was `svc`.
+
 Battery:
 
 - **The battery percentage, fixed** (`core/os_battery.c`, `core/battery_calc.c`). Before,
