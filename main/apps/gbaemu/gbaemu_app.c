@@ -213,6 +213,7 @@ static void emu_task(void *arg)
     s_save_armed = true;
 
     int64_t next = esp_timer_get_time(), last_save = next, stat_t = next, last_touch = next;
+    int64_t last_idle = next;
     int emulated = 0, shown = 0, late = 0;
     while (!s_quit) {
         int64_t now = esp_timer_get_time();
@@ -231,7 +232,12 @@ static void emu_task(void *arg)
             next += (int64_t)n * FRAME_US;
         }
         now = esp_timer_get_time();
-        if (next - now >= 10000) {
+        // IDLE (prio 0) pets the task WDT. Yielding never runs it; one tick
+        // every ~1 s is enough and costs ~1% vs 10 ms every frame.
+        if (now - last_idle >= 1000000) {
+            vTaskDelay(1);
+            last_idle = now;
+        } else if (next - now >= 10000) {
             vTaskDelay(pdMS_TO_TICKS((next - now) / 1000));
         } else {
             if (now - next > 100000) {
