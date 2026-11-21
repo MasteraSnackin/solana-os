@@ -82,8 +82,18 @@ void systemMessage(const char *fmt, ...)
     ESP_LOGW("GBA", "%s", buf);
 }
 
+#if USE_FRAME_SKIP
+extern bool fs_draw;
+#endif
+
 void systemDrawScreen(void)
 {
+#if USE_FRAME_SKIP
+    // fs_draw still describes this frame's scanlines (updated after this call).
+    if (!fs_draw) {
+        return;
+    }
+#endif
     s_drawn = 1;
 }
 
@@ -227,7 +237,9 @@ extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
     CPUInit(NULL, false);
     CPUReset();
     CPUSetRomMask((uint32_t)wrap - 1);
-    SetFrameskip(0x1);
+    // Draw 1 of 3 PPU frames. Turn-based carts (Advance Wars) care about
+    // emulated fps; skip 1 left the 240 MHz interpreter feeling stuck.
+    SetFrameskip(0x2);
 
     // flashInit() filled save RAM with 0xFF; overlay a .sav after that.
     if (s_sav[0]) {
@@ -257,22 +269,23 @@ extern "C" void gba_core_halt(void)
     free_core();
 }
 
-extern "C" bool gba_core_frame(uint32_t buttons, const uint16_t **fb)
+extern "C" int gba_core_frame(uint32_t buttons, const uint16_t **fb)
 {
     if (!s_booted) {
-        return false;
+        return 0;
     }
     joy = buttons;
     UpdateJoypad();
     s_drawn = 0;
-    int guard = 0;
-    while (!s_drawn && guard++ < 8) {
+    int n = 0;
+    while (!s_drawn && n < 8) {
         CPULoop();
+        n++;
     }
     if (fb) {
         *fb = pix;
     }
-    return s_drawn != 0;
+    return s_drawn ? n : 0;
 }
 
 extern "C" bool gba_core_save_dirty(void)

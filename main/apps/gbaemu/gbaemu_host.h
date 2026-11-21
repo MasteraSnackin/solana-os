@@ -26,11 +26,11 @@ static inline bool gba_core_boot(const char *rom_path, const char *sav_path)
 
 static inline void gba_core_halt(void) {}
 
-static inline bool gba_core_frame(uint32_t joy, const uint16_t **fb)
+static inline int gba_core_frame(uint32_t joy, const uint16_t **fb)
 {
     (void)joy;
     (void)fb;
-    return false;
+    return 0;
 }
 
 static inline void gba_core_save(const char *sav_path, bool force)
@@ -53,8 +53,9 @@ static inline const char *gba_core_title(void)
 
 bool gba_core_boot(const char *rom_path, const char *sav_path);
 void gba_core_halt(void);
-// Run until the PPU emits a frame. *fb is 240x160 RGB565, stride 240.
-bool gba_core_frame(uint32_t joy, const uint16_t **fb);
+// Run until a drawn picture. Returns emulated frames consumed (>=1), 0 if none.
+// *fb is 240x160 RGB565, stride GBA_FB_STRIDE.
+int gba_core_frame(uint32_t joy, const uint16_t **fb);
 void gba_core_save(const char *sav_path, bool force);
 bool gba_core_save_dirty(void);
 const char *gba_core_title(void);

@@ -18,12 +18,13 @@ idf_component_register(
 set_property(SOURCE ${SOLANA_OS_GBA_SRCS} APPEND PROPERTY INCLUDE_DIRECTORIES
     ${CMAKE_CURRENT_LIST_DIR}/apps/gbaemu/vendor/44vba)
 set_property(SOURCE ${SOLANA_OS_GBA_SRCS} APPEND PROPERTY COMPILE_OPTIONS
-    -O2 -fno-exceptions -fno-rtti -Wno-error
+    -O3 -fno-exceptions -fno-rtti -Wno-error
     -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
     -Wno-sign-compare -Wno-implicit-fallthrough -Wno-maybe-uninitialized
     -Wno-type-limits -Wno-missing-field-initializers -Wno-format
     -Wno-deprecated-copy
-    -DFRONTEND_SUPPORTS_RGB565 -DHAVE_STDINT_H -DINLINE=inline -DLSB_FIRST -DUSE_FRAME_SKIP)
+    -DFRONTEND_SUPPORTS_RGB565 -DHAVE_STDINT_H -DINLINE=inline -DLSB_FIRST
+    -DUSE_FRAME_SKIP -DUSE_TWEAKS -DGBA_MUTE_AUDIO)
 
 # cJSON (espressif/cjson) parses mesh JSON with a depth cap of 16:
 # CONFIG_CJSON_NESTING_LIMIT in sdkconfig.defaults.

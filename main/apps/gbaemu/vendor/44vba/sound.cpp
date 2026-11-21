@@ -1935,6 +1935,12 @@ void soundTimerOverflow(int timer)
 
 void process_sound_tick_fn (void)
 {
+#ifdef GBA_MUTE_AUDIO
+	// Speakers off: keep soundTicks pacing in CPULoop, skip Blargg mix.
+	pcm[0].pcm.last_time = 0;
+	pcm[1].pcm.last_time = 0;
+	return;
+#endif
 	// Run sound hardware to present
 	pcm[0].pcm.last_time -= SOUND_CLOCK_TICKS;
 	if ( pcm[0].pcm.last_time < -2048 )

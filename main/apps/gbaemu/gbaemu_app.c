@@ -4,12 +4,12 @@
 // No ROM ships with the firmware: copy a legally owned dump onto the card.
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
-// its own FreeRTOS task at idle priority so the launcher, LVGL and radios
-// always preempt it; the task yields every frame.
+// its own FreeRTOS task below LVGL/OS (priority 3) so the status bar still
+// preempts it; it only sleeps when ahead of 60 Hz, not 10 ms every frame.
 //
 // Screen: native 240x160 centred in the 320x218 app root (status bar keeps
-// the panel at 320x240). Each frame lands in a 240x160 RGB565 buffer; the
-// task updates the image source under the LVGL lock.
+// the panel at 320x240). 44VBA pix (stride 256) is the LVGL image; skipped
+// PPU frames are not blitted.
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GBA d-pad
@@ -51,6 +51,7 @@ static const char *TAG = "gbaemu";
 #define CHORD_MS        250
 #define ROMS_DIR        BSP_SD_MOUNT "/roms"
 #define TASK_STACK      16384
+#define TASK_PRIO       3   // below OS/LVGL (4); above cloud/wifi (2)
 
 // GBA P1 bits (44VBA / vba-next joy):
 #define GBA_A       (1u << 0)
@@ -212,7 +213,7 @@ static void emu_task(void *arg)
     s_save_armed = true;
 
     int64_t next = esp_timer_get_time(), last_save = next, stat_t = next, last_touch = next;
-    int frames = 0, shown = 0, late = 0;
+    int emulated = 0, shown = 0, late = 0;
     while (!s_quit) {
         int64_t now = esp_timer_get_time();
         chords(now);
@@ -220,14 +221,16 @@ static void emu_task(void *arg)
             break;
         }
         const uint16_t *fb = NULL;
-        if (gba_core_frame(joypad(), &fb)) {
+        int n = gba_core_frame(joypad(), &fb);
+        if (n > 0) {
+            emulated += n;
             shown += present(fb);
             if (gba_core_save_dirty()) {
                 last_touch = now;
             }
+            next += (int64_t)n * FRAME_US;
         }
         now = esp_timer_get_time();
-        next += FRAME_US;
         if (next - now >= 10000) {
             vTaskDelay(pdMS_TO_TICKS((next - now) / 1000));
         } else {
@@ -235,15 +238,14 @@ static void emu_task(void *arg)
                 next = now;
                 late++;
             }
-            vTaskDelay(1);
+            taskYIELD();
         }
-        frames++;
         if (now - stat_t >= 5000000) {
             double s = (now - stat_t) / 1e6;
-            ESP_LOGI(TAG, "%.1f emulated fps (target ~30 with skip), %.1f shown, %d resyncs",
-                     frames / s, shown / s, late);
+            ESP_LOGI(TAG, "%.1f emulated fps, %.1f shown (skip 2), %.0f ms/emu-frame, %d resyncs",
+                     emulated / s, shown / s, s * 1000.0 / (emulated > 0 ? emulated : 1), late);
             stat_t = now;
-            frames = shown = late = 0;
+            emulated = shown = late = 0;
         }
         if (gba_core_save_dirty() && now - last_touch >= SAVE_IDLE_US) {
             gba_core_save(s_sav_path, false);
@@ -359,7 +361,7 @@ static void start(const char *path)
     s_back_to_list = false;
     s_done = xSemaphoreCreateBinary();
     if (!s_done || xTaskCreate(emu_task, "gbaemu", TASK_STACK, (void *)path,
-                               tskIDLE_PRIORITY, &s_task) != pdPASS) {
+                               TASK_PRIO, &s_task) != pdPASS) {
         os_toast("Can't start the emulator task");
         if (s_done) {
             vSemaphoreDelete(s_done);
