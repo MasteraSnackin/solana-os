@@ -647,6 +647,7 @@ static memoryMap map[256];
 static int clockTicks;
 
 static int romSize = 0x2000000;
+uint32_t romMask = 0x1FFFFFF;
 static uint32_t line[6][240];
 static bool gfxInWin[2][240];
 static int lineOBJpixleft[128];
@@ -847,7 +848,7 @@ static uint8_t* CPUDecodeAddress(uint32_t address)
 		case 0x0B:
 		case 0x0C:
 			/* gamepak ROM */
-			return rom + (address & 0x1FFFFFC);
+			return rom + (address & romMask & ~3u);
 		case 0x0D:
         	//value = eepromRead();
 			break;
@@ -932,7 +933,7 @@ static INLINE u32 CPUReadMemory(u32 address)
 		case 0x0B:
 		case 0x0C:
 			/* gamepak ROM */
-			value = READ32LE(rom + (address&0x1FFFFFC));
+			value = READ32LE(rom + (address & romMask & ~3u));
 			break;
 		case 0x0D:
          value = eepromRead();
@@ -1038,7 +1039,7 @@ static INLINE u32 CPUReadHalfWord(u32 address)
 					return rtcRead(address);
 				break;
 			default:
-				value = READ16LE(rom + (address & 0x1FFFFFE)); break;
+				value = READ16LE(rom + (address & romMask & ~1u)); break;
 			}
 			break;
 		case 13:
@@ -1112,7 +1113,7 @@ static INLINE u8 CPUReadByte(u32 address)
 		case 10:
 		case 11:
 		case 12:
-			return rom[address & 0x1FFFFFF];
+			return rom[address & romMask];
 		case 13:
          	return eepromRead();
 		case 14:
@@ -12971,6 +12972,7 @@ void UpdateJoypad(void)
 
 void CPUSetRomMask(uint32_t mask)
 {
+	romMask = mask;
 	map[8].mask = mask;
 	map[9].mask = mask;
 	map[10].mask = mask;

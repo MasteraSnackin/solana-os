@@ -37,7 +37,6 @@
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
 #include "core/os.h"
-#include "core/os_mem.h"
 #include "core/ui.h"
 #include "gbaemu_host.h"
 
@@ -77,7 +76,6 @@ static ui_list_t *s_list;
 static char s_roms[MAX_ROMS][PATH_MAX_LEN];
 static char s_sav_path[PATH_MAX_LEN];
 static int s_rom_count;
-static uint16_t *s_blank;
 
 static void sav_from_rom(char *sav, size_t n, const char *rom)
 {
@@ -162,10 +160,16 @@ static bool present(const uint16_t *fb)
     if (!lvgl_port_lock(LOCK_WAIT_MS)) {
         return false;
     }
-    if (!s_quit && s_img && fb) {
+    if (!s_quit && fb) {
         s_dsc.data = (const uint8_t *)fb;
-        lv_image_set_src(s_img, &s_dsc);
-        lv_obj_invalidate(s_img);
+        if (!s_img) {
+            s_img = lv_image_create(s_root);
+            lv_image_set_src(s_img, &s_dsc);
+            lv_obj_align(s_img, LV_ALIGN_CENTER, 0, 0);
+        } else {
+            lv_image_set_src(s_img, &s_dsc);
+            lv_obj_invalidate(s_img);
+        }
     }
     lvgl_port_unlock();
     return true;
@@ -188,8 +192,6 @@ static void back_to_list(void *arg)
         s_done = NULL;
     }
     gba_core_halt();
-    heap_caps_free(s_blank);
-    s_blank = NULL;
     s_img = NULL;
     s_back_to_list = false;
     if (s_root) {
@@ -345,24 +347,13 @@ static void start(const char *path)
     lv_obj_set_style_bg_color(s_root, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_root, LV_OPA_COVER, 0);
 
-    if (!s_blank) {
-        s_blank = heap_caps_calloc(GBA_WIDTH * GBA_HEIGHT, sizeof(uint16_t), os_mem_bulk_caps());
-    }
-    if (!s_blank) {
-        os_toast("Out of memory");
-        lv_obj_clean(s_root);
-        show_picker();
-        return;
-    }
     s_dsc = (lv_image_dsc_t){
         .header = {.magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_RGB565,
-                   .w = GBA_WIDTH, .h = GBA_HEIGHT, .stride = GBA_WIDTH * 2},
-        .data_size = GBA_WIDTH * GBA_HEIGHT * 2,
-        .data = (const uint8_t *)s_blank,
+                   .w = GBA_WIDTH, .h = GBA_HEIGHT, .stride = GBA_FB_STRIDE * 2},
+        .data_size = GBA_FB_STRIDE * GBA_HEIGHT * 2,
+        .data = NULL,
     };
-    s_img = lv_image_create(s_root);
-    lv_image_set_src(s_img, &s_dsc);
-    lv_obj_align(s_img, LV_ALIGN_CENTER, 0, 0);
+    s_img = NULL;
 
     s_quit = false;
     s_back_to_list = false;
@@ -373,10 +364,6 @@ static void start(const char *path)
         if (s_done) {
             vSemaphoreDelete(s_done);
             s_done = NULL;
-        }
-        if (s_img) {
-            lv_obj_delete(s_img);
-            s_img = NULL;
         }
         s_task = NULL;
         lv_obj_clean(s_root);
@@ -412,8 +399,6 @@ static void leave(void)
         s_done = NULL;
     }
     gba_core_halt();
-    heap_caps_free(s_blank);
-    s_blank = NULL;
     s_img = NULL;
     s_root = NULL;
 }

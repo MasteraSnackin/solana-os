@@ -29,16 +29,32 @@ static const char *TAG = "gbaemu";
 #define ROM_MAX         (8u << 20)
 #define PIX_BYTES       (4 * PIX_BUFFER_SCREEN_WIDTH * 160)
 
-static uint16_t *s_fb;
 static volatile int s_drawn;
 static char s_title[13];
 static char s_sav[200];
 static uint8_t *s_save_snap;
 static bool s_booted;
 
-static uint8_t *ps_alloc(size_t n)
+static void log_heap(const char *when)
 {
-    return (uint8_t *)heap_caps_calloc(1, n, os_mem_bulk_caps());
+    ESP_LOGI(TAG, "%s: SRAM %u free, PSRAM %u free, largest PSRAM block %u",
+             when,
+             (unsigned)heap_caps_get_free_size(OS_MEM_SRAM),
+             (unsigned)heap_caps_get_free_size(OS_MEM_PSRAM),
+             (unsigned)heap_caps_get_largest_free_block(OS_MEM_PSRAM));
+}
+
+static uint8_t *ps_alloc(size_t n, const char *what)
+{
+    uint8_t *p = (uint8_t *)heap_caps_malloc(n, os_mem_bulk_caps());
+    if (!p) {
+        ESP_LOGE(TAG, "alloc %s %u B failed (SRAM %u free, PSRAM %u free, largest %u)",
+                 what, (unsigned)n,
+                 (unsigned)heap_caps_get_free_size(OS_MEM_SRAM),
+                 (unsigned)heap_caps_get_free_size(OS_MEM_PSRAM),
+                 (unsigned)heap_caps_get_largest_free_block(OS_MEM_PSRAM));
+    }
+    return p;
 }
 
 static size_t pow2_ge(size_t n)
@@ -68,13 +84,6 @@ void systemMessage(const char *fmt, ...)
 
 void systemDrawScreen(void)
 {
-    const uint16_t *src = pix;
-    uint16_t *dst = s_fb;
-    for (int y = 0; y < GBA_HEIGHT; y++) {
-        memcpy(dst, src, GBA_WIDTH * sizeof(uint16_t));
-        dst += GBA_WIDTH;
-        src += PIX_BUFFER_SCREEN_WIDTH;
-    }
     s_drawn = 1;
 }
 
@@ -103,11 +112,9 @@ static void free_core(void)
     heap_caps_free(libretro_save_buf);
     heap_caps_free(rom);
     heap_caps_free(s_save_snap);
-    heap_caps_free(s_fb);
     workRAM = vram = bios = libretro_save_buf = rom = NULL;
     pix = NULL;
     s_save_snap = NULL;
-    s_fb = NULL;
     s_booted = false;
     s_title[0] = 0;
 }
@@ -122,7 +129,7 @@ static bool load_path(const char *path, uint8_t **out, size_t *size, size_t max)
     long n = ftell(f);
     fseek(f, 0, SEEK_SET);
     bool ok = n > 0 && (size_t)n <= max;
-    uint8_t *buf = ok ? ps_alloc((size_t)n) : NULL;
+    uint8_t *buf = ok ? ps_alloc((size_t)n, path) : NULL;
     ok = buf && fread(buf, 1, (size_t)n, f) == (size_t)n;
     fclose(f);
     if (!ok) {
@@ -134,40 +141,72 @@ static bool load_path(const char *path, uint8_t **out, size_t *size, size_t max)
     return true;
 }
 
+// Load the cart straight into `rom`. Do not keep a second full copy, and do
+// not round a 4 MB dump up to 8 MB.
+static bool load_rom(const char *path, size_t *size)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        ESP_LOGE(TAG, "open %s failed", path);
+        return false;
+    }
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n <= 0 || (size_t)n > ROM_MAX) {
+        ESP_LOGE(TAG, "%s is %ld B (max %u)", path, n, (unsigned)ROM_MAX);
+        fclose(f);
+        return false;
+    }
+
+    log_heap("before ROM alloc");
+    rom = ps_alloc((size_t)n, "ROM");
+    if (!rom) {
+        fclose(f);
+        return false;
+    }
+    size_t got = fread(rom, 1, (size_t)n, f);
+    fclose(f);
+    if (got != (size_t)n) {
+        ESP_LOGE(TAG, "read %s: got %u of %ld", path, (unsigned)got, n);
+        heap_caps_free(rom);
+        rom = NULL;
+        return false;
+    }
+    *size = (size_t)n;
+    log_heap("after ROM load");
+    return true;
+}
+
 extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
 {
     gba_core_halt();
+    log_heap("GBA boot");
 
-    uint8_t *file = NULL;
     size_t file_size = 0;
-    if (!load_path(rom_path, &file, &file_size, ROM_MAX)) {
+    if (!load_rom(rom_path, &file_size)) {
         os_toast("Can't read that ROM (max 8 MB)");
         return false;
     }
 
-    size_t alloc = pow2_ge(file_size);
-    if (!alloc || alloc > ROM_MAX) {
-        heap_caps_free(file);
-        os_toast("ROM is too big (need a power-of-two fit, max 8 MB)");
+    size_t wrap = pow2_ge(file_size);
+    if (!wrap || wrap > ROM_MAX) {
+        free_core();
+        os_toast("ROM is too big (max 8 MB)");
         return false;
     }
 
-    rom = ps_alloc(alloc);
-    workRAM = ps_alloc(0x40000);
-    vram = ps_alloc(0x20000);
-    bios = ps_alloc(0x4000);
-    pix = (uint16_t *)ps_alloc(PIX_BYTES);
-    libretro_save_buf = ps_alloc(LIBRETRO_SAVE_BUF_LEN);
-    s_save_snap = ps_alloc(LIBRETRO_SAVE_BUF_LEN);
-    s_fb = (uint16_t *)ps_alloc(GBA_WIDTH * GBA_HEIGHT * sizeof(uint16_t));
-    if (!rom || !workRAM || !vram || !bios || !pix || !libretro_save_buf || !s_save_snap || !s_fb) {
-        heap_caps_free(file);
+    workRAM = ps_alloc(0x40000, "workRAM");
+    vram = ps_alloc(0x20000, "vram");
+    bios = ps_alloc(0x4000, "bios");
+    pix = (uint16_t *)ps_alloc(PIX_BYTES, "pix");
+    libretro_save_buf = ps_alloc(LIBRETRO_SAVE_BUF_LEN, "save");
+    s_save_snap = ps_alloc(LIBRETRO_SAVE_BUF_LEN, "save snap");
+    if (!workRAM || !vram || !bios || !pix || !libretro_save_buf || !s_save_snap) {
         free_core();
         os_toast("Out of memory for GBA");
         return false;
     }
-    memcpy(rom, file, file_size);
-    heap_caps_free(file);
 
     if (file_size >= 0xAC + 12) {
         memcpy(s_title, rom + 0xA0, 12);
@@ -184,9 +223,10 @@ extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
         os_toast("GBA buffers failed");
         return false;
     }
+    CPUSetRomMask((uint32_t)wrap - 1);
     CPUInit(NULL, false);
     CPUReset();
-    CPUSetRomMask((uint32_t)alloc - 1);
+    CPUSetRomMask((uint32_t)wrap - 1);
     SetFrameskip(0x1);
 
     // flashInit() filled save RAM with 0xFF; overlay a .sav after that.
@@ -202,8 +242,10 @@ extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
 
     s_drawn = 0;
     s_booted = true;
-    ESP_LOGI(TAG, "%s: %u KB ROM, mask 0x%lx", s_title[0] ? s_title : "GBA",
-             (unsigned)(file_size >> 10), (unsigned long)(alloc - 1));
+    log_heap("GBA ready");
+    ESP_LOGI(TAG, "%s: %u KB ROM loaded ok, mask 0x%lx",
+             s_title[0] ? s_title : "GBA",
+             (unsigned)(file_size >> 10), (unsigned long)(wrap - 1));
     return true;
 }
 
@@ -228,7 +270,7 @@ extern "C" bool gba_core_frame(uint32_t buttons, const uint16_t **fb)
         CPULoop();
     }
     if (fb) {
-        *fb = s_fb;
+        *fb = pix;
     }
     return s_drawn != 0;
 }

@@ -133,7 +133,9 @@ extern void CPULoop(void);
 extern void UpdateJoypad(void);
 extern void CPUCheckDMA(int,int);
 bool CPUSetupBuffers(void);
-// Restrict GamePak mapping to an allocated ROM buffer (size must be 2^n).
+// Restrict GamePak mapping to an allocated ROM buffer. mask is size-1 and
+// should be 2^n-1 so waitstate mirrors (0x0A/0x0C) stay inside the buffer.
+extern uint32_t romMask;
 extern void CPUSetRomMask(uint32_t mask);
 #if USE_FRAME_SKIP
 extern void SetFrameskip(int);

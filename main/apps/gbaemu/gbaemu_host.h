@@ -7,8 +7,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define GBA_WIDTH   240
-#define GBA_HEIGHT  160
+#define GBA_WIDTH      240
+#define GBA_HEIGHT     160
+#define GBA_FB_STRIDE  256   // 44VBA pix buffer width; LVGL stride is this * 2
 
 #ifdef __cplusplus
 extern "C" {
