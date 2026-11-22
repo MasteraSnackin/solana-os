@@ -474,9 +474,9 @@ extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
     CPUInit(NULL, false);
     CPUReset();
     CPUSetRomMask((uint32_t)wrap - 1);
-    // Draw every emulated frame. Skip 2 was 1 of 3 PPU frames (~15 emu / ~5
-    // shown). Skip 0 presents each one. Picture is native 240x160 centred.
-    SetFrameskip(0);
+    // Draw 1 of 3 PPU frames (skip 2). Faster game time than skip 0 (~9/9);
+    // about ~15 emu / ~5 shown on Advance Wars. Picture is native 240x160.
+    SetFrameskip(2);
 
     // flashInit() filled save RAM with 0xFF; overlay a .sav after that.
     if (s_sav[0]) {

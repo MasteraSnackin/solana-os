@@ -20,8 +20,8 @@
 // a 4 MB cart still gets the large PSRAM block. The interpreter only copies;
 // it does not wait on SPI, so DMA runs while the next frames emulate. LVGL's
 // refresh timer is paused while a ROM runs. Status-bar objects still tick
-// every 5 s but are not flushed (SPI2 is the SD card). Every emulated frame
-// is drawn (frameskip 0).
+// every 5 s but are not flushed (SPI2 is the SD card). Frameskip 2: 1 of 3
+// PPU frames is drawn.
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GBA d-pad
@@ -360,7 +360,7 @@ static void emu_task(void *arg)
         if (now - stat_t >= 5000000) {
             double s = (now - stat_t) / 1e6;
             uint32_t miss = gba_core_rom_misses();
-            ESP_LOGI(TAG, "%.1f emulated fps, %.1f shown (skip 0), %.0f ms/emu-frame, %d resyncs, %u page misses",
+            ESP_LOGI(TAG, "%.1f emulated fps, %.1f shown (skip 2), %.0f ms/emu-frame, %d resyncs, %u page misses",
                      emulated / s, shown / s, s * 1000.0 / (emulated > 0 ? emulated : 1), late,
                      (unsigned)(miss - miss0));
             miss0 = miss;
