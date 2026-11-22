@@ -8,6 +8,4 @@
 #define ENABLE_SOUND                0
 #define ENABLE_LCD                  1
 #define PEANUT_GB_IS_LITTLE_ENDIAN  1
-/* Sprite sort / 10-per-line off. Faster; busy Yellow lines can glitch. */
-#define PEANUT_GB_HIGH_LCD_ACCURACY 0
 #include "peanut_gb.h"
