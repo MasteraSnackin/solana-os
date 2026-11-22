@@ -8,6 +8,7 @@
 #include "memory.h"
 #include "port.h"
 #include "system.h"
+#include "gba_rom_page.h"
 
 /*============================================================
 	UTIL
@@ -615,7 +616,7 @@ u16 rtcRead(u32 address)
       }
    }
 
-   return READ16LE((&rom[address & romMask & ~1u]));
+   return gba_rom_r16(address & romMask);
 }
 
 static u8 toBCD(u8 value)

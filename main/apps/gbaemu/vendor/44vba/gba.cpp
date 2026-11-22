@@ -17,6 +17,7 @@
 #include "gba.h"
 #include "memory.h"
 #include "sound.h"
+#include "gba_rom_page.h"
 
 #ifdef ELF
 #include "elf.h"
@@ -763,9 +764,9 @@ static INLINE int codeTicksAccessSeq32(u32 address) // ARM SEQ
 	return memoryWaitSeq32[addr];
 }
 
-#define CPUReadByteQuick(addr)		map[(addr)>>24].address[(addr) & map[(addr)>>24].mask]
-#define CPUReadHalfWordQuick(addr)	READ16LE(((u16*)&map[(addr)>>24].address[(addr) & map[(addr)>>24].mask]))
-#define CPUReadMemoryQuick(addr)	READ32LE(((u32*)&map[(addr)>>24].address[(addr) & map[(addr)>>24].mask]))
+#define CPUReadByteQuick(addr)		(GBA_ROM_REGION(addr) ? gba_rom_r8((addr) & romMask) : map[(addr)>>24].address[(addr) & map[(addr)>>24].mask])
+#define CPUReadHalfWordQuick(addr)	(GBA_ROM_REGION(addr) ? gba_rom_r16((addr) & romMask) : READ16LE(((u16*)&map[(addr)>>24].address[(addr) & map[(addr)>>24].mask])))
+#define CPUReadMemoryQuick(addr)	(GBA_ROM_REGION(addr) ? gba_rom_r32((addr) & romMask) : READ32LE(((u32*)&map[(addr)>>24].address[(addr) & map[(addr)>>24].mask])))
 
 static bool stopState = false;
 extern bool cpuSramEnabled;
@@ -933,7 +934,7 @@ static INLINE u32 CPUReadMemory(u32 address)
 		case 0x0B:
 		case 0x0C:
 			/* gamepak ROM */
-			value = READ32LE(rom + (address & romMask & ~3u));
+			value = gba_rom_r32(address & romMask);
 			break;
 		case 0x0D:
          value = eepromRead();
@@ -1039,7 +1040,7 @@ static INLINE u32 CPUReadHalfWord(u32 address)
 					return rtcRead(address);
 				break;
 			default:
-				value = READ16LE(rom + (address & romMask & ~1u)); break;
+				value = gba_rom_r16(address & romMask); break;
 			}
 			break;
 		case 13:
@@ -1113,7 +1114,7 @@ static INLINE u8 CPUReadByte(u32 address)
 		case 10:
 		case 11:
 		case 12:
-			return rom[address & romMask];
+			return gba_rom_r8(address & romMask);
 		case 13:
          	return eepromRead();
 		case 14:

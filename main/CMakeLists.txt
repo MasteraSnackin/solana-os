@@ -16,6 +16,7 @@ idf_component_register(
                   esp_app_format app_update esp_partition spi_flash fatfs vfs esp_http_client esp-tls tcp_transport lwip esp_driver_uart bt)
 
 set_property(SOURCE ${SOLANA_OS_GBA_SRCS} APPEND PROPERTY INCLUDE_DIRECTORIES
+    ${CMAKE_CURRENT_LIST_DIR}/apps/gbaemu
     ${CMAKE_CURRENT_LIST_DIR}/apps/gbaemu/vendor/44vba)
 set_property(SOURCE ${SOLANA_OS_GBA_SRCS} APPEND PROPERTY COMPILE_OPTIONS
     -O3 -fno-exceptions -fno-rtti -Wno-error

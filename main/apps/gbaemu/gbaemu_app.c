@@ -370,6 +370,7 @@ static void start(const char *path)
 
     s_quit = false;
     s_back_to_list = false;
+    ESP_LOGI(TAG, "start %s", path);
     s_done = xSemaphoreCreateBinary();
     if (!s_done || xTaskCreate(emu_task, "gbaemu", TASK_STACK, (void *)path,
                                TASK_PRIO, &s_task) != pdPASS) {
