@@ -118,6 +118,46 @@ bool bsp_display_inverted(void)
     return s_inverted;
 }
 
+esp_err_t bsp_lcd_blit_rgb565(int x, int y, int w, int h, const uint16_t *src, int stride)
+{
+    if (!src || w <= 0 || h <= 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (int r = 0; r < h; r++) {
+        int dy = y + r;
+        if (dy < 0 || dy >= BOARD_LCD_V_RES) {
+            continue;
+        }
+        const uint16_t *s = src + (size_t)r * (size_t)stride;
+        for (int c = 0; c < w; c++) {
+            int dx = x + c;
+            if (dx < 0 || dx >= BOARD_LCD_H_RES) {
+                continue;
+            }
+            uint16_t v = s[c];
+            uint32_t R = (v >> 11) & 0x1F, G = (v >> 5) & 0x3F, B = v & 0x1F;
+            R = (R << 3) | (R >> 2);
+            G = (G << 2) | (G >> 4);
+            B = (B << 3) | (B >> 2);
+            s_fb[dy * BOARD_LCD_H_RES + dx] = 0xFF000000u | (B << 16) | (G << 8) | R;
+        }
+    }
+    s_frame++;
+    return ESP_OK;
+}
+
+static bool s_lvgl_paused;
+
+void bsp_display_pause_lvgl(bool pause)
+{
+    s_lvgl_paused = pause;
+}
+
+bool bsp_display_lvgl_paused(void)
+{
+    return s_lvgl_paused;
+}
+
 lv_display_t *bsp_display_start(void)
 {
     bsp_backlight(false);

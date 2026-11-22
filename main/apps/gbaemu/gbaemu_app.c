@@ -9,9 +9,12 @@
 // Wi-Fi is paused (driver stopped) while a ROM is running and restored when
 // play ends (ROM list, HOME, or app exit).
 //
-// Screen: native 240x160 centred in the 320x218 app root (status bar keeps
-// the panel at 320x240). 44VBA pix (stride 256) is the LVGL image; skipped
-// PPU frames are not blitted.
+// Screen: native 240x160 centred under the 22 px status bar (panel 320x240).
+// Drawn frames are packed into a PSRAM double-buffer and a prio-4 blit task
+// sends them to the ILI9341 (not an LVGL image). The interpreter only copies;
+// it does not wait on SPI, so DMA runs while the next frames emulate. LVGL's
+// refresh timer is paused while a ROM runs; the status bar still updates once
+// a second via lv_refr_now. Skipped PPU frames are not blitted.
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GBA d-pad
@@ -37,9 +40,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_lvgl_port.h"
 #include "esp_timer.h"
+#include "bsp.h"
 #include "core/os.h"
 #include "core/os_wifi.h"
 #include "core/ui.h"
@@ -53,20 +57,35 @@ static const char *TAG = "gbaemu";
 #define SAVE_IDLE_US    (2 * 1000000LL)
 #define MAX_ROMS        32
 #define PATH_MAX_LEN    200
-#define LOCK_WAIT_MS    4
 #define CHORD_MS        250
 #define ROMS_DIR        BSP_SD_MOUNT "/roms"
 #define TASK_STACK      16384
 #define TASK_PRIO       3   // below OS/LVGL (4); above cloud/wifi (2)
+#define BLIT_TASK_STACK 3072
+#define BLIT_TASK_PRIO  4   // same as LVGL: start DMA, then block so emu runs
+#define GBA_BLIT_X      ((BOARD_LCD_H_RES - GBA_WIDTH) / 2)
+#define GBA_BLIT_Y      (OS_STATUS_H + (OS_ROOT_H - GBA_HEIGHT) / 2)
+#define GBA_FB_BYTES    ((size_t)GBA_WIDTH * (size_t)GBA_HEIGHT * sizeof(uint16_t))
 
 static TaskHandle_t s_task;
 static SemaphoreHandle_t s_done;
 static volatile bool s_quit;
 static volatile bool s_back_to_list;
+
+// Direct blit: emu packs into the buffer the DMA task is not sending. Pending
+// is cleared while packing so the blit task cannot start DMA on a live copy.
+static uint16_t *s_blit_fb[2];
+static TaskHandle_t s_blit_task;
+static SemaphoreHandle_t s_blit_kick;
+static SemaphoreHandle_t s_blit_done;
+static portMUX_TYPE s_blit_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile int s_blit_pending = -1;
+static volatile int s_blit_sending = -1;
+static volatile int s_blit_packing = -1;
+static volatile bool s_blit_quit;
 static int64_t s_exit_since, s_save_since;
 static bool s_save_armed = true;
-static lv_image_dsc_t s_dsc;
-static lv_obj_t *s_root, *s_img, *s_msg, *s_hint;
+static lv_obj_t *s_root, *s_msg, *s_hint;
 static ui_list_t *s_list;
 static char s_roms[MAX_ROMS][PATH_MAX_LEN];
 static char s_sav_path[PATH_MAX_LEN];
@@ -117,24 +136,132 @@ static void chords(int64_t now)
     }
 }
 
-static bool present(const uint16_t *fb)
+static void blit_task(void *arg)
 {
-    if (!lvgl_port_lock(LOCK_WAIT_MS)) {
-        return false;
-    }
-    if (!s_quit && fb) {
-        s_dsc.data = (const uint8_t *)fb;
-        if (!s_img) {
-            s_img = lv_image_create(s_root);
-            lv_image_set_src(s_img, &s_dsc);
-            lv_obj_align(s_img, LV_ALIGN_CENTER, 0, 0);
-        } else {
-            lv_image_set_src(s_img, &s_dsc);
-            lv_obj_invalidate(s_img);
+    (void)arg;
+    while (!s_blit_quit) {
+        if (xSemaphoreTake(s_blit_kick, pdMS_TO_TICKS(100)) != pdTRUE) {
+            continue;
+        }
+        for (;;) {
+            portENTER_CRITICAL(&s_blit_mux);
+            int i = s_blit_pending;
+            if (i < 0 || i == s_blit_packing) {
+                portEXIT_CRITICAL(&s_blit_mux);
+                break;
+            }
+            s_blit_pending = -1;
+            s_blit_sending = i;
+            portEXIT_CRITICAL(&s_blit_mux);
+            (void)bsp_lcd_blit_rgb565(GBA_BLIT_X, GBA_BLIT_Y, GBA_WIDTH, GBA_HEIGHT,
+                                      s_blit_fb[i], GBA_WIDTH);
+            portENTER_CRITICAL(&s_blit_mux);
+            s_blit_sending = -1;
+            portEXIT_CRITICAL(&s_blit_mux);
         }
     }
-    lvgl_port_unlock();
+    if (s_blit_done) {
+        xSemaphoreGive(s_blit_done);
+    }
+    vTaskDelete(NULL);
+}
+
+static bool present(const uint16_t *fb)
+{
+    if (s_quit || !fb) {
+        return false;
+    }
+    if (!s_blit_fb[0] || !s_blit_fb[1] || !s_blit_kick) {
+        return bsp_lcd_blit_rgb565(GBA_BLIT_X, GBA_BLIT_Y, GBA_WIDTH, GBA_HEIGHT,
+                                   fb, GBA_FB_STRIDE) == ESP_OK;
+    }
+
+    portENTER_CRITICAL(&s_blit_mux);
+    int i = (s_blit_sending == 0) ? 1 : 0;
+    if (s_blit_pending == i) {
+        s_blit_pending = -1;
+    }
+    s_blit_packing = i;
+    portEXIT_CRITICAL(&s_blit_mux);
+
+    uint16_t *dst = s_blit_fb[i];
+    const uint16_t *src = fb;
+    for (int r = 0; r < GBA_HEIGHT; r++) {
+        memcpy(dst, src, GBA_WIDTH * sizeof(uint16_t));
+        dst += GBA_WIDTH;
+        src += GBA_FB_STRIDE;
+    }
+
+    portENTER_CRITICAL(&s_blit_mux);
+    s_blit_packing = -1;
+    s_blit_pending = i;
+    portEXIT_CRITICAL(&s_blit_mux);
+    xSemaphoreGive(s_blit_kick);
     return true;
+}
+
+static void blit_stop(void)
+{
+    if (s_blit_task) {
+        s_blit_quit = true;
+        if (s_blit_kick) {
+            xSemaphoreGive(s_blit_kick);
+        }
+        if (s_blit_done) {
+            (void)xSemaphoreTake(s_blit_done, pdMS_TO_TICKS(2000));
+        }
+        s_blit_task = NULL;
+    }
+    if (s_blit_kick) {
+        vSemaphoreDelete(s_blit_kick);
+        s_blit_kick = NULL;
+    }
+    if (s_blit_done) {
+        vSemaphoreDelete(s_blit_done);
+        s_blit_done = NULL;
+    }
+    heap_caps_free(s_blit_fb[0]);
+    heap_caps_free(s_blit_fb[1]);
+    s_blit_fb[0] = s_blit_fb[1] = NULL;
+    s_blit_pending = s_blit_sending = s_blit_packing = -1;
+}
+
+static bool blit_start(void)
+{
+    blit_stop();
+    s_blit_fb[0] = heap_caps_malloc(GBA_FB_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_blit_fb[1] = heap_caps_malloc(GBA_FB_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_blit_kick = xSemaphoreCreateBinary();
+    s_blit_done = xSemaphoreCreateBinary();
+    s_blit_quit = false;
+    s_blit_pending = s_blit_sending = s_blit_packing = -1;
+    if (!s_blit_fb[0] || !s_blit_fb[1] || !s_blit_kick || !s_blit_done ||
+        xTaskCreate(blit_task, "gbablit", BLIT_TASK_STACK, NULL,
+                    BLIT_TASK_PRIO, &s_blit_task) != pdPASS) {
+        ESP_LOGW(TAG, "async blit unavailable; SPI waits on the emu task");
+        blit_stop();
+        return false;
+    }
+    return true;
+}
+
+static void play_video(bool on)
+{
+    if (on) {
+        lv_obj_set_style_bg_color(s_root, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(s_root, LV_OPA_COVER, 0);
+        lv_obj_set_hidden(s_root, false);
+        lv_refr_now(NULL);
+        lv_obj_set_hidden(s_root, true);
+        bsp_display_pause_lvgl(true);
+        blit_start();
+    } else {
+        blit_stop();
+        bsp_display_pause_lvgl(false);
+        if (s_root) {
+            lv_obj_set_hidden(s_root, false);
+        }
+    }
 }
 
 static void show_picker(void);
@@ -155,8 +282,8 @@ static void back_to_list(void *arg)
     }
     gba_core_halt();
     os_wifi_unpause();
-    s_img = NULL;
     s_back_to_list = false;
+    play_video(false);
     if (s_root) {
         lv_obj_clean(s_root);
         show_picker();
@@ -285,7 +412,7 @@ static void message(const char *text)
 static void show_picker(void)
 {
     s_list = NULL;
-    s_msg = s_img = s_hint = NULL;
+    s_msg = s_hint = NULL;
     s_rom_count = 0;
 
     bsp_sd_info_t in;
@@ -322,16 +449,7 @@ static void start(const char *path)
         lv_obj_delete(s_msg);
         s_msg = NULL;
     }
-    lv_obj_set_style_bg_color(s_root, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(s_root, LV_OPA_COVER, 0);
-
-    s_dsc = (lv_image_dsc_t){
-        .header = {.magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_RGB565,
-                   .w = GBA_WIDTH, .h = GBA_HEIGHT, .stride = GBA_FB_STRIDE * 2},
-        .data_size = GBA_FB_STRIDE * GBA_HEIGHT * 2,
-        .data = NULL,
-    };
-    s_img = NULL;
+    play_video(true);
 
     s_quit = false;
     s_back_to_list = false;
@@ -345,6 +463,7 @@ static void start(const char *path)
             s_done = NULL;
         }
         s_task = NULL;
+        play_video(false);
         lv_obj_clean(s_root);
         show_picker();
         return;
@@ -379,7 +498,7 @@ static void leave(void)
     }
     gba_core_halt();
     os_wifi_unpause();
-    s_img = NULL;
+    play_video(false);
     s_root = NULL;
 }
 

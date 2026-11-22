@@ -740,6 +740,9 @@ static void os_task(void *arg)
         if (now >= next_status) {
             next_status = now + STATUS_EVERY_MS;
             status_update();
+            if (bsp_display_lvgl_paused()) {
+                lv_refr_now(NULL);
+            }
         }
         lvgl_port_unlock();
     }
