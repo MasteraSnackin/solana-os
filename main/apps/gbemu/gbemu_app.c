@@ -1,6 +1,7 @@
 // Game Boy: plays a .gb / .gbc ROM from the microSD card (/sdcard/roms).
 //
 // The CPU/PPU core is Peanut-GB (peanut_gb.h, MIT, vendored next to this file).
+// peanut_gb_cpu.c builds the interpreter at -O3 in IRAM; LCD stays in flash.
 // No ROM ships with the firmware: copy a legally owned dump onto the card.
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
@@ -39,6 +40,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "bsp.h"
@@ -50,6 +52,7 @@
 #define ENABLE_SOUND                0
 #define ENABLE_LCD                  1
 #define PEANUT_GB_IS_LITTLE_ENDIAN  1
+#define PEANUT_GB_HEADER_ONLY
 #include "peanut_gb.h"
 
 static const char *TAG = "gbemu";
@@ -111,19 +114,19 @@ static char s_roms[MAX_ROMS][PATH_MAX_LEN];
 static int s_rom_count;
 static emu_pad_t s_pad;
 
-static uint8_t rom_read(struct gb_s *gb, const uint_fast32_t addr)
+static IRAM_ATTR uint8_t rom_read(struct gb_s *gb, const uint_fast32_t addr)
 {
     emu_t *e = gb->direct.priv;
     return addr < e->rom_size ? e->rom[addr] : 0xFF;
 }
 
-static uint8_t ram_read(struct gb_s *gb, const uint_fast32_t addr)
+static IRAM_ATTR uint8_t ram_read(struct gb_s *gb, const uint_fast32_t addr)
 {
     emu_t *e = gb->direct.priv;
     return addr < e->ram_size ? e->ram[addr] : 0xFF;
 }
 
-static void ram_write(struct gb_s *gb, const uint_fast32_t addr, const uint8_t val)
+static IRAM_ATTR void ram_write(struct gb_s *gb, const uint_fast32_t addr, const uint8_t val)
 {
     emu_t *e = gb->direct.priv;
     if (addr < e->ram_size && e->ram[addr] != val) {

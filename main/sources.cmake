@@ -30,6 +30,7 @@ set(SOLANA_OS_SRCS
     apps/store/store_app.c
     apps/apps/apps_app.c
     apps/gbemu/gbemu_app.c
+    apps/gbemu/peanut_gb_cpu.c
     apps/gbaemu/gbaemu_app.c
     lua/lua_host.c lua/lua_ui.c lua/lua_sys.c lua/lua_net.c lua/lua_json.c lua/lua_pkg.c lua/lua_cmd.c
     lua/lua_fs.c lua/lua_install.c lua/lua_code.c lua/lua_ws.c lua/lua_img.c lua/lua_png.c lua/lua_gif.c lua/lua_meet.c

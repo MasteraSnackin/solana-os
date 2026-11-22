@@ -27,5 +27,12 @@ set_property(SOURCE ${SOLANA_OS_GBA_SRCS} APPEND PROPERTY COMPILE_OPTIONS
     -DFRONTEND_SUPPORTS_RGB565 -DHAVE_STDINT_H -DINLINE=inline -DLSB_FIRST
     -DUSE_FRAME_SKIP -DUSE_TWEAKS -DGBA_MUTE_AUDIO)
 
+# Peanut-GB CPU decode/execute: -O3 in IRAM. LCD stays in flash. gbemu_app.c
+# keeps the project's default -Os flags (blit, picker, save).
+set_property(SOURCE apps/gbemu/peanut_gb_cpu.c APPEND PROPERTY COMPILE_OPTIONS
+    -O3 -DPEANUT_GB_CPU_IRAM -Wno-error
+    -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
+    -Wno-implicit-fallthrough)
+
 # cJSON (espressif/cjson) parses mesh JSON with a depth cap of 16:
 # CONFIG_CJSON_NESTING_LIMIT in sdkconfig.defaults.

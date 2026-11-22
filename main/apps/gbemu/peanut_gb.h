@@ -109,6 +109,17 @@
  * defined. */
 // #define PEANUT_GB_HEADER_ONLY
 
+/* ESP32-C5: put the CPU decode/execute hot path in IRAM. peanut_gb_cpu.c
+ * defines PEANUT_GB_CPU_IRAM; LCD (__gb_draw_line) stays in flash. */
+#ifndef PGB_CPU_IRAM
+# if defined(PEANUT_GB_CPU_IRAM)
+#  include "esp_attr.h"
+#  define PGB_CPU_IRAM IRAM_ATTR
+# else
+#  define PGB_CPU_IRAM
+# endif
+#endif
+
 /** Internal source code. **/
 /* Interrupt masks */
 #define VBLANK_INTR	0x01
@@ -780,7 +791,7 @@ struct gb_s
  * Internal function used to read bytes.
  * addr is host platform endian.
  */
-uint8_t __gb_read(struct gb_s *gb, uint16_t addr)
+PGB_CPU_IRAM uint8_t __gb_read(struct gb_s *gb, uint16_t addr)
 {
 	switch(PEANUT_GB_GET_MSN16(addr))
 	{
@@ -890,7 +901,7 @@ uint8_t __gb_read(struct gb_s *gb, uint16_t addr)
 /**
  * Internal function used to write bytes.
  */
-void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
+PGB_CPU_IRAM void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 {
 	switch(PEANUT_GB_GET_MSN16(addr))
 	{
@@ -1253,7 +1264,7 @@ void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 	return;
 }
 
-uint8_t __gb_execute_cb(struct gb_s *gb)
+PGB_CPU_IRAM uint8_t __gb_execute_cb(struct gb_s *gb)
 {
 	uint8_t inst_cycles;
 	uint8_t cbop = __gb_read(gb, gb->cpu_reg.pc.reg++);
@@ -1788,7 +1799,7 @@ void __gb_draw_line(struct gb_s *gb)
 /**
  * Internal function used to step the CPU.
  */
-void __gb_step_cpu(struct gb_s *gb)
+PGB_CPU_IRAM void __gb_step_cpu(struct gb_s *gb)
 {
 	uint8_t opcode;
 	uint_fast16_t inst_cycles;
@@ -3529,7 +3540,7 @@ void __gb_step_cpu(struct gb_s *gb)
 	/* If halted, loop until an interrupt occurs. */
 }
 
-void gb_run_frame(struct gb_s *gb)
+PGB_CPU_IRAM void gb_run_frame(struct gb_s *gb)
 {
 	gb->gb_frame = false;
 
