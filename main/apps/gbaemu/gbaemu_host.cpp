@@ -11,6 +11,8 @@ extern "C" {
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "core/os.h"
 #include "core/os_mem.h"
 }
@@ -288,6 +290,30 @@ static bool load_path(const char *path, uint8_t **out, size_t *size, size_t max)
     return true;
 }
 
+static bool read_file(FILE *f, uint8_t *dst, size_t n)
+{
+    size_t off = 0;
+    while (off < n) {
+        size_t chunk = n - off;
+        if (chunk > (256u << 10)) {
+            chunk = 256u << 10;
+        }
+        int tries = 0;
+        while (fread(dst + off, 1, chunk, f) != chunk) {
+            if (++tries >= 3) {
+                return false;
+            }
+            clearerr(f);
+            if (fseek(f, (long)off, SEEK_SET) != 0) {
+                return false;
+            }
+            vTaskDelay(1);
+        }
+        off += chunk;
+    }
+    return true;
+}
+
 static bool load_rom_direct(FILE *f, size_t n)
 {
     rom = ps_alloc(n, "ROM");
@@ -295,7 +321,7 @@ static bool load_rom_direct(FILE *f, size_t n)
         return false;
     }
     int64_t t0 = esp_timer_get_time();
-    if (fread(rom, 1, n, f) != n) {
+    if (!read_file(f, rom, n)) {
         ESP_LOGE(TAG, "ROM read failed (%u B)", (unsigned)n);
         heap_caps_free(rom);
         rom = NULL;

@@ -758,7 +758,11 @@ static void os_task(void *arg)
         if (now >= next_status) {
             next_status = now + (s_bg_pause ? STATUS_PLAY_MS : STATUS_EVERY_MS);
             status_update();
-            if (bsp_display_lvgl_paused()) {
+            // Fullscreen GBA (and GB) own the panel. Flushing LVGL here fights
+            // the SD card on SPI2 (4 MB ROM copies time out) and punches the
+            // status bar through a 320x240 stretch. Objects still update; the
+            // next unpaused refresh shows them.
+            if (bsp_display_lvgl_paused() && !s_bg_pause) {
                 lv_refr_now(NULL);
             }
         }

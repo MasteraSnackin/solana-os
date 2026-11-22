@@ -11,12 +11,15 @@
 // Background radios and services (Wi-Fi, ESP-NOW mesh, cloud, game tick,
 // Lua host, BLE) pause for the ROM and restore on the list, HOME, or exit.
 //
-// Screen: native 240x160 centred under the 22 px status bar (panel 320x240).
-// Drawn frames are packed into a PSRAM double-buffer and a prio-4 blit task
-// sends them to the ILI9341 (not an LVGL image). The interpreter only copies;
-// it does not wait on SPI, so DMA runs while the next frames emulate. LVGL's
-// refresh timer is paused while a ROM runs; the status bar is a battery tick
-// every 5 s via lv_refr_now. Skipped PPU frames are not blitted.
+// Screen: 240x160 stretched nearest-neighbour to the full 320x240 ILI9341
+// (fills the panel, including over the status bar). Drawn frames are scaled
+// into a PSRAM double-buffer and a prio-4 blit task sends them to the panel
+// (not an LVGL image). Pack buffers are allocated after the ROM so a 4 MB
+// cart still gets the large PSRAM block. The interpreter only scales; it
+// does not wait on SPI, so DMA runs while the next frames emulate. LVGL's
+// refresh timer is paused while a ROM runs. Status-bar objects still tick
+// every 5 s but are not flushed (SPI2 is the SD card; a flush also punched
+// the bar through the stretch). Skipped PPU frames are not blitted.
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GBA d-pad
@@ -64,9 +67,11 @@ static const char *TAG = "gbaemu";
 #define TASK_PRIO       3   // below blit/OS; OS is parked on the button queue during play
 #define BLIT_TASK_STACK 3072
 #define BLIT_TASK_PRIO  4   // same as LVGL: start DMA, then block so emu runs
-#define GBA_BLIT_X      ((BOARD_LCD_H_RES - GBA_WIDTH) / 2)
-#define GBA_BLIT_Y      (OS_STATUS_H + (OS_ROOT_H - GBA_HEIGHT) / 2)
-#define GBA_FB_BYTES    ((size_t)GBA_WIDTH * (size_t)GBA_HEIGHT * sizeof(uint16_t))
+#define SCALE_W         BOARD_LCD_H_RES
+#define SCALE_H         BOARD_LCD_V_RES
+#define GBA_BLIT_X      0
+#define GBA_BLIT_Y      0
+#define GBA_FB_BYTES    ((size_t)SCALE_W * (size_t)SCALE_H * sizeof(uint16_t))
 
 static TaskHandle_t s_task;
 static SemaphoreHandle_t s_done;
@@ -89,6 +94,7 @@ static bool s_save_armed = true;
 static lv_obj_t *s_root, *s_msg, *s_hint;
 static ui_list_t *s_list;
 static char s_roms[MAX_ROMS][PATH_MAX_LEN];
+static char s_play_path[PATH_MAX_LEN];
 static char s_sav_path[PATH_MAX_LEN];
 static int s_rom_count;
 static emu_pad_t s_pad;
@@ -110,6 +116,36 @@ static uint32_t joypad(void)
     uint32_t held = emu_pad_joy(&s_pad);
     emu_pad_log(&s_pad, held, TAG);
     return held;
+}
+
+/* 240×160 → 320×240 nearest-neighbour. 4 dest cols from 3 src; 3 dest rows
+ * from 2 src. Stretch fills the panel (Dave asked for fullscreen). */
+static void scale_row_nn(uint16_t *dst, const uint16_t *src)
+{
+    for (int g = 0; g < GBA_WIDTH / 3; g++) {
+        uint16_t a = src[0], b = src[1], c = src[2];
+        dst[0] = a;
+        dst[1] = a;
+        dst[2] = b;
+        dst[3] = c;
+        src += 3;
+        dst += 4;
+    }
+}
+
+static void scale_gba_nn(uint16_t *dst, const uint16_t *src)
+{
+    for (int g = 0; g < GBA_HEIGHT / 2; g++) {
+        const uint16_t *r0 = src;
+        const uint16_t *r1 = src + GBA_FB_STRIDE;
+        scale_row_nn(dst, r0);
+        dst += SCALE_W;
+        scale_row_nn(dst, r0);
+        dst += SCALE_W;
+        scale_row_nn(dst, r1);
+        dst += SCALE_W;
+        src += 2 * (int)GBA_FB_STRIDE;
+    }
 }
 
 static void chords(int64_t now)
@@ -154,8 +190,8 @@ static void blit_task(void *arg)
             s_blit_pending = -1;
             s_blit_sending = i;
             portEXIT_CRITICAL(&s_blit_mux);
-            (void)bsp_lcd_blit_rgb565(GBA_BLIT_X, GBA_BLIT_Y, GBA_WIDTH, GBA_HEIGHT,
-                                      s_blit_fb[i], GBA_WIDTH);
+            (void)bsp_lcd_blit_rgb565(GBA_BLIT_X, GBA_BLIT_Y, SCALE_W, SCALE_H,
+                                      s_blit_fb[i], SCALE_W);
             portENTER_CRITICAL(&s_blit_mux);
             s_blit_sending = -1;
             portEXIT_CRITICAL(&s_blit_mux);
@@ -185,13 +221,7 @@ static bool present(const uint16_t *fb)
     s_blit_packing = i;
     portEXIT_CRITICAL(&s_blit_mux);
 
-    uint16_t *dst = s_blit_fb[i];
-    const uint16_t *src = fb;
-    for (int r = 0; r < GBA_HEIGHT; r++) {
-        memcpy(dst, src, GBA_WIDTH * sizeof(uint16_t));
-        dst += GBA_WIDTH;
-        src += GBA_FB_STRIDE;
-    }
+    scale_gba_nn(s_blit_fb[i], fb);
 
     portENTER_CRITICAL(&s_blit_mux);
     s_blit_packing = -1;
@@ -255,7 +285,8 @@ static void play_video(bool on)
         lv_refr_now(NULL);
         lv_obj_set_hidden(s_root, true);
         bsp_display_pause_lvgl(true);
-        blit_start();
+        // blit_start() waits until gba_core_boot so 4 MB carts still get
+        // the large PSRAM block (2×153 KB fullscreen buffers used to land first).
     } else {
         blit_stop();
         bsp_display_pause_lvgl(false);
@@ -294,11 +325,15 @@ static void back_to_list(void *arg)
 static void emu_task(void *arg)
 {
     const char *path = (const char *)arg;
+    ESP_LOGI(TAG, "emu_task %s", path);
     sav_from_rom(s_sav_path, sizeof(s_sav_path), path);
     os_background_pause();
     if (!gba_core_boot(path, s_sav_path)) {
         s_back_to_list = true;
         goto out;
+    }
+    if (!blit_start()) {
+        ESP_LOGW(TAG, "fullscreen blit buffers unavailable; native-size fallback");
     }
     s_exit_since = s_save_since = 0;
     s_save_armed = true;
@@ -454,10 +489,13 @@ static void start(const char *path)
 
     s_quit = false;
     s_back_to_list = false;
-    ESP_LOGI(TAG, "start %s", path);
+    strlcpy(s_play_path, path, sizeof(s_play_path));
+    ESP_LOGI(TAG, "start %s", s_play_path);
     s_done = xSemaphoreCreateBinary();
-    if (!s_done || xTaskCreate(emu_task, "gbaemu", TASK_STACK, (void *)path,
+    if (!s_done || xTaskCreate(emu_task, "gbaemu", TASK_STACK, s_play_path,
                                TASK_PRIO, &s_task) != pdPASS) {
+        ESP_LOGE(TAG, "xTaskCreate gbaemu failed (done %p SRAM %u)",
+                 s_done, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         os_toast("Can't start the emulator task");
         if (s_done) {
             vSemaphoreDelete(s_done);
