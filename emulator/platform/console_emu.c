@@ -91,7 +91,7 @@ EMSCRIPTEN_KEEPALIVE void emu_console(const char *line)
     }
     const char *cmd = argv[0];
     if (!strcmp(cmd, "help")) {
-        printf("commands: info, apps, open <id|home|calib>, key <up|down|left|right|select|back|home>...,\n"
+        printf("commands: info, apps, open <id|home|calib>, key <up|down|left|right|select|back|home|start|l|r>...,\n"
                "          wifi [status|on|off|connect <ssid> [pass [channel]]|forget], cloud, server <url|clear>,\n"
                "          rgb <i|all> <r> <g> <b>, shot, heap\n");
         for (int i = 0; i < os_cmd_count(); i++) {
@@ -108,6 +108,19 @@ EMSCRIPTEN_KEEPALIVE void emu_console(const char *line)
         os_launch_id(argv[1]);
     } else if (!strcmp(cmd, "key") && argc >= 2) {
         for (int i = 1; i < argc; i++) {
+            uint32_t pad = 0;
+            if (!strcmp(argv[i], "start")) {
+                pad = 1u << 3;
+            } else if (!strcmp(argv[i], "l")) {
+                pad = 1u << 9;
+            } else if (!strcmp(argv[i], "r")) {
+                pad = 1u << 8;
+            }
+            if (pad) {
+                os_pad_inject(pad, 350);
+                printf("inject %s 350 ms\n", argv[i]);
+                continue;
+            }
             os_key_t k = os_key_parse(argv[i]);
             if (k == OS_KEY_NONE) {
                 printf("unknown key '%s'\n", argv[i]);

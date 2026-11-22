@@ -208,13 +208,29 @@ static int cmd_open(int argc, char **argv)
     return 0;
 }
 
+#define PAD_INJECT_MS  350
+
 static int cmd_key(int argc, char **argv)
 {
     if (argc < 2) {
-        printf("usage: key <up|down|left|right|select|back|home>... \n");
+        printf("usage: key <up|down|left|right|select|back|home|start|l|r>...\n");
         return 1;
     }
     for (int i = 1; i < argc; i++) {
+        uint32_t pad = 0;
+        if (!strcmp(argv[i], "start")) {
+            pad = 1u << 3;
+        } else if (!strcmp(argv[i], "l")) {
+            pad = 1u << 9;
+        } else if (!strcmp(argv[i], "r")) {
+            pad = 1u << 8;
+        }
+        if (pad) {
+            os_pad_inject(pad, PAD_INJECT_MS);
+            printf("inject %s %d ms\n", argv[i], PAD_INJECT_MS);
+            vTaskDelay(pdMS_TO_TICKS(PAD_INJECT_MS + 50));
+            continue;
+        }
         os_key_t k = os_key_parse(argv[i]);
         if (k == OS_KEY_NONE) {
             printf("unknown key '%s'\n", argv[i]);
@@ -374,7 +390,7 @@ static void start_now(void)
         { .command = "rgb", .help = "rgb <index|all> <r> <g> <b>", .func = cmd_rgb },
         { .command = "apps", .help = "List installed apps", .func = cmd_apps },
         { .command = "open", .help = "open <app id|home> - launch an app", .func = cmd_open },
-        { .command = "key", .help = "key <up|down|left|right|select|back|home>... - press keys", .func = cmd_key },
+        { .command = "key", .help = "key <up|down|left|right|select|back|home|start|l|r>... - press keys", .func = cmd_key },
         { .command = "wifi", .help = "wifi [status|on|off|connect <ssid> [pass [channel]]|forget]", .func = cmd_wifi },
         { .command = "server", .help = "server [url|clear] - show or set the badge server", .func = cmd_server },
         { .command = "cloud", .help = "cloud [hangup] - badge server link: state, badge ID, owner, claim URL; hangup closes the connection", .func = cmd_cloud },

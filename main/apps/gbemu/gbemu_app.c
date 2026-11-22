@@ -16,12 +16,14 @@
 //   d-pad                 GB d-pad
 //   SELECT                A
 //   CANCEL                B
-//   UP+DOWN               START
+//   UP+DOWN               START (latched; d-pad swallowed until both release)
+//   SELECT+CANCEL         START (second mapping; does not steal HOME)
 //   LEFT+RIGHT            SELECT (GB)
 //   SELECT+START          exit to ROM list  (badge SELECT + UP+DOWN)
 //   SELECT+A              write battery .sav now  (GB SELECT + A:
 //                         LEFT+RIGHT + badge SELECT)
 //   BOOT (HOME)           OS exit; cart RAM is saved
+//   console `key start` injects GB START for 350 ms
 // Battery SRAM is written to <rom>.sav next to the ROM (same basename), on
 // those chords, ~1 s after the game last wrote cart RAM, every minute while
 // dirty, and when leaving.
@@ -41,6 +43,7 @@
 #include "core/os_mem.h"
 #include "core/os_wifi.h"
 #include "core/ui.h"
+#include "apps/emu_pad.h"
 
 #define ENABLE_SOUND                0
 #define ENABLE_LCD                  1
@@ -91,6 +94,7 @@ static lv_obj_t *s_root, *s_img, *s_msg, *s_hint;
 static ui_list_t *s_list;
 static char s_roms[MAX_ROMS][PATH_MAX_LEN];
 static int s_rom_count;
+static emu_pad_t s_pad;
 
 static uint8_t rom_read(struct gb_s *gb, const uint_fast32_t addr)
 {
@@ -202,50 +206,14 @@ static void save_ram(emu_t *e, bool toast)
 
 static uint8_t joypad(void)
 {
-    uint32_t b = bsp_buttons_get();
-    bool up = b & os_key_button(OS_KEY_UP), down = b & os_key_button(OS_KEY_DOWN);
-    bool left = b & os_key_button(OS_KEY_LEFT), right = b & os_key_button(OS_KEY_RIGHT);
-    bool a = b & os_key_button(OS_KEY_SELECT);
-    bool start = up && down;
-    bool gb_select = left && right;
-    uint8_t held = 0;
-
-    // SELECT+START (badge SELECT + UP+DOWN): leave the game, not A+START.
-    if (a && start) {
-        return 0xFF;
-    }
-    // SELECT+A (GB SELECT + A): force-save; don't also feed SELECT+A to the game.
-    if (a && gb_select) {
-        return 0xFF;
-    }
-
-    if (start) {
-        held |= JOYPAD_START;
-    } else {
-        held |= (up ? JOYPAD_UP : 0) | (down ? JOYPAD_DOWN : 0);
-    }
-    if (gb_select) {
-        held |= JOYPAD_SELECT;
-    } else {
-        held |= (left ? JOYPAD_LEFT : 0) | (right ? JOYPAD_RIGHT : 0);
-    }
-    if (a) {
-        held |= JOYPAD_A;
-    }
-    if (b & os_key_button(OS_KEY_BACK)) {
-        held |= JOYPAD_B;
-    }
+    uint32_t held = emu_pad_joy(&s_pad);
+    emu_pad_log(&s_pad, held, TAG);
     return (uint8_t)~held;
 }
 
 static void chords(emu_t *e, int64_t now)
 {
-    uint32_t b = bsp_buttons_get();
-    bool a = b & os_key_button(OS_KEY_SELECT);
-    bool start = (b & os_key_button(OS_KEY_UP)) && (b & os_key_button(OS_KEY_DOWN));
-    bool gb_select = (b & os_key_button(OS_KEY_LEFT)) && (b & os_key_button(OS_KEY_RIGHT));
-
-    if (a && start) {
+    if (s_pad.exit_chord) {
         if (!s_exit_since) {
             s_exit_since = now;
         } else if (now - s_exit_since >= CHORD_MS * 1000LL) {
@@ -256,7 +224,7 @@ static void chords(emu_t *e, int64_t now)
         s_exit_since = 0;
     }
 
-    if (a && gb_select) {
+    if (s_pad.save_chord) {
         if (s_save_armed && (!s_save_since || now - s_save_since >= CHORD_MS * 1000LL)) {
             if (e->ram_size) {
                 e->ram_dirty = true;
@@ -365,6 +333,7 @@ static void emu_task(void *arg)
     e->gb.direct.frame_skip = true;
     s_exit_since = s_save_since = 0;
     s_save_armed = true;
+    emu_pad_reset(&s_pad);
     char title[17];
     ESP_LOGI(TAG, "%s: %u KB ROM, %u B cart RAM", gb_get_rom_name(&e->gb, title),
              (unsigned)(e->rom_size >> 10), (unsigned)e->ram_size);
@@ -374,6 +343,7 @@ static void emu_task(void *arg)
     int frames = 0, shown = 0, late = 0;
     while (!s_quit) {
         int64_t now = esp_timer_get_time();
+        emu_pad_sample(&s_pad);
         chords(e, now);
         if (s_quit) {
             break;
@@ -559,7 +529,7 @@ static void start(const char *path)
         show_picker();
         return;
     }
-    os_toast("BOOT / SELECT+START exit  " LV_SYMBOL_BULLET "  SELECT+A save");
+    os_toast("UP+DOWN or SELECT+CANCEL = Start");
 }
 
 static void enter(lv_obj_t *root)

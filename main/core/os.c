@@ -504,6 +504,27 @@ void os_inject_key(os_key_t key)
     post((os_event_t){ .kind = EV_KEY, .a = key });
 }
 
+static uint32_t s_pad_bits;
+static int64_t s_pad_until;
+
+void os_pad_inject(uint32_t bits, int ms)
+{
+    s_pad_bits = bits;
+    s_pad_until = esp_timer_get_time() + (int64_t)ms * 1000LL;
+}
+
+uint32_t os_pad_injected(void)
+{
+    if (!s_pad_bits) {
+        return 0;
+    }
+    if (esp_timer_get_time() >= s_pad_until) {
+        s_pad_bits = 0;
+        return 0;
+    }
+    return s_pad_bits;
+}
+
 const os_app_t *os_current(void)
 {
     return s_app;

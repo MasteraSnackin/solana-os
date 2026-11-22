@@ -17,13 +17,15 @@
 //   d-pad                 GBA d-pad
 //   SELECT                A
 //   CANCEL                B
-//   UP+DOWN               START
+//   UP+DOWN               START (latched; d-pad swallowed until both release)
+//   SELECT+CANCEL         START (second mapping; does not steal HOME)
 //   LEFT+RIGHT            SELECT
+//   LEFT+RIGHT+UP / DOWN  L / R
 //   SELECT+START          exit to ROM list  (badge SELECT + UP+DOWN)
 //   SELECT+A              write battery .sav now  (GBA SELECT + A:
 //                         LEFT+RIGHT + badge SELECT)
 //   BOOT (HOME)           OS exit; save RAM is written
-// L and R are not mapped (the badge has no shoulder buttons).
+//   console `key start|l|r` injects those GBA buttons for 350 ms
 // Battery SRAM/Flash/EEPROM is written to <rom>.sav next to the ROM (same
 // basename), on those chords, when the save buffer changes, and on quit.
 
@@ -41,6 +43,7 @@
 #include "core/os.h"
 #include "core/os_wifi.h"
 #include "core/ui.h"
+#include "apps/emu_pad.h"
 #include "gbaemu_host.h"
 
 static const char *TAG = "gbaemu";
@@ -56,18 +59,6 @@ static const char *TAG = "gbaemu";
 #define TASK_STACK      16384
 #define TASK_PRIO       3   // below OS/LVGL (4); above cloud/wifi (2)
 
-// GBA P1 bits (44VBA / vba-next joy):
-#define GBA_A       (1u << 0)
-#define GBA_B       (1u << 1)
-#define GBA_SELECT  (1u << 2)
-#define GBA_START   (1u << 3)
-#define GBA_RIGHT   (1u << 4)
-#define GBA_LEFT    (1u << 5)
-#define GBA_UP      (1u << 6)
-#define GBA_DOWN    (1u << 7)
-#define GBA_R       (1u << 8)
-#define GBA_L       (1u << 9)
-
 static TaskHandle_t s_task;
 static SemaphoreHandle_t s_done;
 static volatile bool s_quit;
@@ -80,6 +71,7 @@ static ui_list_t *s_list;
 static char s_roms[MAX_ROMS][PATH_MAX_LEN];
 static char s_sav_path[PATH_MAX_LEN];
 static int s_rom_count;
+static emu_pad_t s_pad;
 
 static void sav_from_rom(char *sav, size_t n, const char *rom)
 {
@@ -95,48 +87,14 @@ static void sav_from_rom(char *sav, size_t n, const char *rom)
 
 static uint32_t joypad(void)
 {
-    uint32_t b = bsp_buttons_get();
-    bool up = b & os_key_button(OS_KEY_UP), down = b & os_key_button(OS_KEY_DOWN);
-    bool left = b & os_key_button(OS_KEY_LEFT), right = b & os_key_button(OS_KEY_RIGHT);
-    bool a = b & os_key_button(OS_KEY_SELECT);
-    bool start = up && down;
-    bool gba_select = left && right;
-    uint32_t held = 0;
-
-    if (a && start) {
-        return 0;
-    }
-    if (a && gba_select) {
-        return 0;
-    }
-
-    if (start) {
-        held |= GBA_START;
-    } else {
-        held |= (up ? GBA_UP : 0) | (down ? GBA_DOWN : 0);
-    }
-    if (gba_select) {
-        held |= GBA_SELECT;
-    } else {
-        held |= (left ? GBA_LEFT : 0) | (right ? GBA_RIGHT : 0);
-    }
-    if (a) {
-        held |= GBA_A;
-    }
-    if (b & os_key_button(OS_KEY_BACK)) {
-        held |= GBA_B;
-    }
+    uint32_t held = emu_pad_joy(&s_pad);
+    emu_pad_log(&s_pad, held, TAG);
     return held;
 }
 
 static void chords(int64_t now)
 {
-    uint32_t b = bsp_buttons_get();
-    bool a = b & os_key_button(OS_KEY_SELECT);
-    bool start = (b & os_key_button(OS_KEY_UP)) && (b & os_key_button(OS_KEY_DOWN));
-    bool gba_select = (b & os_key_button(OS_KEY_LEFT)) && (b & os_key_button(OS_KEY_RIGHT));
-
-    if (a && start) {
+    if (s_pad.exit_chord) {
         if (!s_exit_since) {
             s_exit_since = now;
         } else if (now - s_exit_since >= CHORD_MS * 1000LL) {
@@ -147,7 +105,7 @@ static void chords(int64_t now)
         s_exit_since = 0;
     }
 
-    if (a && gba_select) {
+    if (s_pad.save_chord) {
         if (s_save_armed && (!s_save_since || now - s_save_since >= CHORD_MS * 1000LL)) {
             gba_core_save(s_sav_path, true);
             s_save_since = now;
@@ -216,6 +174,7 @@ static void emu_task(void *arg)
     os_wifi_pause();
     s_exit_since = s_save_since = 0;
     s_save_armed = true;
+    emu_pad_reset(&s_pad);
 
     int64_t next = esp_timer_get_time(), last_save = next, stat_t = next, last_touch = next;
     int64_t last_idle = next;
@@ -223,6 +182,7 @@ static void emu_task(void *arg)
     uint32_t miss0 = gba_core_rom_misses();
     while (!s_quit) {
         int64_t now = esp_timer_get_time();
+        emu_pad_sample(&s_pad);
         chords(now);
         if (s_quit) {
             break;
@@ -300,6 +260,7 @@ static void scan(const char *dir)
             memcpy(p, dir, dl);
             p[dl] = '/';
             memcpy(p + dl + 1, de->d_name, nl + 1);
+            ESP_LOGI(TAG, "rom %d %s", s_rom_count - 1, de->d_name);
         }
     }
     closedir(d);
@@ -388,7 +349,7 @@ static void start(const char *path)
         show_picker();
         return;
     }
-    os_toast("BOOT / SELECT+START exit  " LV_SYMBOL_BULLET "  SELECT+A save");
+    os_toast("UP+DOWN or SELECT+CANCEL = Start");
 #endif
 }
 
