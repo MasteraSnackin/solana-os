@@ -106,7 +106,7 @@ void os_invert_apply(void);
 // Screenshot of the live screen over the console, see tools/badge.py.
 void os_screenshot(void);
 
-// While a heavy native app is playing (GBA ROM, not the picker): stop Wi-Fi,
+// While a heavy native app is playing (GBA or GB ROM, not the picker): stop Wi-Fi,
 // ESP-NOW mesh, the cloud task, the 250 ms game tick, Lua if a host task is
 // still alive, and BLE. The OS task sleeps on buttons and a cheap battery
 // tick instead of its 100 ms loop. Nested calls are no-ops. Matching unpause

@@ -5,8 +5,9 @@
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
 // its own FreeRTOS task at idle priority so the launcher, LVGL and radios
-// always preempt it; the task yields every frame. Wi-Fi is paused (driver
-// stopped) while a ROM is running and restored when play ends.
+// always preempt it; the task yields every frame. Background radios and
+// services (Wi-Fi, ESP-NOW mesh, cloud, game tick, Lua host, BLE) pause for
+// the ROM and restore on the list, HOME, or exit — same as GBA.
 //
 // Screen: 160x144 scaled 1.5x to 240x216, centred in the 320x218 app root
 // (status bar keeps the panel at 320x240). Each frame lands in one of two
@@ -41,7 +42,6 @@
 #include "esp_timer.h"
 #include "core/os.h"
 #include "core/os_mem.h"
-#include "core/os_wifi.h"
 #include "core/ui.h"
 #include "apps/emu_pad.h"
 
@@ -291,7 +291,7 @@ static void back_to_list(void *arg)
     s_emu = NULL;
     s_img = NULL;
     s_back_to_list = false;
-    os_wifi_unpause();
+    os_background_unpause();
     if (s_root) {
         lv_obj_clean(s_root);
         show_picker();
@@ -337,7 +337,7 @@ static void emu_task(void *arg)
     char title[17];
     ESP_LOGI(TAG, "%s: %u KB ROM, %u B cart RAM", gb_get_rom_name(&e->gb, title),
              (unsigned)(e->rom_size >> 10), (unsigned)e->ram_size);
-    os_wifi_pause();
+    os_background_pause();
 
     int64_t next = esp_timer_get_time(), last_save = next, stat_t = next;
     int frames = 0, shown = 0, late = 0;
@@ -410,6 +410,7 @@ static void scan(const char *dir)
             memcpy(p, dir, dl);
             p[dl] = '/';
             memcpy(p + dl + 1, de->d_name, nl + 1);
+            ESP_LOGI(TAG, "rom %d %s", s_rom_count - 1, de->d_name);
         }
     }
     closedir(d);
@@ -562,7 +563,7 @@ static void leave(void)
     s_emu = NULL;
     s_img = NULL;
     s_root = NULL;
-    os_wifi_unpause();
+    os_background_unpause();
 }
 
 static bool key(os_key_t k, bool repeat)
