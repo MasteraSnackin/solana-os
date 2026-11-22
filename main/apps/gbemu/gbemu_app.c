@@ -16,7 +16,7 @@
 // (fills the panel, including over the status bar). LVGL's refresh timer is
 // paused while a ROM runs. Status-bar objects still tick every 5 s but are
 // not flushed (SPI2 is the SD card; a flush also punched the bar through
-// the stretch).
+// the stretch). Every emulated frame is drawn (Peanut-GB frame_skip off).
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GB d-pad
@@ -467,7 +467,9 @@ static void emu_task(void *arg)
         e->ram_size = want;
     }
     gb_init_lcd(&e->gb, draw_line);
-    e->gb.direct.frame_skip = true;
+    // Draw every emulated frame. Skip 1-of-2 was ~30 shown / 60 emu after
+    // the 320x240 stretch. false presents each one (Peanut-GB default).
+    e->gb.direct.frame_skip = false;
     s_exit_since = s_save_since = 0;
     s_save_armed = true;
     emu_pad_reset(&s_pad);
@@ -507,7 +509,7 @@ static void emu_task(void *arg)
         frames++;
         if (now - stat_t >= 5000000) {
             double s = (now - stat_t) / 1e6;
-            ESP_LOGI(TAG, "%.1f emulated fps (target 59.7), %.1f shown, %d resyncs",
+            ESP_LOGI(TAG, "%.1f emulated fps (target 59.7), %.1f shown (skip 0), %d resyncs",
                      frames / s, shown / s, late);
             stat_t = now;
             frames = shown = late = 0;
