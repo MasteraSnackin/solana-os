@@ -2,6 +2,7 @@
 //
 // The CPU/PPU core is Peanut-GB (peanut_gb.h, MIT, vendored next to this file).
 // peanut_gb_cpu.c builds the interpreter and LCD line at -O3 in IRAM.
+// ROM bank 0 is copied into a 16 KB SRAM window while a ROM runs (32 KB does not fit).
 // No ROM ships with the firmware: copy a legally owned dump onto the card.
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
@@ -65,7 +66,6 @@ static const char *TAG = "gbemu";
 #define ROM_MAX         (4u << 20)
 #define MAX_ROMS        32
 #define PATH_MAX_LEN    200
-#define SRAM_KEEP       (64 * 1024)
 #define CHORD_MS        250
 #define ROMS_DIR        BSP_SD_MOUNT "/roms"
 #define BLIT_TASK_STACK 3072
@@ -114,10 +114,69 @@ static char s_roms[MAX_ROMS][PATH_MAX_LEN];
 static int s_rom_count;
 static emu_pad_t s_pad;
 
+/* Internal-SRAM copy of GB ROM bank 0 so rom_read does not hit PSRAM for
+ * 0000–3FFF. Two 16 KB windows do not fit: heap malloc after pause cannot
+ * get 16 KB contiguous, and 32 KB BSS drops boot heap to 102 KiB and
+ * abort()s in the launcher. A 16 KB window on the switchable bank also
+ * loses (Yellow recopies 16 KB from PSRAM on every MBC switch). Bank 0 is
+ * copied once. */
+static uint8_t s_rom_win0[ROM_BANK_SIZE];
+static uint8_t *s_rom_win[2];
+static int s_rom_win_n;
+static uint32_t s_win1_base = UINT32_MAX;
+
+static IRAM_ATTR void rom_win_load(uint8_t *dst, const uint8_t *rom, size_t rom_size,
+                                   uint32_t base)
+{
+    size_t n = ROM_BANK_SIZE;
+    if (base >= rom_size) {
+        memset(dst, 0xFF, ROM_BANK_SIZE);
+        return;
+    }
+    if (rom_size - base < n) {
+        n = rom_size - base;
+    }
+    memcpy(dst, rom + base, n);
+    if (n < ROM_BANK_SIZE) {
+        memset(dst + n, 0xFF, ROM_BANK_SIZE - n);
+    }
+}
+
+static void rom_win_free(void)
+{
+    s_rom_win_n = 0;
+    s_rom_win[0] = s_rom_win[1] = NULL;
+    s_win1_base = UINT32_MAX;
+}
+
+static void rom_win_alloc(emu_t *e)
+{
+    s_rom_win[0] = s_rom_win0;
+    s_rom_win[1] = NULL;
+    s_rom_win_n = 1;
+    s_win1_base = UINT32_MAX;
+    rom_win_load(s_rom_win[0], e->rom, e->rom_size, 0);
+    ESP_LOGI(TAG, "ROM SRAM window: 16 KB BSS (bank 0; 32 KB does not fit)");
+}
+
 static IRAM_ATTR uint8_t rom_read(struct gb_s *gb, const uint_fast32_t addr)
 {
     emu_t *e = gb->direct.priv;
-    return addr < e->rom_size ? e->rom[addr] : 0xFF;
+    if (addr >= e->rom_size) {
+        return 0xFF;
+    }
+    if (s_rom_win[0] && addr < ROM_BANK_SIZE) {
+        return s_rom_win[0][addr];
+    }
+    if (s_rom_win[1] && addr >= ROM_BANK_SIZE) {
+        uint32_t base = addr & ~(uint32_t)(ROM_BANK_SIZE - 1);
+        if (base != s_win1_base) {
+            rom_win_load(s_rom_win[1], e->rom, e->rom_size, base);
+            s_win1_base = base;
+        }
+        return s_rom_win[1][addr - base];
+    }
+    return e->rom[addr];
 }
 
 static IRAM_ATTR uint8_t ram_read(struct gb_s *gb, const uint_fast32_t addr)
@@ -386,6 +445,7 @@ static void play_video(bool on)
 
 static void free_emu(emu_t *e)
 {
+    rom_win_free();
     if (!e) {
         return;
     }
@@ -467,6 +527,7 @@ static void emu_task(void *arg)
     ESP_LOGI(TAG, "%s: %u KB ROM, %u B cart RAM", gb_get_rom_name(&e->gb, title),
              (unsigned)(e->rom_size >> 10), (unsigned)e->ram_size);
     os_background_pause();
+    rom_win_alloc(e);
 
     int64_t next = esp_timer_get_time(), last_save = next, stat_t = next;
     int frames = 0, shown = 0, late = 0;
@@ -585,13 +646,7 @@ static void show_picker(void)
 
 static void start(const char *path)
 {
-    emu_t *e = NULL;
-    if (heap_caps_get_free_size(OS_MEM_SRAM_MALLOC) > sizeof(*e) + SRAM_KEEP) {
-        e = heap_caps_calloc(1, sizeof(*e), OS_MEM_SRAM);
-    }
-    if (!e) {
-        e = heap_caps_calloc(1, sizeof(*e), os_mem_bulk_caps());
-    }
+    emu_t *e = heap_caps_calloc(1, sizeof(*e), os_mem_bulk_caps());
     if (!e) {
         os_toast("Out of memory");
         return;
