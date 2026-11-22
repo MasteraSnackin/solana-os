@@ -11,12 +11,13 @@
 // Background radios and services (Wi-Fi, ESP-NOW mesh, cloud, game tick,
 // Lua host, BLE) pause for the ROM and restore on the list, HOME, or exit.
 //
-// Screen: native 256x224 centred on the 320x240 panel at (32, 8). That
-// covers the 22 px status bar (224 does not fit under it). Drawn frames are
-// packed into a PSRAM double-buffer and a prio-4 blit task sends them to the
-// ILI9341 (not an LVGL image). Pack buffers are allocated after the ROM so
-// a 4 MB cart still gets the large PSRAM block. Frameskip 3 (1 of 4 PPU
-// frames drawn); the interpreter will not hit 60 on 240 MHz. Sound is off.
+// Screen: 256x224 stretched nearest-neighbour to the full 320x240 ILI9341
+// at (0, 0), same fill as GB fullscreen (covers the status bar). Drawn
+// frames are packed into a PSRAM double-buffer (2x153 KB) and a prio-4 blit
+// task sends them to the ILI9341 (not an LVGL image). Pack buffers are
+// allocated after the ROM so a 4 MB cart still gets the large PSRAM block.
+// Frameskip 3 (1 of 4 PPU frames drawn); the interpreter will not hit 60 on
+// 240 MHz. Sound is off.
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 SNES d-pad
@@ -69,9 +70,14 @@ static const char *TAG = "snesemu";
 #define TASK_PRIO       3   // below blit/OS; OS is parked on the button queue during play
 #define BLIT_TASK_STACK 3072
 #define BLIT_TASK_PRIO  4   // same as LVGL: start DMA, then block so emu runs
-#define SNES_BLIT_X      ((BOARD_LCD_H_RES - SNES_WIDTH) / 2)
-#define SNES_BLIT_Y      8   // 256x224 does not fit under the 22 px status bar
-#define SNES_FB_BYTES    ((size_t)SNES_WIDTH * (size_t)SNES_HEIGHT * sizeof(uint16_t))
+#define SCALE_W         BOARD_LCD_H_RES
+#define SCALE_H         BOARD_LCD_V_RES
+#define SNES_BLIT_X     0
+#define SNES_BLIT_Y     0
+#define SNES_FB_BYTES   ((size_t)SCALE_W * (size_t)SCALE_H * sizeof(uint16_t))
+
+_Static_assert(SNES_WIDTH * 5 / 4 == SCALE_W, "SNES width 4:5");
+_Static_assert(SNES_HEIGHT * 15 / 14 == SCALE_H, "SNES height 14:15");
 
 static TaskHandle_t s_task;
 static SemaphoreHandle_t s_done;
@@ -163,8 +169,8 @@ static void blit_task(void *arg)
             s_blit_pending = -1;
             s_blit_sending = i;
             portEXIT_CRITICAL(&s_blit_mux);
-            (void)bsp_lcd_blit_rgb565(SNES_BLIT_X, SNES_BLIT_Y, SNES_WIDTH, SNES_HEIGHT,
-                                      s_blit_fb[i], SNES_WIDTH);
+            (void)bsp_lcd_blit_rgb565(SNES_BLIT_X, SNES_BLIT_Y, SCALE_W, SCALE_H,
+                                      s_blit_fb[i], SCALE_W);
             portENTER_CRITICAL(&s_blit_mux);
             s_blit_sending = -1;
             portEXIT_CRITICAL(&s_blit_mux);
@@ -173,7 +179,11 @@ static void blit_task(void *arg)
     if (s_blit_done) {
         xSemaphoreGive(s_blit_done);
     }
+#ifndef SOLANA_OS_EMULATOR
+    vTaskDeleteWithCaps(NULL);
+#else
     vTaskDelete(NULL);
+#endif
 }
 
 static unsigned fb_nonblack(const uint16_t *fb, int stride)
@@ -190,6 +200,32 @@ static unsigned fb_nonblack(const uint16_t *fb, int stride)
     return n;
 }
 
+// Nearest-neighbour 256x224 → 320x240. Width: 5 dest from 4 src (first
+// duplicated). Height: 15 dest from 14 src (first of each 14 duplicated).
+static void stretch_nn(uint16_t *dst, const uint16_t *src)
+{
+    for (int g = 0; g < 16; g++) {
+        for (int r = 0; r < 14; r++) {
+            const uint16_t *s = src + (size_t)(g * 14 + r) * SNES_FB_STRIDE;
+            uint16_t *d = dst;
+            for (int x = 0; x < SNES_WIDTH; x += 4) {
+                uint16_t a = s[x], b = s[x + 1], c = s[x + 2], e = s[x + 3];
+                d[0] = a;
+                d[1] = a;
+                d[2] = b;
+                d[3] = c;
+                d[4] = e;
+                d += 5;
+            }
+            dst += SCALE_W;
+            if (r == 0) {
+                memcpy(dst, dst - SCALE_W, SCALE_W * sizeof(uint16_t));
+                dst += SCALE_W;
+            }
+        }
+    }
+}
+
 static bool present(const uint16_t *fb)
 {
     if (s_quit || !fb) {
@@ -204,8 +240,13 @@ static bool present(const uint16_t *fb)
     }
     s_have_picture = true;
     if (!s_blit_fb[0] || !s_blit_fb[1] || !s_blit_kick) {
-        return bsp_lcd_blit_rgb565(SNES_BLIT_X, SNES_BLIT_Y, SNES_WIDTH, SNES_HEIGHT,
-                                   fb, SNES_FB_STRIDE) == ESP_OK;
+        if (s_blit_fb[0]) {
+            stretch_nn(s_blit_fb[0], fb);
+            return bsp_lcd_blit_rgb565(SNES_BLIT_X, SNES_BLIT_Y, SCALE_W, SCALE_H,
+                                       s_blit_fb[0], SCALE_W) == ESP_OK;
+        }
+        return bsp_lcd_blit_rgb565((BOARD_LCD_H_RES - SNES_WIDTH) / 2, 8,
+                                   SNES_WIDTH, SNES_HEIGHT, fb, SNES_FB_STRIDE) == ESP_OK;
     }
 
     portENTER_CRITICAL(&s_blit_mux);
@@ -222,13 +263,7 @@ static bool present(const uint16_t *fb)
     s_blit_packing = i;
     portEXIT_CRITICAL(&s_blit_mux);
 
-    uint16_t *dst = s_blit_fb[i];
-    const uint16_t *src = fb;
-    for (int r = 0; r < SNES_HEIGHT; r++) {
-        memcpy(dst, src, SNES_WIDTH * sizeof(uint16_t));
-        dst += SNES_WIDTH;
-        src += SNES_FB_STRIDE;
-    }
+    stretch_nn(s_blit_fb[i], fb);
 
     portENTER_CRITICAL(&s_blit_mux);
     s_blit_packing = -1;
@@ -293,9 +328,8 @@ static bool snes_direct_shot(void)
     static unsigned char b64[BOARD_LCD_H_RES * 2 * 4 / 3 + 8];
     for (int y = 0; y < BOARD_LCD_V_RES; y++) {
         memset(row, 0, sizeof(row));
-        if (picture && fb && y >= SNES_BLIT_Y && y < SNES_BLIT_Y + SNES_HEIGHT) {
-            memcpy(row + SNES_BLIT_X, fb + (y - SNES_BLIT_Y) * SNES_WIDTH,
-                   SNES_WIDTH * sizeof(uint16_t));
+        if (picture && fb) {
+            memcpy(row, fb + y * SCALE_W, SCALE_W * sizeof(uint16_t));
         }
         size_t n = 0;
         mbedtls_base64_encode(b64, sizeof(b64), &n, (const unsigned char *)row,
@@ -322,16 +356,40 @@ static bool blit_start(void)
     s_blit_done = xSemaphoreCreateBinary();
     s_blit_quit = false;
     s_blit_pending = s_blit_sending = s_blit_packing = s_blit_shot = -1;
-    if (!s_blit_fb[0] || !s_blit_fb[1] || !s_blit_kick || !s_blit_done ||
-        xTaskCreate(blit_task, "snesblit", BLIT_TASK_STACK, NULL,
-                    BLIT_TASK_PRIO, &s_blit_task) != pdPASS) {
-        ESP_LOGW(TAG, "async blit unavailable (PSRAM %u largest %u); SPI waits on the emu task",
+    bool task_ok = false;
+    if (s_blit_fb[0] && s_blit_fb[1] && s_blit_kick && s_blit_done) {
+#ifndef SOLANA_OS_EMULATOR
+        task_ok = xTaskCreateWithCaps(blit_task, "snesblit", BLIT_TASK_STACK, NULL,
+                                      BLIT_TASK_PRIO, &s_blit_task,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS;
+#else
+        task_ok = xTaskCreate(blit_task, "snesblit", BLIT_TASK_STACK, NULL,
+                              BLIT_TASK_PRIO, &s_blit_task) == pdPASS;
+#endif
+    }
+    if (!task_ok) {
+        ESP_LOGW(TAG, "async blit unavailable (SRAM %u PSRAM %u largest %u); stretch on the emu task",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-        blit_stop();
+        // Keep one stretch buffer so shot and the panel still fill 320x240.
+        if (s_blit_kick) {
+            vSemaphoreDelete(s_blit_kick);
+            s_blit_kick = NULL;
+        }
+        if (s_blit_done) {
+            vSemaphoreDelete(s_blit_done);
+            s_blit_done = NULL;
+        }
+        s_blit_task = NULL;
+        heap_caps_free(s_blit_fb[1]);
+        s_blit_fb[1] = NULL;
+        if (!s_blit_fb[0]) {
+            blit_stop();
+        }
         return false;
     }
-    ESP_LOGI(TAG, "native blit 256x224 at (%d,%d), pack %u B x2",
+    ESP_LOGI(TAG, "fullscreen blit 320x240 at (%d,%d), pack %u B x2",
              SNES_BLIT_X, SNES_BLIT_Y, (unsigned)SNES_FB_BYTES);
     return true;
 }
@@ -344,7 +402,7 @@ static void play_video(bool on)
         os_set_direct_shot(snes_direct_shot);
         bsp_display_pause_lvgl(true);
         // blit_start() waits until snes_core_boot so a 4 MB cart still gets
-        // the large PSRAM block. Pack buffers are native 2x114 KB.
+        // the large PSRAM block. Pack buffers are the 320x240 stretch (2x153 KB).
     } else {
         os_set_direct_shot(NULL);
         blit_stop();
@@ -392,7 +450,7 @@ static void emu_task(void *arg)
         goto out;
     }
     if (!blit_start()) {
-        ESP_LOGW(TAG, "pack buffers unavailable; blit native 256x224 on the emu task");
+        ESP_LOGW(TAG, "pack buffers unavailable; stretch 320x240 on the emu task");
     }
     ESP_LOGI(TAG, "running %s", snes_core_title()[0] ? snes_core_title() : path);
     s_exit_since = s_save_since = 0;
