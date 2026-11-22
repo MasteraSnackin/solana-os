@@ -27,7 +27,7 @@ extern "C" {
 
 static const char *TAG = "gbaemu";
 
-#define ROM_MAX           (8u << 20)
+#define ROM_MAX           (16u << 20)
 #define PIX_BYTES         (4 * PIX_BUFFER_SCREEN_WIDTH * 160)
 #define GBA_RAM_RESERVE   0x140000u
 #define GBA_ROM_PAGES     4
@@ -343,14 +343,14 @@ extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
 
     size_t file_size = 0;
     if (!load_rom(rom_path, &file_size)) {
-        os_toast("Can't read that ROM (max 8 MB)");
+        os_toast("Can't read that ROM (max 16 MB)");
         return false;
     }
 
     size_t wrap = pow2_ge(file_size);
     if (!wrap || wrap > ROM_MAX) {
         free_core();
-        os_toast("ROM is too big (max 8 MB)");
+        os_toast("ROM is too big (max 16 MB)");
         return false;
     }
 

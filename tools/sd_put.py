@@ -45,7 +45,7 @@ if b"ESP-ROM" in head or b"rst:" in head:
     end = time.time() + 20
     while time.time() < end and b"console ready" not in head:
         head += s.read(4096)
-    time.sleep(1.5)
+    time.sleep(2.5)     # SD idle after CH340 reset; 16 MB puts are expensive to retry
 s.reset_input_buffer()
 
 s.write(f"sdrecv {a.dest} {len(data)} {sha}\r\n".encode())

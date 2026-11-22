@@ -405,7 +405,7 @@ static int cmd_recv(const char *id, const char *file, const char *bytes, const c
 // ---------------------------------------------------------------------------
 // sdrecv: any file onto the card, without a card reader.
 
-#define SD_RECV_MAX     (8L << 20)
+#define SD_RECV_MAX     (16L << 20)
 
 // Relative, no "..", only characters every tool and FAT agree on.
 static bool sd_rel_ok(const char *rel)
