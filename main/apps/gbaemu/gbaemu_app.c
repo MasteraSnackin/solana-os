@@ -21,7 +21,7 @@
 // it does not wait on SPI, so DMA runs while the next frames emulate. LVGL's
 // refresh timer is paused while a ROM runs. Status-bar objects still tick
 // every 5 s but are not flushed (SPI2 is the SD card). Frameskip 2 on tiled
-// modes (1 of 3 PPU frames drawn); skip 3 on bitmap modes 3/4/5 (Doom 3D).
+// modes (1 of 3 PPU frames drawn); extra skip on bitmap modes 3/4/5 (Doom 3D).
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GBA d-pad

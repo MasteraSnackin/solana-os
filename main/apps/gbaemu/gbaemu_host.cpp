@@ -594,7 +594,7 @@ extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
         rtcEnable(true);
     }
     // Skip 2 (draw 1 of 3) on tiled modes. gba_core_frame raises that to
-    // skip 3 in bitmap modes 3/4/5 so Doom's Hangar gets more game time.
+    // skip 5 in bitmap modes 3/4/5 so Doom's Hangar gets more game time.
     s_frameskip = 2;
     SetFrameskip(s_frameskip);
 
@@ -636,10 +636,13 @@ extern "C" int gba_core_frame(uint32_t buttons, const uint16_t **fb)
     s_drawn = 0;
     int n = 0;
     // Bitmap modes 3/4/5 are Doom's 3D / heavy frames. Extra skip there
-    // (draw 1 of 4) without a global skip 3 on tiled games (Advance Wars).
+    // without a global skip on tiled games (Advance Wars stays skip 2).
+#ifndef GBA_BITMAP_SKIP
+#define GBA_BITMAP_SKIP  5
+#endif
     {
         int mode = (int)(ioMem[0] & 7);
-        int want = (mode >= 3) ? 3 : 2;
+        int want = (mode >= 3) ? GBA_BITMAP_SKIP : 2;
         if (want != s_frameskip) {
             s_frameskip = want;
             SetFrameskip(s_frameskip);
@@ -647,8 +650,8 @@ extern "C" int gba_core_frame(uint32_t buttons, const uint16_t **fb)
     }
     // Skip 2 runs ~3 PPU frames per call (~200–300 ms when paging). Re-read
     // the console inject each PPU frame so `key start` is not eaten by a
-    // long CPULoop that began before the inject.
-    while (!s_drawn && n < 8) {
+    // long CPULoop that began before the inject. Cap covers skip 5 (1 of 6).
+    while (!s_drawn && n < 12) {
         joy = buttons | os_pad_injected();
         UpdateJoypad();
         CPULoop();
