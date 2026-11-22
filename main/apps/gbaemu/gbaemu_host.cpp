@@ -466,9 +466,9 @@ extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
     CPUInit(NULL, false);
     CPUReset();
     CPUSetRomMask((uint32_t)wrap - 1);
-    // Draw 1 of 3 PPU frames. Turn-based carts (Advance Wars) care about
-    // emulated fps; skip 1 left the 240 MHz interpreter feeling stuck.
-    SetFrameskip(0x2);
+    // Draw every emulated frame. Skip 2 was 1 of 3 PPU frames (~15 emu /
+    // ~5 shown after the 320x240 stretch). Skip 0 presents each one.
+    SetFrameskip(0);
 
     // flashInit() filled save RAM with 0xFF; overlay a .sav after that.
     if (s_sav[0]) {
