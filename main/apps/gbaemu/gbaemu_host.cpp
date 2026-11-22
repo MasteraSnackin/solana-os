@@ -185,6 +185,8 @@ static void free_core(void)
     s_title[0] = 0;
 }
 
+static bool read_window(FILE *f, uint32_t base, uint8_t *dst, size_t n);
+
 static void rom_fill_slot(int slot, uint32_t base)
 {
     uint8_t *dst = s_rom_slot[slot];
@@ -198,8 +200,7 @@ static void rom_fill_slot(int slot, uint32_t base)
     }
     // sd_do_transaction already holds the LCD around each SPI command.
     // Nested bsp_lcd_hold here deadlocks (binary semaphore, not recursive).
-    if (fseek(s_rom_file, (long)base, SEEK_SET) != 0 ||
-            fread(dst, 1, n, s_rom_file) != n) {
+    if (!read_window(s_rom_file, base, dst, n)) {
         ESP_LOGW(TAG, "ROM page 0x%lx read failed", (unsigned long)base);
         memset(dst, 0xFF, GBA_ROM_PAGE_SIZE);
         n = 0;
@@ -290,7 +291,11 @@ static bool load_path(const char *path, uint8_t **out, size_t *size, size_t max)
     return true;
 }
 
-static bool read_file(FILE *f, uint8_t *dst, size_t n)
+// SD and the ILI9341 share SPI2. One-shot 256 KB freads fail under a live
+// blit; 4 MB carts already retried in 256 KB chunks. Paged 8/16 MB carts
+// (Doom, GTA) need the same retry or a miss fills 0xFF and the CPU hangs
+// on a black screen.
+static bool read_window(FILE *f, uint32_t base, uint8_t *dst, size_t n)
 {
     size_t off = 0;
     while (off < n) {
@@ -299,17 +304,19 @@ static bool read_file(FILE *f, uint8_t *dst, size_t n)
             chunk = 256u << 10;
         }
         int tries = 0;
-        while (fread(dst + off, 1, chunk, f) != chunk) {
-            if (++tries >= 3) {
+        for (;;) {
+            if (fseek(f, (long)base + (long)off, SEEK_SET) == 0 &&
+                    fread(dst + off, 1, chunk, f) == chunk) {
+                break;
+            }
+            if (++tries >= 5) {
                 return false;
             }
             clearerr(f);
-            if (fseek(f, (long)off, SEEK_SET) != 0) {
-                return false;
-            }
             vTaskDelay(1);
         }
         off += chunk;
+        vTaskDelay(1);
     }
     return true;
 }
@@ -321,7 +328,7 @@ static bool load_rom_direct(FILE *f, size_t n)
         return false;
     }
     int64_t t0 = esp_timer_get_time();
-    if (!read_file(f, rom, n)) {
+    if (!read_window(f, 0, rom, n)) {
         ESP_LOGE(TAG, "ROM read failed (%u B)", (unsigned)n);
         heap_caps_free(rom);
         rom = NULL;
@@ -372,6 +379,7 @@ static bool load_rom_paged(FILE *f, size_t n)
         rom_fill_slot(i, (uint32_t)i * GBA_ROM_PAGE_SIZE);
         s_rom_tag[i] = (uint32_t)i;
         s_rom_stamp[i] = ++s_rom_tick;
+        vTaskDelay(1);
     }
     gba_rom_hot = s_rom_slot[0];
     gba_rom_hot2 = nfill > 1 ? s_rom_slot[1] : s_rom_slot[0];

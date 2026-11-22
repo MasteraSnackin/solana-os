@@ -208,7 +208,7 @@ static int cmd_open(int argc, char **argv)
     return 0;
 }
 
-#define PAD_INJECT_MS  350
+#define PAD_INJECT_MS  800
 
 static int cmd_key(int argc, char **argv)
 {

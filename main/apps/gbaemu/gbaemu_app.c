@@ -262,11 +262,9 @@ static bool blit_start(void)
 static void play_video(bool on)
 {
     if (on) {
-        lv_obj_set_style_bg_color(s_root, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(s_root, LV_OPA_COVER, 0);
-        lv_obj_set_hidden(s_root, false);
-        lv_refr_now(NULL);
-        lv_obj_set_hidden(s_root, true);
+        // Keep the last LVGL frame (a "Loading…" label) on the panel while
+        // the ROM copies. Painting black here made 8 MB paged carts look dead
+        // for several seconds before the first 240x160 blit.
         bsp_display_pause_lvgl(true);
         // blit_start() waits until gba_core_boot so 4 MB carts still get
         // the large PSRAM block. Pack buffers are native 2x76 KB.
@@ -318,6 +316,7 @@ static void emu_task(void *arg)
     if (!blit_start()) {
         ESP_LOGW(TAG, "pack buffers unavailable; blit native 240x160 on the emu task");
     }
+    ESP_LOGI(TAG, "running %s", gba_core_title()[0] ? gba_core_title() : path);
     s_exit_since = s_save_since = 0;
     s_save_armed = true;
     emu_pad_reset(&s_pad);
@@ -468,6 +467,8 @@ static void start(const char *path)
         lv_obj_delete(s_msg);
         s_msg = NULL;
     }
+    message("Loading…");
+    lv_refr_now(NULL);
     play_video(true);
 
     s_quit = false;
