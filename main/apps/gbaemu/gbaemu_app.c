@@ -4,7 +4,9 @@
 // No ROM ships with the firmware: copy a legally owned dump onto the card.
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
-// its own FreeRTOS task at priority 3 (below the prio-4 blit helper and OS).
+// its own FreeRTOS task at priority 3 (below the prio-4 blit helper and OS),
+// with the 16 KB stack in PSRAM so xTaskCreate still works after Game Boy
+// leaves internal heap fragmented (~28 KB free).
 // While a ROM runs the OS task sleeps on the button queue plus a 5 s battery
 // tick, so it does not steal the chip. Matching OS/blit at 4 was tried:
 // Advance Wars gained a little, GTA Advance (paged) dropped to ~8 emu fps.
@@ -45,6 +47,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#ifndef SOLANA_OS_EMULATOR
+#include "freertos/idf_additions.h"
+#endif
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -400,7 +405,7 @@ out:
     if (s_back_to_list) {
         os_post(back_to_list, NULL);
     }
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
 static bool is_rom(const char *name)
@@ -491,17 +496,23 @@ static void start(const char *path)
     s_back_to_list = false;
     strlcpy(s_play_path, path, sizeof(s_play_path));
     ESP_LOGI(TAG, "start %s", s_play_path);
+    // Park Wi-Fi before the emu task exists. After Game Boy, internal heap is
+    // ~28 KB free and fragmented; a 16 KB SRAM stack then fails xTaskCreate.
+    os_background_pause();
     s_done = xSemaphoreCreateBinary();
-    if (!s_done || xTaskCreate(emu_task, "gbaemu", TASK_STACK, s_play_path,
-                               TASK_PRIO, &s_task) != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate gbaemu failed (done %p SRAM %u)",
-                 s_done, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    if (!s_done || xTaskCreateWithCaps(emu_task, "gbaemu", TASK_STACK, s_play_path,
+                                       TASK_PRIO, &s_task,
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        ESP_LOGE(TAG, "xTaskCreate gbaemu failed (done %p SRAM %u largest %u)",
+                 s_done, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         os_toast("Can't start the emulator task");
         if (s_done) {
             vSemaphoreDelete(s_done);
             s_done = NULL;
         }
         s_task = NULL;
+        os_background_unpause();
         play_video(false);
         lv_obj_clean(s_root);
         show_picker();
