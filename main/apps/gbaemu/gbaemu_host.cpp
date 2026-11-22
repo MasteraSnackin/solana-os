@@ -25,11 +25,6 @@ extern "C" {
 #include "system.h"
 #include "gba_rom_page.h"
 
-extern "C" {
-void bsp_lcd_hold(void);
-void bsp_lcd_release(void);
-}
-
 static const char *TAG = "gbaemu";
 
 #define ROM_MAX           (8u << 20)
@@ -187,14 +182,14 @@ static void rom_fill_slot(int slot, uint32_t base)
     if (base + n > s_rom_size) {
         n = s_rom_size - base;
     }
-    bsp_lcd_hold();
+    // sd_do_transaction already holds the LCD around each SPI command.
+    // Nested bsp_lcd_hold here deadlocks (binary semaphore, not recursive).
     if (fseek(s_rom_file, (long)base, SEEK_SET) != 0 ||
             fread(dst, 1, n, s_rom_file) != n) {
         ESP_LOGW(TAG, "ROM page 0x%lx read failed", (unsigned long)base);
         memset(dst, 0xFF, GBA_ROM_PAGE_SIZE);
         n = 0;
     }
-    bsp_lcd_release();
     if (n < GBA_ROM_PAGE_SIZE) {
         memset(dst + n, 0, GBA_ROM_PAGE_SIZE - n);
     }
