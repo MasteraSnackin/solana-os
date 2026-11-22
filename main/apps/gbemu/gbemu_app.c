@@ -5,13 +5,15 @@
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
 // its own FreeRTOS task at idle priority so the launcher, LVGL and radios
-// always preempt it; the task yields every frame. Background radios and
-// services (Wi-Fi, ESP-NOW mesh, cloud, game tick, Lua host, BLE) pause for
-// the ROM and restore on the list, HOME, or exit — same as GBA.
+// always preempt it; the task yields every frame. A prio-4 blit helper sends
+// packed 240x216 frames to the ILI9341; Peanut-GB only copies, it does not
+// wait on SPI. Background radios and services (Wi-Fi, ESP-NOW mesh, cloud,
+// game tick, Lua host, BLE) pause for the ROM and restore on the list, HOME,
+// or exit — same as GBA.
 //
-// Screen: 160x144 scaled 1.5x to 240x216, centred in the 320x218 app root
-// (status bar keeps the panel at 320x240). Each frame lands in one of two
-// RGB565 buffers; the task swaps the image source under the LVGL lock.
+// Screen: 160x144 scaled 1.5x to 240x216, centred on the 320x240 ILI9341
+// (direct panel blit, not an LVGL image). LVGL's refresh timer is paused
+// while a ROM runs; the status bar is a battery tick every 5 s.
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GB d-pad
@@ -38,8 +40,8 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "esp_lvgl_port.h"
 #include "esp_timer.h"
+#include "bsp.h"
 #include "core/os.h"
 #include "core/os_mem.h"
 #include "core/ui.h"
@@ -61,9 +63,14 @@ static const char *TAG = "gbemu";
 #define MAX_ROMS        32
 #define PATH_MAX_LEN    200
 #define SRAM_KEEP       (64 * 1024)
-#define LOCK_WAIT_MS    4
 #define CHORD_MS        250
 #define ROMS_DIR        BSP_SD_MOUNT "/roms"
+#define BLIT_TASK_STACK 3072
+#define BLIT_TASK_PRIO  4
+#define GB_BLIT_BUFS    3
+#define GB_BLIT_X       ((BOARD_LCD_H_RES - SCALE_W) / 2)
+#define GB_BLIT_Y       (OS_STATUS_H + (OS_ROOT_H - SCALE_H) / 2)
+#define GB_FB_BYTES     ((size_t)SCALE_W * (size_t)SCALE_H * sizeof(uint16_t))
 
 static const uint32_t PALETTE_HEX[4] = {0xE0F8D0, 0x88C070, 0x346856, 0x081820};
 
@@ -76,7 +83,7 @@ typedef struct {
     bool ram_dirty;
     int64_t ram_touch_us;
     uint16_t pal[4];
-    uint16_t *buf[2];
+    uint16_t *fb;
     bool drawn;
     char rom_path[PATH_MAX_LEN];
     char sav_path[PATH_MAX_LEN];
@@ -89,8 +96,16 @@ static volatile bool s_quit;
 static volatile bool s_back_to_list;
 static int64_t s_exit_since, s_save_since;
 static bool s_save_armed = true;
-static lv_image_dsc_t s_dsc[2];
-static lv_obj_t *s_root, *s_img, *s_msg, *s_hint;
+static lv_obj_t *s_root, *s_msg, *s_hint;
+static uint16_t *s_blit_fb[GB_BLIT_BUFS];
+static TaskHandle_t s_blit_task;
+static SemaphoreHandle_t s_blit_kick;
+static SemaphoreHandle_t s_blit_done;
+static portMUX_TYPE s_blit_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile int s_blit_pending = -1;
+static volatile int s_blit_sending = -1;
+static volatile int s_draw;
+static volatile bool s_blit_quit;
 static ui_list_t *s_list;
 static char s_roms[MAX_ROMS][PATH_MAX_LEN];
 static int s_rom_count;
@@ -132,7 +147,7 @@ static void draw_line(struct gb_s *gb, const uint8_t *px, const uint_fast8_t y)
 {
     emu_t *e = gb->direct.priv;
     int row = (y & 1) ? (3 * y + 1) / 2 : 3 * y / 2;
-    uint16_t *dst = e->buf[1] + row * SCALE_W;
+    uint16_t *dst = e->fb + row * SCALE_W;
     for (int x = 0; x < LCD_WIDTH; x += 2) {
         uint16_t a = e->pal[px[x] & 3], b = e->pal[px[x + 1] & 3];
         *dst++ = a;
@@ -140,7 +155,7 @@ static void draw_line(struct gb_s *gb, const uint8_t *px, const uint_fast8_t y)
         *dst++ = b;
     }
     if (!(y & 1)) {
-        memcpy(e->buf[1] + (row + 1) * SCALE_W, e->buf[1] + row * SCALE_W, SCALE_W * sizeof(uint16_t));
+        memcpy(e->fb + (row + 1) * SCALE_W, e->fb + row * SCALE_W, SCALE_W * sizeof(uint16_t));
     }
     if (y == LCD_HEIGHT - 1) {
         e->drawn = true;
@@ -241,21 +256,129 @@ static void chords(emu_t *e, int64_t now)
     }
 }
 
+static void blit_task(void *arg)
+{
+    (void)arg;
+    while (!s_blit_quit) {
+        if (xSemaphoreTake(s_blit_kick, pdMS_TO_TICKS(100)) != pdTRUE) {
+            continue;
+        }
+        for (;;) {
+            portENTER_CRITICAL(&s_blit_mux);
+            int i = s_blit_pending;
+            if (i < 0 || i == s_draw) {
+                portEXIT_CRITICAL(&s_blit_mux);
+                break;
+            }
+            s_blit_pending = -1;
+            s_blit_sending = i;
+            portEXIT_CRITICAL(&s_blit_mux);
+            (void)bsp_lcd_blit_rgb565(GB_BLIT_X, GB_BLIT_Y, SCALE_W, SCALE_H,
+                                      s_blit_fb[i], SCALE_W);
+            portENTER_CRITICAL(&s_blit_mux);
+            s_blit_sending = -1;
+            portEXIT_CRITICAL(&s_blit_mux);
+        }
+    }
+    if (s_blit_done) {
+        xSemaphoreGive(s_blit_done);
+    }
+    vTaskDelete(NULL);
+}
+
 static bool present(emu_t *e)
 {
-    if (!lvgl_port_lock(LOCK_WAIT_MS)) {
+    if (s_quit || !e || !e->fb) {
         return false;
     }
-    if (!s_quit && s_img) {
-        uint16_t *t = e->buf[0];
-        e->buf[0] = e->buf[1];
-        e->buf[1] = t;
-        lv_image_dsc_t *d = s_dsc[0].data == (const uint8_t *)e->buf[0] ? &s_dsc[0] : &s_dsc[1];
-        lv_image_set_src(s_img, d);
-        lv_obj_invalidate(s_img);
+    if (!s_blit_fb[0] || !s_blit_kick) {
+        return bsp_lcd_blit_rgb565(GB_BLIT_X, GB_BLIT_Y, SCALE_W, SCALE_H,
+                                   e->fb, SCALE_W) == ESP_OK;
     }
-    lvgl_port_unlock();
+
+    portENTER_CRITICAL(&s_blit_mux);
+    int i = s_draw;
+    s_blit_pending = i;
+    int next = i;
+    for (int n = 0; n < GB_BLIT_BUFS; n++) {
+        if (n != i && n != s_blit_sending) {
+            next = n;
+            break;
+        }
+    }
+    s_draw = next;
+    e->fb = s_blit_fb[next];
+    portEXIT_CRITICAL(&s_blit_mux);
+    xSemaphoreGive(s_blit_kick);
     return true;
+}
+
+static void blit_stop(void)
+{
+    if (s_blit_task) {
+        s_blit_quit = true;
+        if (s_blit_kick) {
+            xSemaphoreGive(s_blit_kick);
+        }
+        if (s_blit_done) {
+            (void)xSemaphoreTake(s_blit_done, pdMS_TO_TICKS(2000));
+        }
+        s_blit_task = NULL;
+    }
+    if (s_blit_kick) {
+        vSemaphoreDelete(s_blit_kick);
+        s_blit_kick = NULL;
+    }
+    if (s_blit_done) {
+        vSemaphoreDelete(s_blit_done);
+        s_blit_done = NULL;
+    }
+    for (int i = 0; i < GB_BLIT_BUFS; i++) {
+        heap_caps_free(s_blit_fb[i]);
+        s_blit_fb[i] = NULL;
+    }
+    s_blit_pending = s_blit_sending = -1;
+    s_draw = 0;
+}
+
+static bool blit_start(void)
+{
+    blit_stop();
+    for (int i = 0; i < GB_BLIT_BUFS; i++) {
+        s_blit_fb[i] = heap_caps_malloc(GB_FB_BYTES, os_mem_bulk_caps());
+    }
+    s_blit_kick = xSemaphoreCreateBinary();
+    s_blit_done = xSemaphoreCreateBinary();
+    s_blit_quit = false;
+    s_blit_pending = s_blit_sending = -1;
+    s_draw = 0;
+    if (!s_blit_fb[0] || !s_blit_fb[1] || !s_blit_fb[2] || !s_blit_kick || !s_blit_done ||
+        xTaskCreate(blit_task, "gbblit", BLIT_TASK_STACK, NULL,
+                    BLIT_TASK_PRIO, &s_blit_task) != pdPASS) {
+        ESP_LOGW(TAG, "async blit unavailable; SPI waits on the emu task");
+        blit_stop();
+        return false;
+    }
+    return true;
+}
+
+static void play_video(bool on)
+{
+    if (on) {
+        lv_obj_set_style_bg_color(s_root, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(s_root, LV_OPA_COVER, 0);
+        lv_obj_set_hidden(s_root, false);
+        lv_refr_now(NULL);
+        lv_obj_set_hidden(s_root, true);
+        bsp_display_pause_lvgl(true);
+        blit_start();
+    } else {
+        blit_stop();
+        bsp_display_pause_lvgl(false);
+        if (s_root) {
+            lv_obj_set_hidden(s_root, false);
+        }
+    }
 }
 
 static void free_emu(emu_t *e)
@@ -265,8 +388,11 @@ static void free_emu(emu_t *e)
     }
     heap_caps_free(e->rom);
     heap_caps_free(e->ram);
-    heap_caps_free(e->buf[0]);
-    heap_caps_free(e->buf[1]);
+    if (e->fb && e->fb != s_blit_fb[0] && e->fb != s_blit_fb[1] &&
+            e->fb != s_blit_fb[2]) {
+        heap_caps_free(e->fb);
+    }
+    e->fb = NULL;
     heap_caps_free(e);
 }
 
@@ -289,9 +415,9 @@ static void back_to_list(void *arg)
     }
     free_emu(s_emu);
     s_emu = NULL;
-    s_img = NULL;
     s_back_to_list = false;
     os_background_unpause();
+    play_video(false);
     if (s_root) {
         lv_obj_clean(s_root);
         show_picker();
@@ -435,7 +561,7 @@ static void message(const char *text)
 static void show_picker(void)
 {
     s_list = NULL;
-    s_msg = s_img = s_hint = NULL;
+    s_msg = s_hint = NULL;
     s_rom_count = 0;
 
     bsp_sd_info_t in;
@@ -463,13 +589,6 @@ static void start(const char *path)
     if (!e) {
         e = heap_caps_calloc(1, sizeof(*e), os_mem_bulk_caps());
     }
-    for (int i = 0; e && i < 2; i++) {
-        e->buf[i] = heap_caps_calloc(SCALE_W * SCALE_H, sizeof(uint16_t), os_mem_bulk_caps());
-        if (!e->buf[i]) {
-            free_emu(e);
-            e = NULL;
-        }
-    }
     if (!e) {
         os_toast("Out of memory");
         return;
@@ -478,17 +597,6 @@ static void start(const char *path)
     sav_from_rom(e->sav_path, sizeof(e->sav_path), path);
     for (int i = 0; i < 4; i++) {
         e->pal[i] = lv_color_to_u16(lv_color_hex(PALETTE_HEX[i]));
-    }
-    for (int i = 0; i < SCALE_W * SCALE_H; i++) {
-        e->buf[0][i] = e->pal[0];
-    }
-    for (int i = 0; i < 2; i++) {
-        s_dsc[i] = (lv_image_dsc_t){
-            .header = {.magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_RGB565,
-                       .w = SCALE_W, .h = SCALE_H, .stride = SCALE_W * 2},
-            .data_size = SCALE_W * SCALE_H * 2,
-            .data = (const uint8_t *)e->buf[i],
-        };
     }
 
     if (s_list) {
@@ -503,11 +611,24 @@ static void start(const char *path)
         lv_obj_delete(s_msg);
         s_msg = NULL;
     }
-    lv_obj_set_style_bg_color(s_root, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(s_root, LV_OPA_COVER, 0);
-    s_img = lv_image_create(s_root);
-    lv_image_set_src(s_img, &s_dsc[0]);
-    lv_obj_align(s_img, LV_ALIGN_CENTER, 0, 0);
+    play_video(true);
+    if (s_blit_fb[0]) {
+        e->fb = s_blit_fb[0];
+        s_draw = 0;
+    } else {
+        e->fb = heap_caps_calloc(SCALE_W * SCALE_H, sizeof(uint16_t), os_mem_bulk_caps());
+        if (!e->fb) {
+            free_emu(e);
+            play_video(false);
+            os_toast("Out of memory");
+            lv_obj_clean(s_root);
+            show_picker();
+            return;
+        }
+    }
+    for (int i = 0; i < SCALE_W * SCALE_H; i++) {
+        e->fb[i] = e->pal[0];
+    }
 
     s_emu = e;
     s_quit = false;
@@ -519,13 +640,10 @@ static void start(const char *path)
             vSemaphoreDelete(s_done);
             s_done = NULL;
         }
-        if (s_img) {
-            lv_obj_delete(s_img);
-            s_img = NULL;
-        }
         free_emu(e);
         s_emu = NULL;
         s_task = NULL;
+        play_video(false);
         lv_obj_clean(s_root);
         show_picker();
         return;
@@ -561,9 +679,9 @@ static void leave(void)
     }
     free_emu(s_emu);
     s_emu = NULL;
-    s_img = NULL;
-    s_root = NULL;
     os_background_unpause();
+    play_video(false);
+    s_root = NULL;
 }
 
 static bool key(os_key_t k, bool repeat)
