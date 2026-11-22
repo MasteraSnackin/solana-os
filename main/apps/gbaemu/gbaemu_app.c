@@ -13,15 +13,15 @@
 // Background radios and services (Wi-Fi, ESP-NOW mesh, cloud, game tick,
 // Lua host, BLE) pause for the ROM and restore on the list, HOME, or exit.
 //
-// Screen: 240x160 stretched nearest-neighbour to the full 320x240 ILI9341
-// (fills the panel, including over the status bar). Drawn frames are scaled
-// into a PSRAM double-buffer and a prio-4 blit task sends them to the panel
-// (not an LVGL image). Pack buffers are allocated after the ROM so a 4 MB
-// cart still gets the large PSRAM block. The interpreter only scales; it
-// does not wait on SPI, so DMA runs while the next frames emulate. LVGL's
+// Screen: native 240x160 centred under the 22 px status bar (panel 320x240).
+// Drawn frames are packed into a PSRAM double-buffer (2x76 KB, not the old
+// 2x153 KB fullscreen stretch) and a prio-4 blit task sends them to the
+// ILI9341 (not an LVGL image). Pack buffers are allocated after the ROM so
+// a 4 MB cart still gets the large PSRAM block. The interpreter only copies;
+// it does not wait on SPI, so DMA runs while the next frames emulate. LVGL's
 // refresh timer is paused while a ROM runs. Status-bar objects still tick
-// every 5 s but are not flushed (SPI2 is the SD card; a flush also punched
-// the bar through the stretch). Every emulated frame is drawn (frameskip 0).
+// every 5 s but are not flushed (SPI2 is the SD card). Every emulated frame
+// is drawn (frameskip 0).
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GBA d-pad
@@ -72,11 +72,9 @@ static const char *TAG = "gbaemu";
 #define TASK_PRIO       3   // below blit/OS; OS is parked on the button queue during play
 #define BLIT_TASK_STACK 3072
 #define BLIT_TASK_PRIO  4   // same as LVGL: start DMA, then block so emu runs
-#define SCALE_W         BOARD_LCD_H_RES
-#define SCALE_H         BOARD_LCD_V_RES
-#define GBA_BLIT_X      0
-#define GBA_BLIT_Y      0
-#define GBA_FB_BYTES    ((size_t)SCALE_W * (size_t)SCALE_H * sizeof(uint16_t))
+#define GBA_BLIT_X      ((BOARD_LCD_H_RES - GBA_WIDTH) / 2)
+#define GBA_BLIT_Y      (OS_STATUS_H + (OS_ROOT_H - GBA_HEIGHT) / 2)
+#define GBA_FB_BYTES    ((size_t)GBA_WIDTH * (size_t)GBA_HEIGHT * sizeof(uint16_t))
 
 static TaskHandle_t s_task;
 static SemaphoreHandle_t s_done;
@@ -123,36 +121,6 @@ static uint32_t joypad(void)
     return held;
 }
 
-/* 240×160 → 320×240 nearest-neighbour. 4 dest cols from 3 src; 3 dest rows
- * from 2 src. Stretch fills the panel (Dave asked for fullscreen). */
-static void scale_row_nn(uint16_t *dst, const uint16_t *src)
-{
-    for (int g = 0; g < GBA_WIDTH / 3; g++) {
-        uint16_t a = src[0], b = src[1], c = src[2];
-        dst[0] = a;
-        dst[1] = a;
-        dst[2] = b;
-        dst[3] = c;
-        src += 3;
-        dst += 4;
-    }
-}
-
-static void scale_gba_nn(uint16_t *dst, const uint16_t *src)
-{
-    for (int g = 0; g < GBA_HEIGHT / 2; g++) {
-        const uint16_t *r0 = src;
-        const uint16_t *r1 = src + GBA_FB_STRIDE;
-        scale_row_nn(dst, r0);
-        dst += SCALE_W;
-        scale_row_nn(dst, r0);
-        dst += SCALE_W;
-        scale_row_nn(dst, r1);
-        dst += SCALE_W;
-        src += 2 * (int)GBA_FB_STRIDE;
-    }
-}
-
 static void chords(int64_t now)
 {
     if (s_pad.exit_chord) {
@@ -195,8 +163,8 @@ static void blit_task(void *arg)
             s_blit_pending = -1;
             s_blit_sending = i;
             portEXIT_CRITICAL(&s_blit_mux);
-            (void)bsp_lcd_blit_rgb565(GBA_BLIT_X, GBA_BLIT_Y, SCALE_W, SCALE_H,
-                                      s_blit_fb[i], SCALE_W);
+            (void)bsp_lcd_blit_rgb565(GBA_BLIT_X, GBA_BLIT_Y, GBA_WIDTH, GBA_HEIGHT,
+                                      s_blit_fb[i], GBA_WIDTH);
             portENTER_CRITICAL(&s_blit_mux);
             s_blit_sending = -1;
             portEXIT_CRITICAL(&s_blit_mux);
@@ -226,7 +194,13 @@ static bool present(const uint16_t *fb)
     s_blit_packing = i;
     portEXIT_CRITICAL(&s_blit_mux);
 
-    scale_gba_nn(s_blit_fb[i], fb);
+    uint16_t *dst = s_blit_fb[i];
+    const uint16_t *src = fb;
+    for (int r = 0; r < GBA_HEIGHT; r++) {
+        memcpy(dst, src, GBA_WIDTH * sizeof(uint16_t));
+        dst += GBA_WIDTH;
+        src += GBA_FB_STRIDE;
+    }
 
     portENTER_CRITICAL(&s_blit_mux);
     s_blit_packing = -1;
@@ -274,10 +248,14 @@ static bool blit_start(void)
     if (!s_blit_fb[0] || !s_blit_fb[1] || !s_blit_kick || !s_blit_done ||
         xTaskCreate(blit_task, "gbablit", BLIT_TASK_STACK, NULL,
                     BLIT_TASK_PRIO, &s_blit_task) != pdPASS) {
-        ESP_LOGW(TAG, "async blit unavailable; SPI waits on the emu task");
+        ESP_LOGW(TAG, "async blit unavailable (PSRAM %u largest %u); SPI waits on the emu task",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
         blit_stop();
         return false;
     }
+    ESP_LOGI(TAG, "native blit 240x160 at (%d,%d), pack %u B x2",
+             GBA_BLIT_X, GBA_BLIT_Y, (unsigned)GBA_FB_BYTES);
     return true;
 }
 
@@ -291,7 +269,7 @@ static void play_video(bool on)
         lv_obj_set_hidden(s_root, true);
         bsp_display_pause_lvgl(true);
         // blit_start() waits until gba_core_boot so 4 MB carts still get
-        // the large PSRAM block (2×153 KB fullscreen buffers used to land first).
+        // the large PSRAM block. Pack buffers are native 2x76 KB.
     } else {
         blit_stop();
         bsp_display_pause_lvgl(false);
@@ -338,7 +316,7 @@ static void emu_task(void *arg)
         goto out;
     }
     if (!blit_start()) {
-        ESP_LOGW(TAG, "fullscreen blit buffers unavailable; native-size fallback");
+        ESP_LOGW(TAG, "pack buffers unavailable; blit native 240x160 on the emu task");
     }
     s_exit_since = s_save_since = 0;
     s_save_armed = true;
