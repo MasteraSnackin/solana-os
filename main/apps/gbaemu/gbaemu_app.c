@@ -20,8 +20,8 @@
 // a 4 MB cart still gets the large PSRAM block. The interpreter only copies;
 // it does not wait on SPI, so DMA runs while the next frames emulate. LVGL's
 // refresh timer is paused while a ROM runs. Status-bar objects still tick
-// every 5 s but are not flushed (SPI2 is the SD card). Frameskip 2: 1 of 3
-// PPU frames is drawn.
+// every 5 s but are not flushed (SPI2 is the SD card). Frameskip 2 on tiled
+// modes (1 of 3 PPU frames drawn); skip 3 on bitmap modes 3/4/5 (Doom 3D).
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GBA d-pad
@@ -35,7 +35,7 @@
 //   SELECT+A              write battery .sav now  (GBA SELECT + A:
 //                         LEFT+RIGHT + badge SELECT)
 //   BOOT (HOME)           OS exit; save RAM is written
-//   console `key start|l|r` injects those GBA buttons for 2000 ms
+//   console `key start|a|b|l|r [ms]` injects those GBA buttons (default 2000)
 // Battery SRAM/Flash/EEPROM is written to <rom>.sav next to the ROM (same
 // basename), on those chords, when the save buffer changes, and on quit.
 
@@ -447,8 +447,9 @@ static void emu_task(void *arg)
         if (now - stat_t >= 5000000) {
             double s = (now - stat_t) / 1e6;
             uint32_t miss = gba_core_rom_misses();
-            ESP_LOGI(TAG, "%.1f emulated fps, %.1f shown (skip 2), %.0f ms/emu-frame, %d resyncs, %u page misses, %u nonblack%s%s",
-                     emulated / s, shown / s, s * 1000.0 / (emulated > 0 ? emulated : 1), late,
+            ESP_LOGI(TAG, "%.1f emulated fps, %.1f shown (skip %d mode %d), %.0f ms/emu-frame, %d resyncs, %u page misses, %u nonblack%s%s",
+                     emulated / s, shown / s, gba_core_frameskip(), gba_core_video_mode(),
+                     s * 1000.0 / (emulated > 0 ? emulated : 1), late,
                      (unsigned)(miss - miss0), (unsigned)s_fb_nonblack,
                      s_have_picture ? "" : " loading",
                      stalls ? " stall" : "");

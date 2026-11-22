@@ -54,6 +54,16 @@ static inline uint32_t gba_core_rom_misses(void)
     return 0;
 }
 
+static inline int gba_core_frameskip(void)
+{
+    return 2;
+}
+
+static inline int gba_core_video_mode(void)
+{
+    return 0;
+}
+
 #else
 
 bool gba_core_boot(const char *rom_path, const char *sav_path);
@@ -65,6 +75,8 @@ void gba_core_save(const char *sav_path, bool force);
 bool gba_core_save_dirty(void);
 const char *gba_core_title(void);
 uint32_t gba_core_rom_misses(void);
+int gba_core_frameskip(void);
+int gba_core_video_mode(void);
 
 #endif
 

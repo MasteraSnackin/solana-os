@@ -213,22 +213,36 @@ static int cmd_open(int argc, char **argv)
 static int cmd_key(int argc, char **argv)
 {
     if (argc < 2) {
-        printf("usage: key <up|down|left|right|select|back|home|start|l|r>...\n");
+        printf("usage: key <up|down|left|right|select|back|home|start|a|b|l|r [ms]>...\n");
         return 1;
     }
     for (int i = 1; i < argc; i++) {
         uint32_t pad = 0;
         if (!strcmp(argv[i], "start")) {
             pad = 1u << 3;
+        } else if (!strcmp(argv[i], "a")) {
+            pad = 1u << 0;
+        } else if (!strcmp(argv[i], "b")) {
+            pad = 1u << 1;
         } else if (!strcmp(argv[i], "l")) {
             pad = 1u << 9;
         } else if (!strcmp(argv[i], "r")) {
             pad = 1u << 8;
         }
         if (pad) {
-            os_pad_inject(pad, PAD_INJECT_MS);
-            printf("inject %s %d ms\n", argv[i], PAD_INJECT_MS);
-            vTaskDelay(pdMS_TO_TICKS(PAD_INJECT_MS + 50));
+            const char *name = argv[i];
+            int ms = PAD_INJECT_MS;
+            if (i + 1 < argc) {
+                char *end = NULL;
+                long v = strtol(argv[i + 1], &end, 10);
+                if (end && !*end && v > 0 && v <= 8000) {
+                    ms = (int)v;
+                    i++;
+                }
+            }
+            os_pad_inject(pad, ms);
+            printf("inject %s %d ms\n", name, ms);
+            vTaskDelay(pdMS_TO_TICKS(ms + 50));
             continue;
         }
         os_key_t k = os_key_parse(argv[i]);

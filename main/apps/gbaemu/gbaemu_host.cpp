@@ -37,6 +37,7 @@ static const char *TAG = "gbaemu";
 // Fire Red's intro DMA thrashed them (~0.3 emu fps, hours to reach the
 // title). Sixteen windows hold that intro; alloc falls back to 8 if PSRAM is
 // tight after Game Boy. Tags 0–3 (first 1 MB: vectors + ARM) stay pinned.
+// Pinning more of Doom (20 windows / 2 MB pin) did not raise in-game fps.
 #define GBA_ROM_PAGES      16
 #define GBA_ROM_PAGE_SIZE  (1u << GBA_ROM_PAGE_SHIFT)
 #define GBA_ROM_PIN_TAGS   4
@@ -57,6 +58,8 @@ static FILE *s_rom_file;
 static size_t s_rom_size;
 static uint8_t *s_rom_pool;
 static int s_rom_pages;
+static int s_rom_pin_tags = GBA_ROM_PIN_TAGS;
+static int s_frameskip = 2;
 static uint8_t *s_rom_slot[GBA_ROM_PAGES];
 static uint32_t s_rom_tag[GBA_ROM_PAGES];
 static uint32_t s_rom_stamp[GBA_ROM_PAGES];
@@ -230,7 +233,7 @@ static int IRAM_ATTR rom_lru_except(int keep)
     int victim = -1;
     uint32_t oldest = ~0u;
     for (int i = 0; i < s_rom_pages; i++) {
-        if (i == keep || s_rom_tag[i] < GBA_ROM_PIN_TAGS) {
+        if (i == keep || (int)s_rom_tag[i] < s_rom_pin_tags) {
             continue;
         }
         if (victim < 0 || s_rom_stamp[i] <= oldest) {
@@ -370,15 +373,18 @@ static bool load_rom_direct(FILE *f, size_t n)
 static bool load_rom_paged(FILE *f, size_t n)
 {
     int pages = GBA_ROM_PAGES;
+    int pin = GBA_ROM_PIN_TAGS;
     s_rom_pool = ps_alloc((size_t)pages * GBA_ROM_PAGE_SIZE, "ROM cache");
     if (!s_rom_pool) {
         pages = 8;
+        pin = 2;
         s_rom_pool = ps_alloc((size_t)pages * GBA_ROM_PAGE_SIZE, "ROM cache");
     }
     if (!s_rom_pool) {
         return false;
     }
     s_rom_pages = pages;
+    s_rom_pin_tags = pin;
     for (int i = 0; i < GBA_ROM_PAGES; i++) {
         s_rom_slot[i] = NULL;
         s_rom_tag[i] = ~0u;
@@ -413,8 +419,9 @@ static bool load_rom_paged(FILE *f, size_t n)
     gba_rom_hot2 = nfill > 1 ? s_rom_slot[1] : s_rom_slot[0];
     gba_rom_hot_tag = 0;
     gba_rom_hot2_tag = nfill > 1 ? 1u : ~0u;
-    ESP_LOGI(TAG, "ROM paged from SD (%u KB file, %dx%u KB windows, %d prefilled in %d ms)",
-             (unsigned)(n >> 10), pages, (unsigned)(GBA_ROM_PAGE_SIZE >> 10), nfill,
+    ESP_LOGI(TAG, "ROM paged from SD (%u KB file, %dx%u KB windows, pin %d tags / %u KB, %d prefilled in %d ms)",
+             (unsigned)(n >> 10), pages, (unsigned)(GBA_ROM_PAGE_SIZE >> 10),
+             pin, (unsigned)((uint32_t)pin * (GBA_ROM_PAGE_SIZE >> 10)), nfill,
              (int)((esp_timer_get_time() - t0) / 1000));
     return true;
 }
@@ -586,9 +593,10 @@ extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
         flashSetSize(FLASH_128K_SZ);
         rtcEnable(true);
     }
-    // Draw 1 of 3 PPU frames (skip 2). Faster game time than skip 0 (~9/9);
-    // about ~15 emu / ~5 shown on Advance Wars. Picture is native 240x160.
-    SetFrameskip(2);
+    // Skip 2 (draw 1 of 3) on tiled modes. gba_core_frame raises that to
+    // skip 3 in bitmap modes 3/4/5 so Doom's Hangar gets more game time.
+    s_frameskip = 2;
+    SetFrameskip(s_frameskip);
 
     // flashInit() filled save RAM with 0xFF; overlay a .sav after that.
     if (s_sav[0]) {
@@ -627,6 +635,16 @@ extern "C" int gba_core_frame(uint32_t buttons, const uint16_t **fb)
     }
     s_drawn = 0;
     int n = 0;
+    // Bitmap modes 3/4/5 are Doom's 3D / heavy frames. Extra skip there
+    // (draw 1 of 4) without a global skip 3 on tiled games (Advance Wars).
+    {
+        int mode = (int)(ioMem[0] & 7);
+        int want = (mode >= 3) ? 3 : 2;
+        if (want != s_frameskip) {
+            s_frameskip = want;
+            SetFrameskip(s_frameskip);
+        }
+    }
     // Skip 2 runs ~3 PPU frames per call (~200–300 ms when paging). Re-read
     // the console inject each PPU frame so `key start` is not eaten by a
     // long CPULoop that began before the inject.
@@ -683,4 +701,14 @@ extern "C" const char *gba_core_title(void)
 extern "C" uint32_t gba_core_rom_misses(void)
 {
     return s_rom_misses;
+}
+
+extern "C" int gba_core_frameskip(void)
+{
+    return s_frameskip;
+}
+
+extern "C" int gba_core_video_mode(void)
+{
+    return s_booted ? (int)(ioMem[0] & 7) : 0;
 }
