@@ -105,13 +105,13 @@ void os_invert_apply(void);
 
 // Screenshot of the live screen over the console, see tools/badge.py.
 void os_screenshot(void);
-// While LVGL is paused (GBA/GB direct blit), `shot` calls this instead of an
+// While LVGL is paused (GBA/GB/SNES direct blit), `shot` calls this instead of an
 // LVGL refresh that would never flush. Print SHOT-BEGIN..SHOT-END and return
 // true; NULL restores the LVGL capture. Any task.
 typedef bool (*os_direct_shot_fn)(void);
 void os_set_direct_shot(os_direct_shot_fn fn);
 
-// While a heavy native app is playing (GBA or GB ROM, not the picker): stop Wi-Fi,
+// While a heavy native app is playing (GBA, GB, or SNES ROM, not the picker): stop Wi-Fi,
 // ESP-NOW mesh, the cloud task, the 250 ms game tick, Lua if a host task is
 // still alive, and BLE. The OS task sleeps on buttons and a cheap battery
 // tick instead of its 100 ms loop. Nested calls are no-ops. Matching unpause

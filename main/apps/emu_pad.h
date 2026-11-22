@@ -1,6 +1,6 @@
 #pragma once
 
-// Chorded pad for gbemu / gbaemu on the six-key badge (no Start, no L/R).
+// Chorded pad for gbemu / gbaemu / snesemu on the six-key badge (no Start, no L/R).
 // Opposite d-pad keys latch: UP+DOWN is START (not UP then DOWN), LEFT+RIGHT
 // is SELECT. SELECT+CANCEL is a second START. LEFT+RIGHT+UP/DOWN are L/R.
 // BOOT stays HOME.
