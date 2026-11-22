@@ -7,14 +7,16 @@
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
 // its own FreeRTOS task at priority 3 (below the prio-4 blit helper and OS).
 // Late frames do not yield. A prio-4 blit helper sends
-// packed 240x216 frames to the ILI9341; Peanut-GB only copies, it does not
+// packed 320x240 frames to the ILI9341; Peanut-GB only copies, it does not
 // wait on SPI. Background radios and services (Wi-Fi, ESP-NOW mesh, cloud,
 // game tick, Lua host, BLE) pause for the ROM and restore on the list, HOME,
 // or exit — same as GBA.
 //
-// Screen: 160x144 scaled 1.5x to 240x216, centred on the 320x240 ILI9341
-// (direct panel blit, not an LVGL image). LVGL's refresh timer is paused
-// while a ROM runs; the status bar is a battery tick every 5 s.
+// Screen: 160x144 stretched nearest-neighbour to the full 320x240 ILI9341
+// (fills the panel, including over the status bar). LVGL's refresh timer is
+// paused while a ROM runs. Status-bar objects still tick every 5 s but are
+// not flushed (SPI2 is the SD card; a flush also punched the bar through
+// the stretch).
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GB d-pad
@@ -57,8 +59,8 @@
 
 static const char *TAG = "gbemu";
 
-#define SCALE_W         240
-#define SCALE_H         216
+#define SCALE_W         BOARD_LCD_H_RES
+#define SCALE_H         BOARD_LCD_V_RES
 #define FRAME_US        16743
 #define SAVE_EVERY_US   (60 * 1000000LL)
 #define SAVE_IDLE_US    (1 * 1000000LL)
@@ -72,8 +74,8 @@ static const char *TAG = "gbemu";
 #define BLIT_TASK_STACK 3072
 #define BLIT_TASK_PRIO  4
 #define GB_BLIT_BUFS    3
-#define GB_BLIT_X       ((BOARD_LCD_H_RES - SCALE_W) / 2)
-#define GB_BLIT_Y       (OS_STATUS_H + (OS_ROOT_H - SCALE_H) / 2)
+#define GB_BLIT_X       0
+#define GB_BLIT_Y       0
 #define GB_FB_BYTES     ((size_t)SCALE_W * (size_t)SCALE_H * sizeof(uint16_t))
 
 static const uint32_t PALETTE_HEX[4] = {0xE0F8D0, 0x88C070, 0x346856, 0x081820};
@@ -145,20 +147,25 @@ static void gb_err(struct gb_s *gb, const enum gb_error_e err, const uint16_t ad
     s_quit = true;
 }
 
-// Line y of 144 into rows of the 240x216 back buffer: even lines fill two
-// rows, odd lines one. Columns: 2 pixels -> 3.
+// Line y of 144 into the 320x240 back buffer. Width is 2x. Height is 5 dest
+// rows from 3 src (2, 2, then 1) so 144 fills 240. Stretch fills the panel
+// (Dave asked for fullscreen, same as GBA).
 static IRAM_ATTR void draw_line(struct gb_s *gb, const uint8_t *px, const uint_fast8_t y)
 {
     emu_t *e = gb->direct.priv;
-    int row = (y & 1) ? (3 * y + 1) / 2 : 3 * y / 2;
+    int g = y / 3;
+    int r = y - g * 3;
+    int row = g * 5 + (r == 2 ? 4 : r * 2);
     uint16_t *dst = e->fb + row * SCALE_W;
     for (int x = 0; x < LCD_WIDTH; x += 2) {
         uint16_t a = e->pal[px[x] & 3], b = e->pal[px[x + 1] & 3];
-        *dst++ = a;
-        *dst++ = a;
-        *dst++ = b;
+        dst[0] = a;
+        dst[1] = a;
+        dst[2] = b;
+        dst[3] = b;
+        dst += 4;
     }
-    if (!(y & 1)) {
+    if (r != 2) {
         memcpy(e->fb + (row + 1) * SCALE_W, e->fb + row * SCALE_W, SCALE_W * sizeof(uint16_t));
     }
     if (y == LCD_HEIGHT - 1) {
