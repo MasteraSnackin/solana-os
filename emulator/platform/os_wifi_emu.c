@@ -268,6 +268,21 @@ void os_wifi_resume(void)
     }
 }
 
+void os_wifi_pause(void)
+{
+    os_wifi_suspend();
+}
+
+void os_wifi_unpause(void)
+{
+    os_wifi_resume();
+}
+
+bool os_wifi_paused(void)
+{
+    return s_state == OS_WIFI_SUSPENDED;
+}
+
 void os_wifi_set_enabled(bool on)
 {
     if (on) {

@@ -5,7 +5,8 @@
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
 // its own FreeRTOS task at idle priority so the launcher, LVGL and radios
-// always preempt it; the task yields every frame.
+// always preempt it; the task yields every frame. Wi-Fi is paused (driver
+// stopped) while a ROM is running and restored when play ends.
 //
 // Screen: 160x144 scaled 1.5x to 240x216, centred in the 320x218 app root
 // (status bar keeps the panel at 320x240). Each frame lands in one of two
@@ -38,6 +39,7 @@
 #include "esp_timer.h"
 #include "core/os.h"
 #include "core/os_mem.h"
+#include "core/os_wifi.h"
 #include "core/ui.h"
 
 #define ENABLE_SOUND                0
@@ -321,6 +323,7 @@ static void back_to_list(void *arg)
     s_emu = NULL;
     s_img = NULL;
     s_back_to_list = false;
+    os_wifi_unpause();
     if (s_root) {
         lv_obj_clean(s_root);
         show_picker();
@@ -365,6 +368,7 @@ static void emu_task(void *arg)
     char title[17];
     ESP_LOGI(TAG, "%s: %u KB ROM, %u B cart RAM", gb_get_rom_name(&e->gb, title),
              (unsigned)(e->rom_size >> 10), (unsigned)e->ram_size);
+    os_wifi_pause();
 
     int64_t next = esp_timer_get_time(), last_save = next, stat_t = next;
     int frames = 0, shown = 0, late = 0;
@@ -588,6 +592,7 @@ static void leave(void)
     s_emu = NULL;
     s_img = NULL;
     s_root = NULL;
+    os_wifi_unpause();
 }
 
 static bool key(os_key_t k, bool repeat)

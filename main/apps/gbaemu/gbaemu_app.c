@@ -6,6 +6,8 @@
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
 // its own FreeRTOS task below LVGL/OS (priority 3) so the status bar still
 // preempts it; it only sleeps when ahead of 60 Hz, not 10 ms every frame.
+// Wi-Fi is paused (driver stopped) while a ROM is running and restored when
+// play ends (ROM list, HOME, or app exit).
 //
 // Screen: native 240x160 centred in the 320x218 app root (status bar keeps
 // the panel at 320x240). 44VBA pix (stride 256) is the LVGL image; skipped
@@ -37,6 +39,7 @@
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
 #include "core/os.h"
+#include "core/os_wifi.h"
 #include "core/ui.h"
 #include "gbaemu_host.h"
 
@@ -193,6 +196,7 @@ static void back_to_list(void *arg)
         s_done = NULL;
     }
     gba_core_halt();
+    os_wifi_unpause();
     s_img = NULL;
     s_back_to_list = false;
     if (s_root) {
@@ -209,6 +213,7 @@ static void emu_task(void *arg)
         s_back_to_list = true;
         goto out;
     }
+    os_wifi_pause();
     s_exit_since = s_save_since = 0;
     s_save_armed = true;
 
@@ -407,6 +412,7 @@ static void leave(void)
         s_done = NULL;
     }
     gba_core_halt();
+    os_wifi_unpause();
     s_img = NULL;
     s_root = NULL;
 }
