@@ -1,7 +1,7 @@
 // Game Boy: plays a .gb / .gbc ROM from the microSD card (/sdcard/roms).
 //
 // The CPU/PPU core is Peanut-GB (peanut_gb.h, MIT, vendored next to this file).
-// peanut_gb_cpu.c builds the interpreter at -O3 in IRAM; LCD stays in flash.
+// peanut_gb_cpu.c builds the interpreter and LCD line at -O3 in IRAM.
 // No ROM ships with the firmware: copy a legally owned dump onto the card.
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
@@ -146,7 +146,7 @@ static void gb_err(struct gb_s *gb, const enum gb_error_e err, const uint16_t ad
 
 // Line y of 144 into rows of the 240x216 back buffer: even lines fill two
 // rows, odd lines one. Columns: 2 pixels -> 3.
-static void draw_line(struct gb_s *gb, const uint8_t *px, const uint_fast8_t y)
+static IRAM_ATTR void draw_line(struct gb_s *gb, const uint8_t *px, const uint_fast8_t y)
 {
     emu_t *e = gb->direct.priv;
     int row = (y & 1) ? (3 * y + 1) / 2 : 3 * y / 2;

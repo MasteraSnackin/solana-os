@@ -27,8 +27,8 @@ set_property(SOURCE ${SOLANA_OS_GBA_SRCS} APPEND PROPERTY COMPILE_OPTIONS
     -DFRONTEND_SUPPORTS_RGB565 -DHAVE_STDINT_H -DINLINE=inline -DLSB_FIRST
     -DUSE_FRAME_SKIP -DUSE_TWEAKS -DGBA_MUTE_AUDIO)
 
-# Peanut-GB CPU decode/execute: -O3 in IRAM. LCD stays in flash. gbemu_app.c
-# keeps the project's default -Os flags (blit, picker, save).
+# Peanut-GB CPU decode/execute and LCD line: -O3 in IRAM. gbemu_app.c
+# keeps the project's default -Os flags (picker, blit helper, save).
 set_property(SOURCE apps/gbemu/peanut_gb_cpu.c APPEND PROPERTY COMPILE_OPTIONS
     -O3 -DPEANUT_GB_CPU_IRAM -Wno-error
     -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable

@@ -109,8 +109,8 @@
  * defined. */
 // #define PEANUT_GB_HEADER_ONLY
 
-/* ESP32-C5: put the CPU decode/execute hot path in IRAM. peanut_gb_cpu.c
- * defines PEANUT_GB_CPU_IRAM; LCD (__gb_draw_line) stays in flash. */
+/* ESP32-C5: CPU decode/execute and LCD (__gb_draw_line) in IRAM.
+ * peanut_gb_cpu.c defines PEANUT_GB_CPU_IRAM. */
 #ifndef PGB_CPU_IRAM
 # if defined(PEANUT_GB_CPU_IRAM)
 #  include "esp_attr.h"
@@ -1458,7 +1458,7 @@ struct sprite_data {
 };
 
 #if PEANUT_GB_HIGH_LCD_ACCURACY
-static int compare_sprites(const struct sprite_data *const sd1, const struct sprite_data *const sd2)
+static PGB_CPU_IRAM int compare_sprites(const struct sprite_data *const sd1, const struct sprite_data *const sd2)
 {
 	int x_res;
 
@@ -1470,7 +1470,7 @@ static int compare_sprites(const struct sprite_data *const sd1, const struct spr
 }
 #endif
 
-void __gb_draw_line(struct gb_s *gb)
+PGB_CPU_IRAM void __gb_draw_line(struct gb_s *gb)
 {
 	uint8_t pixels[160] = {0};
 
