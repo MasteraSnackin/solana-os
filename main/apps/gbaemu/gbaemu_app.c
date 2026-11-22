@@ -35,7 +35,7 @@
 //   SELECT+A              write battery .sav now  (GBA SELECT + A:
 //                         LEFT+RIGHT + badge SELECT)
 //   BOOT (HOME)           OS exit; save RAM is written
-//   console `key start|l|r` injects those GBA buttons for 350 ms
+//   console `key start|l|r` injects those GBA buttons for 2000 ms
 // Battery SRAM/Flash/EEPROM is written to <rom>.sav next to the ROM (same
 // basename), on those chords, when the save buffer changes, and on quit.
 
@@ -53,6 +53,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "mbedtls/base64.h"
 #include "bsp.h"
 #include "core/os.h"
 #include "core/ui.h"
@@ -91,7 +92,10 @@ static portMUX_TYPE s_blit_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile int s_blit_pending = -1;
 static volatile int s_blit_sending = -1;
 static volatile int s_blit_packing = -1;
+static volatile int s_blit_shot = -1;
 static volatile bool s_blit_quit;
+static volatile unsigned s_fb_nonblack;
+static volatile bool s_have_picture;
 static int64_t s_exit_since, s_save_since;
 static bool s_save_armed = true;
 static lv_obj_t *s_root, *s_msg, *s_hint;
@@ -176,18 +180,46 @@ static void blit_task(void *arg)
     vTaskDelete(NULL);
 }
 
+static unsigned fb_nonblack(const uint16_t *fb, int stride)
+{
+    unsigned n = 0;
+    for (int r = 0; r < GBA_HEIGHT; r++) {
+        const uint16_t *row = fb + r * stride;
+        for (int c = 0; c < GBA_WIDTH; c++) {
+            if (row[c]) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
 static bool present(const uint16_t *fb)
 {
     if (s_quit || !fb) {
         return false;
     }
+    unsigned nb = fb_nonblack(fb, GBA_FB_STRIDE);
+    s_fb_nonblack = nb;
+    // Forced-blank / uninit pix is all 0. Blitting that punched a black 240x160
+    // hole through the frozen "Loading…" label, which looked like a hang.
+    if (!s_have_picture && nb < 80) {
+        return true;
+    }
+    s_have_picture = true;
     if (!s_blit_fb[0] || !s_blit_fb[1] || !s_blit_kick) {
         return bsp_lcd_blit_rgb565(GBA_BLIT_X, GBA_BLIT_Y, GBA_WIDTH, GBA_HEIGHT,
                                    fb, GBA_FB_STRIDE) == ESP_OK;
     }
 
     portENTER_CRITICAL(&s_blit_mux);
-    int i = (s_blit_sending == 0) ? 1 : 0;
+    bool busy0 = (s_blit_sending == 0 || s_blit_shot == 0);
+    bool busy1 = (s_blit_sending == 1 || s_blit_shot == 1);
+    if (busy0 && busy1) {
+        portEXIT_CRITICAL(&s_blit_mux);
+        return true;
+    }
+    int i = busy0 ? 1 : 0;
     if (s_blit_pending == i) {
         s_blit_pending = -1;
     }
@@ -233,7 +265,56 @@ static void blit_stop(void)
     heap_caps_free(s_blit_fb[0]);
     heap_caps_free(s_blit_fb[1]);
     s_blit_fb[0] = s_blit_fb[1] = NULL;
-    s_blit_pending = s_blit_sending = s_blit_packing = -1;
+    s_blit_pending = s_blit_sending = s_blit_packing = s_blit_shot = -1;
+    s_have_picture = false;
+    s_fb_nonblack = 0;
+}
+
+static bool gba_direct_shot(void)
+{
+    uint16_t *fb = NULL;
+    unsigned nb = s_fb_nonblack;
+    bool picture = s_have_picture;
+
+    portENTER_CRITICAL(&s_blit_mux);
+    int i = s_blit_pending;
+    if (i < 0 || i == s_blit_packing) {
+        i = s_blit_sending;
+    }
+    if (i < 0 || i == s_blit_packing) {
+        i = (s_blit_packing == 0) ? 1 : 0;
+    }
+    if (s_blit_fb[i]) {
+        s_blit_shot = i;
+        fb = s_blit_fb[i];
+    }
+    portEXIT_CRITICAL(&s_blit_mux);
+
+    esp_log_level_set("*", ESP_LOG_NONE);
+    printf("\ngba shot %s %u nonblack\n", picture ? "picture" : "loading", (unsigned)nb);
+    printf("SHOT-BEGIN %d %d\n", BOARD_LCD_H_RES, BOARD_LCD_V_RES);
+    static uint16_t row[BOARD_LCD_H_RES];
+    static unsigned char b64[BOARD_LCD_H_RES * 2 * 4 / 3 + 8];
+    for (int y = 0; y < BOARD_LCD_V_RES; y++) {
+        memset(row, 0, sizeof(row));
+        if (picture && fb && y >= GBA_BLIT_Y && y < GBA_BLIT_Y + GBA_HEIGHT) {
+            memcpy(row + GBA_BLIT_X, fb + (y - GBA_BLIT_Y) * GBA_WIDTH,
+                   GBA_WIDTH * sizeof(uint16_t));
+        }
+        size_t n = 0;
+        mbedtls_base64_encode(b64, sizeof(b64), &n, (const unsigned char *)row,
+                              sizeof(row));
+        b64[n] = 0;
+        printf("SHOT %d %d %d %s\n", 0, y, BOARD_LCD_H_RES, b64);
+    }
+    printf("SHOT-END\n");
+    fflush(stdout);
+    esp_log_level_set("*", ESP_LOG_INFO);
+
+    portENTER_CRITICAL(&s_blit_mux);
+    s_blit_shot = -1;
+    portEXIT_CRITICAL(&s_blit_mux);
+    return true;
 }
 
 static bool blit_start(void)
@@ -244,7 +325,7 @@ static bool blit_start(void)
     s_blit_kick = xSemaphoreCreateBinary();
     s_blit_done = xSemaphoreCreateBinary();
     s_blit_quit = false;
-    s_blit_pending = s_blit_sending = s_blit_packing = -1;
+    s_blit_pending = s_blit_sending = s_blit_packing = s_blit_shot = -1;
     if (!s_blit_fb[0] || !s_blit_fb[1] || !s_blit_kick || !s_blit_done ||
         xTaskCreate(blit_task, "gbablit", BLIT_TASK_STACK, NULL,
                     BLIT_TASK_PRIO, &s_blit_task) != pdPASS) {
@@ -265,10 +346,12 @@ static void play_video(bool on)
         // Keep the last LVGL frame (a "Loading…" label) on the panel while
         // the ROM copies. Painting black here made 8 MB paged carts look dead
         // for several seconds before the first 240x160 blit.
+        os_set_direct_shot(gba_direct_shot);
         bsp_display_pause_lvgl(true);
         // blit_start() waits until gba_core_boot so 4 MB carts still get
         // the large PSRAM block. Pack buffers are native 2x76 KB.
     } else {
+        os_set_direct_shot(NULL);
         blit_stop();
         bsp_display_pause_lvgl(false);
         if (s_root) {
@@ -323,8 +406,10 @@ static void emu_task(void *arg)
 
     int64_t next = esp_timer_get_time(), last_save = next, stat_t = next, last_touch = next;
     int64_t last_idle = next;
-    int emulated = 0, shown = 0, late = 0;
+    int emulated = 0, shown = 0, late = 0, stalls = 0;
     uint32_t miss0 = gba_core_rom_misses();
+    s_have_picture = false;
+    s_fb_nonblack = 0;
     while (!s_quit) {
         int64_t now = esp_timer_get_time();
         emu_pad_sample(&s_pad);
@@ -341,6 +426,8 @@ static void emu_task(void *arg)
                 last_touch = now;
             }
             next += (int64_t)n * FRAME_US;
+        } else {
+            stalls++;
         }
         now = esp_timer_get_time();
         // IDLE (prio 0) pets the task WDT. Yielding never runs it; one tick
@@ -360,12 +447,14 @@ static void emu_task(void *arg)
         if (now - stat_t >= 5000000) {
             double s = (now - stat_t) / 1e6;
             uint32_t miss = gba_core_rom_misses();
-            ESP_LOGI(TAG, "%.1f emulated fps, %.1f shown (skip 2), %.0f ms/emu-frame, %d resyncs, %u page misses",
+            ESP_LOGI(TAG, "%.1f emulated fps, %.1f shown (skip 2), %.0f ms/emu-frame, %d resyncs, %u page misses, %u nonblack%s%s",
                      emulated / s, shown / s, s * 1000.0 / (emulated > 0 ? emulated : 1), late,
-                     (unsigned)(miss - miss0));
+                     (unsigned)(miss - miss0), (unsigned)s_fb_nonblack,
+                     s_have_picture ? "" : " loading",
+                     stalls ? " stall" : "");
             miss0 = miss;
             stat_t = now;
-            emulated = shown = late = 0;
+            emulated = shown = late = stalls = 0;
         }
         if (gba_core_save_dirty() && now - last_touch >= SAVE_IDLE_US) {
             gba_core_save(s_sav_path, false);

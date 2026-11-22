@@ -33,10 +33,13 @@ static const char *TAG = "gbaemu";
 #define ROM_MAX            (16u << 20)
 #define PIX_BYTES          (4 * PIX_BUFFER_SCREEN_WIDTH * 160)
 #define GBA_RAM_RESERVE    0x140000u
-// 8×256 KB is the working set that still leaves ~5 MB PSRAM. 16 windows
-// (4 MB) was tried: GTA Advance fell from ~20–40 emulated fps to ~8.
-#define GBA_ROM_PAGES      8
+// Up to 16×256 KB (4 MB). Eight windows let GTA's 3D attract run faster but
+// Fire Red's intro DMA thrashed them (~0.3 emu fps, hours to reach the
+// title). Sixteen windows hold that intro; alloc falls back to 8 if PSRAM is
+// tight after Game Boy. Tags 0–3 (first 1 MB: vectors + ARM) stay pinned.
+#define GBA_ROM_PAGES      16
 #define GBA_ROM_PAGE_SIZE  (1u << GBA_ROM_PAGE_SHIFT)
+#define GBA_ROM_PIN_TAGS   4
 
 uint8_t *gba_rom_direct;
 uint8_t *gba_rom_hot;
@@ -59,6 +62,7 @@ static uint32_t s_rom_tag[GBA_ROM_PAGES];
 static uint32_t s_rom_stamp[GBA_ROM_PAGES];
 static uint32_t s_rom_tick;
 static uint32_t s_rom_misses;
+static bool s_flash128;
 
 static void log_heap(const char *when)
 {
@@ -167,6 +171,7 @@ static void rom_page_reset(void)
     s_rom_size = 0;
     s_rom_tick = 0;
     s_rom_misses = 0;
+    s_flash128 = false;
 }
 
 static void free_core(void)
@@ -222,8 +227,22 @@ static int IRAM_ATTR rom_find_tag(uint32_t tag)
 
 static int IRAM_ATTR rom_lru_except(int keep)
 {
-    int victim = keep == 0 ? 1 : 0;
-    uint32_t oldest = s_rom_stamp[victim];
+    int victim = -1;
+    uint32_t oldest = ~0u;
+    for (int i = 0; i < s_rom_pages; i++) {
+        if (i == keep || s_rom_tag[i] < GBA_ROM_PIN_TAGS) {
+            continue;
+        }
+        if (victim < 0 || s_rom_stamp[i] <= oldest) {
+            oldest = s_rom_stamp[i];
+            victim = i;
+        }
+    }
+    if (victim >= 0) {
+        return victim;
+    }
+    victim = keep == 0 ? 1 : 0;
+    oldest = s_rom_stamp[victim];
     for (int i = 0; i < s_rom_pages; i++) {
         if (i != keep && s_rom_stamp[i] <= oldest) {
             oldest = s_rom_stamp[i];
@@ -353,10 +372,19 @@ static bool load_rom_paged(FILE *f, size_t n)
     int pages = GBA_ROM_PAGES;
     s_rom_pool = ps_alloc((size_t)pages * GBA_ROM_PAGE_SIZE, "ROM cache");
     if (!s_rom_pool) {
+        pages = 8;
+        s_rom_pool = ps_alloc((size_t)pages * GBA_ROM_PAGE_SIZE, "ROM cache");
+    }
+    if (!s_rom_pool) {
         return false;
     }
     s_rom_pages = pages;
     for (int i = 0; i < GBA_ROM_PAGES; i++) {
+        s_rom_slot[i] = NULL;
+        s_rom_tag[i] = ~0u;
+        s_rom_stamp[i] = 0;
+    }
+    for (int i = 0; i < pages; i++) {
         s_rom_slot[i] = s_rom_pool + (size_t)i * GBA_ROM_PAGE_SIZE;
         s_rom_tag[i] = ~0u;
         s_rom_stamp[i] = 0;
@@ -391,6 +419,84 @@ static bool load_rom_paged(FILE *f, size_t n)
     return true;
 }
 
+// Fire Red / Ultra Violet hang on a white screen if the chip ID is 64K Sanyo
+// (44VBA default). FLASH1M_Vxxx wants 128K Macronix.
+static bool buf_has_id(const uint8_t *p, size_t n, const char *id)
+{
+    size_t idn = strlen(id);
+    if (!p || n < idn) {
+        return false;
+    }
+    for (size_t i = 0; i + idn <= n; i++) {
+        if (p[i] == (uint8_t)id[0] && memcmp(p + i, id, idn) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool file_has_id(FILE *f, size_t n, const char *id)
+{
+    size_t idn = strlen(id);
+    const size_t chunk = 64u << 10;
+    uint8_t *buf = ps_alloc(chunk + idn, "save-id scan");
+    if (!buf || !f) {
+        heap_caps_free(buf);
+        return false;
+    }
+    long saved = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    size_t off = 0, carry = 0;
+    bool found = false;
+    while (off < n) {
+        size_t want = chunk;
+        if (want > n - off) {
+            want = n - off;
+        }
+        if (fread(buf + carry, 1, want, f) != want) {
+            clearerr(f);
+            fseek(f, (long)off, SEEK_SET);
+            if (fread(buf + carry, 1, want, f) != want) {
+                break;
+            }
+        }
+        size_t have = want + carry;
+        if (buf_has_id(buf, have, id)) {
+            found = true;
+            break;
+        }
+        carry = idn > 1 ? idn - 1 : 0;
+        if (carry > have) {
+            carry = have;
+        }
+        memmove(buf, buf + have - carry, carry);
+        off += want;
+    }
+    fseek(f, saved < 0 ? 0 : saved, SEEK_SET);
+    heap_caps_free(buf);
+    return found;
+}
+
+static void detect_flash128(void)
+{
+    const char *id = "FLASH1M_V";
+    if (s_rom_paged) {
+        for (int i = 0; i < s_rom_pages && !s_flash128; i++) {
+            if (s_rom_slot[i] && buf_has_id(s_rom_slot[i], GBA_ROM_PAGE_SIZE, id)) {
+                s_flash128 = true;
+            }
+        }
+        if (!s_flash128 && s_rom_file) {
+            s_flash128 = file_has_id(s_rom_file, s_rom_size, id);
+        }
+    } else if (rom && s_rom_size) {
+        s_flash128 = buf_has_id(rom, s_rom_size, id);
+    }
+    if (s_flash128) {
+        ESP_LOGI(TAG, "ROM id FLASH1M -> 128K flash + RTC");
+    }
+}
+
 // Whole cart in PSRAM when it still leaves room for GBA RAM. Otherwise a
 // small SD window cache (not a 32 MB pad).
 static bool load_rom(const char *path, size_t *size)
@@ -421,6 +527,7 @@ static bool load_rom(const char *path, size_t *size)
         return false;
     }
     *size = (size_t)n;
+    detect_flash128();
     log_heap("after ROM load");
     return true;
 }
@@ -454,6 +561,7 @@ extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
         os_toast("Out of memory for GBA");
         return false;
     }
+    memset(pix, 0, PIX_BYTES);
 
     if (file_size >= 0xAC + 12) {
         memcpy(s_title, gba_rom_ptr(0xA0), 12);
@@ -474,6 +582,10 @@ extern "C" bool gba_core_boot(const char *rom_path, const char *sav_path)
     CPUInit(NULL, false);
     CPUReset();
     CPUSetRomMask((uint32_t)wrap - 1);
+    if (s_flash128) {
+        flashSetSize(FLASH_128K_SZ);
+        rtcEnable(true);
+    }
     // Draw 1 of 3 PPU frames (skip 2). Faster game time than skip 0 (~9/9);
     // about ~15 emu / ~5 shown on Advance Wars. Picture is native 240x160.
     SetFrameskip(2);
@@ -513,11 +625,14 @@ extern "C" int gba_core_frame(uint32_t buttons, const uint16_t **fb)
     if (!s_booted) {
         return 0;
     }
-    joy = buttons;
-    UpdateJoypad();
     s_drawn = 0;
     int n = 0;
+    // Skip 2 runs ~3 PPU frames per call (~200–300 ms when paging). Re-read
+    // the console inject each PPU frame so `key start` is not eaten by a
+    // long CPULoop that began before the inject.
     while (!s_drawn && n < 8) {
+        joy = buttons | os_pad_injected();
+        UpdateJoypad();
         CPULoop();
         n++;
     }

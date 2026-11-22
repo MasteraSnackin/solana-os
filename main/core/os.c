@@ -556,6 +556,12 @@ static void on_buttons(uint32_t pressed, uint32_t changed)
 
 static lv_display_flush_cb_t s_orig_flush;
 static volatile bool s_capturing;
+static os_direct_shot_fn s_direct_shot;
+
+void os_set_direct_shot(os_direct_shot_fn fn)
+{
+    s_direct_shot = fn;
+}
 
 static void capture_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
 {
@@ -613,9 +619,14 @@ static void repin_display_events(void)
 }
 
 // OS task (LVGL locked): arm the capture; the LVGL task renders it next.
+// Direct blit (GBA/GB) pauses the refresh timer, so an LVGL invalidate never
+// flushes — dump that app's last packed frame instead.
 static void take_screenshot(void)
 {
     if (s_capturing) {
+        return;
+    }
+    if (bsp_display_lvgl_paused() && s_direct_shot && s_direct_shot()) {
         return;
     }
     lv_display_t *disp = lv_display_get_default();
