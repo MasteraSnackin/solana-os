@@ -5,8 +5,8 @@
 // No ROM ships with the firmware: copy a legally owned dump onto the card.
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
-// its own FreeRTOS task at idle priority so the launcher, LVGL and radios
-// always preempt it; the task yields every frame. A prio-4 blit helper sends
+// its own FreeRTOS task at priority 3 (below the prio-4 blit helper and OS).
+// Late frames do not yield. A prio-4 blit helper sends
 // packed 240x216 frames to the ILI9341; Peanut-GB only copies, it does not
 // wait on SPI. Background radios and services (Wi-Fi, ESP-NOW mesh, cloud,
 // game tick, Lua host, BLE) pause for the ROM and restore on the list, HOME,
@@ -68,6 +68,7 @@ static const char *TAG = "gbemu";
 #define SRAM_KEEP       (64 * 1024)
 #define CHORD_MS        250
 #define ROMS_DIR        BSP_SD_MOUNT "/roms"
+#define TASK_PRIO       3   // below blit/OS so HOME still preempts
 #define BLIT_TASK_STACK 3072
 #define BLIT_TASK_PRIO  4
 #define GB_BLIT_BUFS    3
@@ -468,7 +469,7 @@ static void emu_task(void *arg)
              (unsigned)(e->rom_size >> 10), (unsigned)e->ram_size);
     os_background_pause();
 
-    int64_t next = esp_timer_get_time(), last_save = next, stat_t = next;
+    int64_t next = esp_timer_get_time(), last_save = next, stat_t = next, last_idle = next;
     int frames = 0, shown = 0, late = 0;
     while (!s_quit) {
         int64_t now = esp_timer_get_time();
@@ -485,14 +486,16 @@ static void emu_task(void *arg)
         }
         now = esp_timer_get_time();
         next += FRAME_US;
-        if (next - now >= 10000) {
+        // IDLE pets the task WDT. Late frames skip yield so emu keeps the core;
+        // one tick every ~1 s is enough. Ahead-of-time still sleeps.
+        if (now - last_idle >= 1000000) {
+            vTaskDelay(1);
+            last_idle = now;
+        } else if (next - now >= 10000) {
             vTaskDelay(pdMS_TO_TICKS((next - now) / 1000));
-        } else {
-            if (now - next > 100000) {
-                next = now;
-                late++;
-            }
-            vTaskDelay(0);
+        } else if (now - next > 100000) {
+            next = now;
+            late++;
         }
         frames++;
         if (now - stat_t >= 5000000) {
@@ -637,7 +640,7 @@ static void start(const char *path)
     s_quit = false;
     s_back_to_list = false;
     s_done = xSemaphoreCreateBinary();
-    if (!s_done || xTaskCreate(emu_task, "gbemu", 6144, NULL, tskIDLE_PRIORITY, &s_task) != pdPASS) {
+    if (!s_done || xTaskCreate(emu_task, "gbemu", 6144, NULL, TASK_PRIO, &s_task) != pdPASS) {
         os_toast("Can't start the emulator task");
         if (s_done) {
             vSemaphoreDelete(s_done);
