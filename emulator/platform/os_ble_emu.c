@@ -754,6 +754,13 @@ bool os_ble_active(void)
     return s_owner != NULL;
 }
 
+void os_ble_pause(void)
+{
+    if (s_owner) {
+        os_ble_stop(s_owner);
+    }
+}
+
 bool os_ble_address(os_ble_addr_t *out)
 {
     if (!s_owner) {

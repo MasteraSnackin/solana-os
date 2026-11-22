@@ -4,17 +4,19 @@
 // No ROM ships with the firmware: copy a legally owned dump onto the card.
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
-// its own FreeRTOS task below LVGL/OS (priority 3) so the status bar still
-// preempts it; it only sleeps when ahead of 60 Hz, not 10 ms every frame.
-// Wi-Fi is paused (driver stopped) while a ROM is running and restored when
-// play ends (ROM list, HOME, or app exit).
+// its own FreeRTOS task at priority 3 (below the prio-4 blit helper and OS).
+// While a ROM runs the OS task sleeps on the button queue plus a 5 s battery
+// tick, so it does not steal the chip. Matching OS/blit at 4 was tried:
+// Advance Wars gained a little, GTA Advance (paged) dropped to ~8 emu fps.
+// Background radios and services (Wi-Fi, ESP-NOW mesh, cloud, game tick,
+// Lua host, BLE) pause for the ROM and restore on the list, HOME, or exit.
 //
 // Screen: native 240x160 centred under the 22 px status bar (panel 320x240).
 // Drawn frames are packed into a PSRAM double-buffer and a prio-4 blit task
 // sends them to the ILI9341 (not an LVGL image). The interpreter only copies;
 // it does not wait on SPI, so DMA runs while the next frames emulate. LVGL's
-// refresh timer is paused while a ROM runs; the status bar still updates once
-// a second via lv_refr_now. Skipped PPU frames are not blitted.
+// refresh timer is paused while a ROM runs; the status bar is a battery tick
+// every 5 s via lv_refr_now. Skipped PPU frames are not blitted.
 //
 // Button chords (6 front keys + BOOT on the back; calibrated os_key map):
 //   d-pad                 GBA d-pad
@@ -45,7 +47,6 @@
 #include "esp_timer.h"
 #include "bsp.h"
 #include "core/os.h"
-#include "core/os_wifi.h"
 #include "core/ui.h"
 #include "apps/emu_pad.h"
 #include "gbaemu_host.h"
@@ -60,7 +61,7 @@ static const char *TAG = "gbaemu";
 #define CHORD_MS        250
 #define ROMS_DIR        BSP_SD_MOUNT "/roms"
 #define TASK_STACK      16384
-#define TASK_PRIO       3   // below OS/LVGL (4); above cloud/wifi (2)
+#define TASK_PRIO       3   // below blit/OS; OS is parked on the button queue during play
 #define BLIT_TASK_STACK 3072
 #define BLIT_TASK_PRIO  4   // same as LVGL: start DMA, then block so emu runs
 #define GBA_BLIT_X      ((BOARD_LCD_H_RES - GBA_WIDTH) / 2)
@@ -281,7 +282,7 @@ static void back_to_list(void *arg)
         s_done = NULL;
     }
     gba_core_halt();
-    os_wifi_unpause();
+    os_background_unpause();
     s_back_to_list = false;
     play_video(false);
     if (s_root) {
@@ -294,11 +295,11 @@ static void emu_task(void *arg)
 {
     const char *path = (const char *)arg;
     sav_from_rom(s_sav_path, sizeof(s_sav_path), path);
+    os_background_pause();
     if (!gba_core_boot(path, s_sav_path)) {
         s_back_to_list = true;
         goto out;
     }
-    os_wifi_pause();
     s_exit_since = s_save_since = 0;
     s_save_armed = true;
     emu_pad_reset(&s_pad);
@@ -497,7 +498,7 @@ static void leave(void)
         s_done = NULL;
     }
     gba_core_halt();
-    os_wifi_unpause();
+    os_background_unpause();
     play_video(false);
     s_root = NULL;
 }

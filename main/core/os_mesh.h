@@ -61,6 +61,11 @@ typedef struct {
 
 void os_mesh_init(void);                    // after os_wifi_init() and os_cloud_init()
 
+// Sleep the mesh task (no HELLO, no scan step) while a ROM is playing.
+// Nested no-ops. Any task. Does not touch Wi-Fi; os_background_pause does that.
+void os_mesh_pause(void);
+void os_mesh_unpause(void);
+
 // Radio on the mesh channel or a bridge open, and this badge has an id and a mesh key.
 bool os_mesh_ready(void);
 int os_mesh_channel(void);                  // the channel peers are expected on

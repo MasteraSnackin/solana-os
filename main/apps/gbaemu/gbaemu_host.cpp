@@ -28,12 +28,13 @@ extern "C" {
 
 static const char *TAG = "gbaemu";
 
-#define ROM_MAX           (16u << 20)
-#define PIX_BYTES         (4 * PIX_BUFFER_SCREEN_WIDTH * 160)
-#define GBA_RAM_RESERVE   0x140000u
-#define GBA_ROM_PAGES     8
-#define GBA_ROM_PAGE_SIZE (1u << GBA_ROM_PAGE_SHIFT)
-#define GBA_ROM_CACHE     (GBA_ROM_PAGES * GBA_ROM_PAGE_SIZE)
+#define ROM_MAX            (16u << 20)
+#define PIX_BYTES          (4 * PIX_BUFFER_SCREEN_WIDTH * 160)
+#define GBA_RAM_RESERVE    0x140000u
+// 8×256 KB is the working set that still leaves ~5 MB PSRAM. 16 windows
+// (4 MB) was tried: GTA Advance fell from ~20–40 emulated fps to ~8.
+#define GBA_ROM_PAGES      8
+#define GBA_ROM_PAGE_SIZE  (1u << GBA_ROM_PAGE_SHIFT)
 
 uint8_t *gba_rom_direct;
 uint8_t *gba_rom_hot;
@@ -50,6 +51,7 @@ static bool s_rom_paged;
 static FILE *s_rom_file;
 static size_t s_rom_size;
 static uint8_t *s_rom_pool;
+static int s_rom_pages;
 static uint8_t *s_rom_slot[GBA_ROM_PAGES];
 static uint32_t s_rom_tag[GBA_ROM_PAGES];
 static uint32_t s_rom_stamp[GBA_ROM_PAGES];
@@ -146,7 +148,9 @@ static void rom_page_reset(void)
         for (int i = 0; i < GBA_ROM_PAGES; i++) {
             s_rom_slot[i] = NULL;
             s_rom_tag[i] = ~0u;
+            s_rom_stamp[i] = 0;
         }
+        s_rom_pages = 0;
         rom = NULL;
     } else {
         heap_caps_free(rom);
@@ -205,7 +209,7 @@ static void rom_fill_slot(int slot, uint32_t base)
 
 static int IRAM_ATTR rom_find_tag(uint32_t tag)
 {
-    for (int i = 0; i < GBA_ROM_PAGES; i++) {
+    for (int i = 0; i < s_rom_pages; i++) {
         if (s_rom_tag[i] == tag) {
             return i;
         }
@@ -217,7 +221,7 @@ static int IRAM_ATTR rom_lru_except(int keep)
 {
     int victim = keep == 0 ? 1 : 0;
     uint32_t oldest = s_rom_stamp[victim];
-    for (int i = 0; i < GBA_ROM_PAGES; i++) {
+    for (int i = 0; i < s_rom_pages; i++) {
         if (i != keep && s_rom_stamp[i] <= oldest) {
             oldest = s_rom_stamp[i];
             victim = i;
@@ -290,6 +294,7 @@ static bool load_rom_direct(FILE *f, size_t n)
     if (!rom) {
         return false;
     }
+    int64_t t0 = esp_timer_get_time();
     if (fread(rom, 1, n, f) != n) {
         ESP_LOGE(TAG, "ROM read failed (%u B)", (unsigned)n);
         heap_caps_free(rom);
@@ -305,16 +310,19 @@ static bool load_rom_direct(FILE *f, size_t n)
     s_rom_paged = false;
     s_rom_file = NULL;
     s_rom_size = n;
-    ESP_LOGI(TAG, "ROM in PSRAM (%u KB)", (unsigned)(n >> 10));
+    ESP_LOGI(TAG, "ROM in PSRAM (%u KB) in %d ms",
+             (unsigned)(n >> 10), (int)((esp_timer_get_time() - t0) / 1000));
     return true;
 }
 
 static bool load_rom_paged(FILE *f, size_t n)
 {
-    s_rom_pool = ps_alloc(GBA_ROM_CACHE, "ROM cache");
+    int pages = GBA_ROM_PAGES;
+    s_rom_pool = ps_alloc((size_t)pages * GBA_ROM_PAGE_SIZE, "ROM cache");
     if (!s_rom_pool) {
         return false;
     }
+    s_rom_pages = pages;
     for (int i = 0; i < GBA_ROM_PAGES; i++) {
         s_rom_slot[i] = s_rom_pool + (size_t)i * GBA_ROM_PAGE_SIZE;
         s_rom_tag[i] = ~0u;
@@ -327,15 +335,25 @@ static bool load_rom_paged(FILE *f, size_t n)
     s_rom_misses = 0;
     gba_rom_direct = NULL;
     rom = s_rom_slot[0];
-    rom_fill_slot(0, 0);
-    s_rom_tag[0] = 0;
-    s_rom_stamp[0] = ++s_rom_tick;
+
+    int nfill = pages;
+    int file_pages = (int)((n + GBA_ROM_PAGE_SIZE - 1) / GBA_ROM_PAGE_SIZE);
+    if (nfill > file_pages) {
+        nfill = file_pages;
+    }
+    int64_t t0 = esp_timer_get_time();
+    for (int i = 0; i < nfill; i++) {
+        rom_fill_slot(i, (uint32_t)i * GBA_ROM_PAGE_SIZE);
+        s_rom_tag[i] = (uint32_t)i;
+        s_rom_stamp[i] = ++s_rom_tick;
+    }
     gba_rom_hot = s_rom_slot[0];
-    gba_rom_hot2 = s_rom_slot[0];
+    gba_rom_hot2 = nfill > 1 ? s_rom_slot[1] : s_rom_slot[0];
     gba_rom_hot_tag = 0;
-    gba_rom_hot2_tag = ~0u;
-    ESP_LOGI(TAG, "ROM paged from SD (%u KB file, %dx%u KB windows)",
-             (unsigned)(n >> 10), GBA_ROM_PAGES, (unsigned)(GBA_ROM_PAGE_SIZE >> 10));
+    gba_rom_hot2_tag = nfill > 1 ? 1u : ~0u;
+    ESP_LOGI(TAG, "ROM paged from SD (%u KB file, %dx%u KB windows, %d prefilled in %d ms)",
+             (unsigned)(n >> 10), pages, (unsigned)(GBA_ROM_PAGE_SIZE >> 10), nfill,
+             (int)((esp_timer_get_time() - t0) / 1000));
     return true;
 }
 
