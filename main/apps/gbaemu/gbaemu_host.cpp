@@ -7,6 +7,7 @@
 #include <strings.h>
 
 extern "C" {
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -30,12 +31,15 @@ static const char *TAG = "gbaemu";
 #define ROM_MAX           (16u << 20)
 #define PIX_BYTES         (4 * PIX_BUFFER_SCREEN_WIDTH * 160)
 #define GBA_RAM_RESERVE   0x140000u
-#define GBA_ROM_PAGES     4
+#define GBA_ROM_PAGES     8
 #define GBA_ROM_PAGE_SIZE (1u << GBA_ROM_PAGE_SHIFT)
+#define GBA_ROM_CACHE     (GBA_ROM_PAGES * GBA_ROM_PAGE_SIZE)
 
 uint8_t *gba_rom_direct;
 uint8_t *gba_rom_hot;
+uint8_t *gba_rom_hot2;
 uint32_t gba_rom_hot_tag = ~0u;
+uint32_t gba_rom_hot2_tag = ~0u;
 
 static volatile int s_drawn;
 static char s_title[13];
@@ -45,6 +49,7 @@ static bool s_booted;
 static bool s_rom_paged;
 static FILE *s_rom_file;
 static size_t s_rom_size;
+static uint8_t *s_rom_pool;
 static uint8_t *s_rom_slot[GBA_ROM_PAGES];
 static uint32_t s_rom_tag[GBA_ROM_PAGES];
 static uint32_t s_rom_stamp[GBA_ROM_PAGES];
@@ -136,8 +141,9 @@ static void rom_page_reset(void)
         s_rom_file = NULL;
     }
     if (s_rom_paged) {
+        heap_caps_free(s_rom_pool);
+        s_rom_pool = NULL;
         for (int i = 0; i < GBA_ROM_PAGES; i++) {
-            heap_caps_free(s_rom_slot[i]);
             s_rom_slot[i] = NULL;
             s_rom_tag[i] = ~0u;
         }
@@ -148,7 +154,9 @@ static void rom_page_reset(void)
     }
     gba_rom_direct = NULL;
     gba_rom_hot = NULL;
+    gba_rom_hot2 = NULL;
     gba_rom_hot_tag = ~0u;
+    gba_rom_hot2_tag = ~0u;
     s_rom_paged = false;
     s_rom_size = 0;
     s_rom_tick = 0;
@@ -195,22 +203,45 @@ static void rom_fill_slot(int slot, uint32_t base)
     }
 }
 
-uint8_t *gba_rom_map(uint32_t off)
+static int IRAM_ATTR rom_find_tag(uint32_t tag)
 {
-    uint32_t tag = off >> GBA_ROM_PAGE_SHIFT;
-    int hit = -1, victim = 0;
-    uint32_t oldest = s_rom_stamp[0];
     for (int i = 0; i < GBA_ROM_PAGES; i++) {
         if (s_rom_tag[i] == tag) {
-            hit = i;
-            break;
+            return i;
         }
-        if (s_rom_stamp[i] <= oldest) {
+    }
+    return -1;
+}
+
+static int IRAM_ATTR rom_lru_except(int keep)
+{
+    int victim = keep == 0 ? 1 : 0;
+    uint32_t oldest = s_rom_stamp[victim];
+    for (int i = 0; i < GBA_ROM_PAGES; i++) {
+        if (i != keep && s_rom_stamp[i] <= oldest) {
             oldest = s_rom_stamp[i];
             victim = i;
         }
     }
-    int slot = hit >= 0 ? hit : victim;
+    return victim;
+}
+
+static void IRAM_ATTR rom_promote(int slot, uint32_t tag)
+{
+    if (tag != gba_rom_hot_tag) {
+        gba_rom_hot2 = gba_rom_hot;
+        gba_rom_hot2_tag = gba_rom_hot_tag;
+        gba_rom_hot = s_rom_slot[slot];
+        gba_rom_hot_tag = tag;
+    }
+    s_rom_stamp[slot] = ++s_rom_tick;
+}
+
+IRAM_ATTR uint8_t *gba_rom_map(uint32_t off)
+{
+    uint32_t tag = off >> GBA_ROM_PAGE_SHIFT;
+    int hit = rom_find_tag(tag);
+    int slot = hit >= 0 ? hit : rom_lru_except(-1);
     if (hit < 0) {
         s_rom_misses++;
         rom_fill_slot(slot, tag << GBA_ROM_PAGE_SHIFT);
@@ -219,10 +250,15 @@ uint8_t *gba_rom_map(uint32_t off)
             ESP_LOGI(TAG, "ROM page miss #%u at 0x%lx", (unsigned)s_rom_misses,
                      (unsigned long)off);
         }
+        uint32_t next = tag + 1;
+        if ((next << GBA_ROM_PAGE_SHIFT) < s_rom_size && rom_find_tag(next) < 0) {
+            int pref = rom_lru_except(slot);
+            rom_fill_slot(pref, next << GBA_ROM_PAGE_SHIFT);
+            s_rom_tag[pref] = next;
+            s_rom_stamp[pref] = ++s_rom_tick;
+        }
     }
-    s_rom_stamp[slot] = ++s_rom_tick;
-    gba_rom_hot = s_rom_slot[slot];
-    gba_rom_hot_tag = tag;
+    rom_promote(slot, tag);
     return s_rom_slot[slot] + (off & GBA_ROM_PAGE_MASK);
 }
 
@@ -263,7 +299,9 @@ static bool load_rom_direct(FILE *f, size_t n)
     fclose(f);
     gba_rom_direct = rom;
     gba_rom_hot = rom;
+    gba_rom_hot2 = rom;
     gba_rom_hot_tag = 0;
+    gba_rom_hot2_tag = ~0u;
     s_rom_paged = false;
     s_rom_file = NULL;
     s_rom_size = n;
@@ -273,17 +311,14 @@ static bool load_rom_direct(FILE *f, size_t n)
 
 static bool load_rom_paged(FILE *f, size_t n)
 {
+    s_rom_pool = ps_alloc(GBA_ROM_CACHE, "ROM cache");
+    if (!s_rom_pool) {
+        return false;
+    }
     for (int i = 0; i < GBA_ROM_PAGES; i++) {
-        s_rom_slot[i] = ps_alloc(GBA_ROM_PAGE_SIZE, "ROM page");
+        s_rom_slot[i] = s_rom_pool + (size_t)i * GBA_ROM_PAGE_SIZE;
         s_rom_tag[i] = ~0u;
         s_rom_stamp[i] = 0;
-        if (!s_rom_slot[i]) {
-            for (int j = 0; j <= i; j++) {
-                heap_caps_free(s_rom_slot[j]);
-                s_rom_slot[j] = NULL;
-            }
-            return false;
-        }
     }
     s_rom_file = f;
     s_rom_size = n;
@@ -296,7 +331,9 @@ static bool load_rom_paged(FILE *f, size_t n)
     s_rom_tag[0] = 0;
     s_rom_stamp[0] = ++s_rom_tick;
     gba_rom_hot = s_rom_slot[0];
+    gba_rom_hot2 = s_rom_slot[0];
     gba_rom_hot_tag = 0;
+    gba_rom_hot2_tag = ~0u;
     ESP_LOGI(TAG, "ROM paged from SD (%u KB file, %dx%u KB windows)",
              (unsigned)(n >> 10), GBA_ROM_PAGES, (unsigned)(GBA_ROM_PAGE_SIZE >> 10));
     return true;
@@ -474,4 +511,9 @@ extern "C" void gba_core_save(const char *sav_path, bool force)
 extern "C" const char *gba_core_title(void)
 {
     return s_title;
+}
+
+extern "C" uint32_t gba_core_rom_misses(void)
+{
+    return s_rom_misses;
 }

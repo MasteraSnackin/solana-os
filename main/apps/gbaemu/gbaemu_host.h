@@ -49,6 +49,11 @@ static inline const char *gba_core_title(void)
     return "";
 }
 
+static inline uint32_t gba_core_rom_misses(void)
+{
+    return 0;
+}
+
 #else
 
 bool gba_core_boot(const char *rom_path, const char *sav_path);
@@ -59,6 +64,7 @@ int gba_core_frame(uint32_t joy, const uint16_t **fb);
 void gba_core_save(const char *sav_path, bool force);
 bool gba_core_save_dirty(void);
 const char *gba_core_title(void);
+uint32_t gba_core_rom_misses(void);
 
 #endif
 

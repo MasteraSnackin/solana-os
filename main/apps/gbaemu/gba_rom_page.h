@@ -12,7 +12,9 @@
 
 extern uint8_t *gba_rom_direct;
 extern uint8_t *gba_rom_hot;
+extern uint8_t *gba_rom_hot2;
 extern uint32_t gba_rom_hot_tag;
+extern uint32_t gba_rom_hot2_tag;
 extern uint32_t romMask;
 
 uint8_t *gba_rom_map(uint32_t off);
@@ -23,8 +25,12 @@ static inline uint8_t *gba_rom_ptr(uint32_t off)
     if (gba_rom_direct) {
         return gba_rom_direct + off;
     }
-    if ((off >> GBA_ROM_PAGE_SHIFT) == gba_rom_hot_tag) {
+    uint32_t tag = off >> GBA_ROM_PAGE_SHIFT;
+    if (tag == gba_rom_hot_tag) {
         return gba_rom_hot + (off & GBA_ROM_PAGE_MASK);
+    }
+    if (tag == gba_rom_hot2_tag) {
+        return gba_rom_hot2 + (off & GBA_ROM_PAGE_MASK);
     }
     return gba_rom_map(off);
 }

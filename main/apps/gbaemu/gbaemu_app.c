@@ -220,6 +220,7 @@ static void emu_task(void *arg)
     int64_t next = esp_timer_get_time(), last_save = next, stat_t = next, last_touch = next;
     int64_t last_idle = next;
     int emulated = 0, shown = 0, late = 0;
+    uint32_t miss0 = gba_core_rom_misses();
     while (!s_quit) {
         int64_t now = esp_timer_get_time();
         chords(now);
@@ -253,8 +254,11 @@ static void emu_task(void *arg)
         }
         if (now - stat_t >= 5000000) {
             double s = (now - stat_t) / 1e6;
-            ESP_LOGI(TAG, "%.1f emulated fps, %.1f shown (skip 2), %.0f ms/emu-frame, %d resyncs",
-                     emulated / s, shown / s, s * 1000.0 / (emulated > 0 ? emulated : 1), late);
+            uint32_t miss = gba_core_rom_misses();
+            ESP_LOGI(TAG, "%.1f emulated fps, %.1f shown (skip 2), %.0f ms/emu-frame, %d resyncs, %u page misses",
+                     emulated / s, shown / s, s * 1000.0 / (emulated > 0 ? emulated : 1), late,
+                     (unsigned)(miss - miss0));
+            miss0 = miss;
             stat_t = now;
             emulated = shown = late = 0;
         }
