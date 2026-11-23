@@ -7,8 +7,8 @@
 // No ROM ships with the firmware: copy a legally owned dump onto the card.
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
-// its own FreeRTOS task at priority 3 (below the prio-4 blit helper and OS).
-// Late frames do not yield. A prio-4 blit helper sends
+// its own FreeRTOS task at priority 4 (same as the blit helper; OS is prio 5
+// so HOME still preempts). Late frames do not yield. A prio-4 blit helper sends
 // packed 320x240 frames to the ILI9341; Peanut-GB only copies, it does not
 // wait on SPI. Background radios and services (Wi-Fi, ESP-NOW mesh, cloud,
 // game tick, Lua host, BLE) pause for the ROM and restore on the list, HOME,
@@ -76,7 +76,7 @@ static const char *TAG = "gbemu";
 #define SRAM_KEEP       (64 * 1024)
 #define CHORD_MS        250
 #define ROMS_DIR        BSP_SD_MOUNT "/roms"
-#define TASK_PRIO       3   // below blit/OS so HOME still preempts
+#define TASK_PRIO       4   /* same as blit; OS is prio 5 so HOME preempts */
 #define BLIT_TASK_STACK 3072
 #define BLIT_TASK_PRIO  4
 #define GB_BLIT_BUFS    3
@@ -604,6 +604,7 @@ static void emu_task(void *arg)
         next += FRAME_US;
         // IDLE pets the task WDT. Late frames skip yield so emu keeps the core;
         // one tick every ~1 s is enough. Ahead-of-time still sleeps.
+        // OS runs at prio 5 so HOME still preempts this prio-4 emu task.
         if (now - last_idle >= 1000000) {
             vTaskDelay(1);
             last_idle = now;
