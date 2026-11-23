@@ -113,7 +113,7 @@ static volatile int s_blit_sending = -1;
 static volatile int s_draw;
 static volatile bool s_blit_quit;
 static ui_list_t *s_list;
-static char s_roms[MAX_ROMS][PATH_MAX_LEN];
+static EXT_RAM_BSS_ATTR char s_roms[MAX_ROMS][PATH_MAX_LEN];
 static int s_rom_count;
 static emu_pad_t s_pad;
 

@@ -91,12 +91,13 @@
 #include "fxemu.h"
 #include "fxinst.h"
 #include "memmap.h"
+#include "snes_esp.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
 /* The FxChip Emulator's internal variables */
-FxRegs_s GSU; /* This will be initialized when loading a ROM */
+SNES_EXT_BSS FxRegs_s GSU; /* This will be initialized when loading a ROM */
 
 uint32(**fx_ppfFunctionTable)(uint32) = 0;
 void (**fx_ppfPlotTable)() = 0;

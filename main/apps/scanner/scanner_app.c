@@ -1,5 +1,7 @@
 // Nearby radios: live Wi-Fi APs and BLE advertisements. Does not call
 // os_background_pause — this toy needs the radios. Emulators pause them.
+// Soft-pause mesh/cloud/game/lua only: frees radio contention without
+// stopping Wi-Fi or BLE (and does not tear their stacks down).
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,9 +14,13 @@
 #include "freertos/task.h"
 #include "core/os.h"
 #include "core/os_ble.h"
+#include "core/os_cloud.h"
 #include "core/os_mem.h"
+#include "core/os_mesh.h"
 #include "core/os_wifi.h"
 #include "core/ui.h"
+#include "game/game.h"
+#include "lua/lua_host.h"
 
 static const char *TAG = "scanner";
 
@@ -100,10 +106,26 @@ static void render_status(void)
     }
 }
 
+static void ble_scan_resume(void)
+{
+    if (s_ble_state != 2 || !s_alive) {
+        return;
+    }
+    os_ble_scan_t sc = { .active = true, .seconds = 0, .duty = 40 };
+    esp_err_t e = os_ble_scan(&s_ble_owner, &sc);
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "ble scan resume: %s", esp_err_to_name(e));
+    }
+}
+
 static void start_wifi_scan(void)
 {
     if (s_wifi_scanning) {
         return;
+    }
+    // C5 coexistence: continuous BLE discovery starves Wi-Fi scans (0 APs).
+    if (s_ble_state == 2) {
+        os_ble_scan(&s_ble_owner, NULL);
     }
     esp_err_t err = os_wifi_scan_start();
     if (err == ESP_OK) {
@@ -112,9 +134,11 @@ static void start_wifi_scan(void)
         ui_list_set_empty(s_list, "Scanning Wi-Fi and BLE...");
     } else if (err == ESP_ERR_INVALID_STATE) {
         s_retry_wifi_at = esp_timer_get_time() + 1500000;
+        ble_scan_resume();
         ESP_LOGW(TAG, "wifi scan: %s", esp_err_to_name(err));
     } else {
         s_retry_wifi_at = 0;
+        ble_scan_resume();
         ui_list_set_empty(s_list, "Wi-Fi is off on this boot.\nBLE still scans if SRAM allows.");
         ESP_LOGW(TAG, "wifi scan: %s", esp_err_to_name(err));
     }
@@ -219,6 +243,23 @@ static void drain_ble(void)
     }
 }
 
+// Mesh / cloud / game tick / Lua — not Wi-Fi or BLE.
+static void soft_pause_apps(void)
+{
+    os_mesh_pause();
+    os_cloud_pause();
+    game_pause();
+    lua_host_pause();
+}
+
+static void soft_unpause_apps(void)
+{
+    lua_host_unpause();
+    game_unpause();
+    os_cloud_unpause();
+    os_mesh_unpause();
+}
+
 static void ble_boot(void *arg)
 {
     (void)arg;
@@ -227,6 +268,19 @@ static void ble_boot(void *arg)
         vTaskDelete(NULL);
         return;
     }
+    // Let the first Wi-Fi scan finish before owning the radio with BLE.
+    for (int i = 0; i < 80 && s_alive && s_wifi_scanning; i++) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (!s_alive) {
+        s_ble_state = 0;
+        vTaskDelete(NULL);
+        return;
+    }
+    ESP_LOGI(TAG, "ble start: SRAM %u free, largest %u (need %u)",
+             (unsigned)heap_caps_get_free_size(OS_MEM_SRAM),
+             (unsigned)heap_caps_get_largest_free_block(OS_MEM_SRAM),
+             (unsigned)OS_BLE_MIN_FREE);
     esp_err_t e = os_ble_start(NULL, &s_ble_owner);
     if (e == ESP_OK && s_alive) {
         os_ble_scan_t sc = { .active = true, .seconds = 0, .duty = 40 };
@@ -261,10 +315,14 @@ static void enter(lv_obj_t *root)
     s_ble_err = ESP_OK;
     s_ble_state = 1;
     s_alive = true;
+    soft_pause_apps();
+    ESP_LOGI(TAG, "enter: SRAM %u free (Wi-Fi stays up)",
+             (unsigned)heap_caps_get_free_size(OS_MEM_SRAM));
     s_wifi = psram(WIFI_MAX * sizeof(*s_wifi));
     s_ble = psram(BLE_MAX * sizeof(*s_ble));
     s_view = psram(VIEW_MAX * sizeof(*s_view));
     if (!s_wifi || !s_ble || !s_view) {
+        soft_unpause_apps();
         ui_label(root, &sol_font_14, COL_ERR, "Not enough memory");
         ui_hint(root, "BOOT exit");
         return;
@@ -300,6 +358,7 @@ static void on_leave(void)
     free(s_ble);
     free(s_view);
     s_wifi = s_ble = s_view = NULL;
+    soft_unpause_apps();
 }
 
 static bool on_key(os_key_t k, bool repeat)
@@ -325,6 +384,7 @@ static void on_tick(void)
     if (s_wifi_scanning && os_wifi_scan_done()) {
         s_wifi_scanning = false;
         collect_wifi();
+        ble_scan_resume();
         render_status();
     }
     if (s_retry_wifi_at && esp_timer_get_time() > s_retry_wifi_at) {

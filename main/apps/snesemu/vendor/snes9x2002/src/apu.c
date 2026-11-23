@@ -49,6 +49,7 @@
 #include "apumem.h"
 #include "soundux.h"
 #include "cpuexec.h"
+#include "snes_esp.h"
 
 #undef ABS
 #define ABS(a) ((a) < 0 ? -(a) : (a))
@@ -90,13 +91,13 @@ unsigned long DecreaseRateExp [32] =
    180, 150, 110, 92, 74, 55, 37, 18
 };
 
-// precalculated env rates for S9xSetEnvRate
-unsigned long AttackERate     [16][10];
-unsigned long DecayERate       [8][10];
-unsigned long SustainERate    [32][10];
-unsigned long IncreaseERate   [32][10];
-unsigned long DecreaseERateExp[32][10];
-unsigned long KeyOffERate[10];
+// precalculated env rates for S9xSetEnvRate (PSRAM on the badge)
+SNES_EXT_BSS unsigned long AttackERate     [16][10];
+SNES_EXT_BSS unsigned long DecayERate       [8][10];
+SNES_EXT_BSS unsigned long SustainERate    [32][10];
+SNES_EXT_BSS unsigned long IncreaseERate   [32][10];
+SNES_EXT_BSS unsigned long DecreaseERateExp[32][10];
+SNES_EXT_BSS unsigned long KeyOffERate[10];
 
 
 static INLINE void S9xSetEnvelopeRate(int channel, unsigned long rate, int direction, int target, unsigned int mode)

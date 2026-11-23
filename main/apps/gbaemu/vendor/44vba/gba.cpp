@@ -8,6 +8,7 @@
 
 #include "system.h"
 #include "globals.h"
+#include "gba_esp.h"
 
 #ifdef __PS3__
 #include <ppu_intrinsics.h>
@@ -79,10 +80,10 @@ inline static long min(int p, int q) { return p < q ? p : q; }
 
 
 
-uint8_t oam[0x400];
-uint8_t ioMem[0x400];
-uint8_t paletteRAM[0x400];
-uint8_t internalRAM[0x8000];
+GBA_EXT_BSS uint8_t oam[0x400];
+GBA_EXT_BSS uint8_t ioMem[0x400];
+GBA_EXT_BSS uint8_t paletteRAM[0x400];
+GBA_EXT_BSS uint8_t internalRAM[0x8000];
 
 #ifdef USE_STATIC_WRAM
 uint8_t vram[0x20000];
@@ -492,7 +493,7 @@ typedef enum
   REG_HALTCNT = 0x180
 } hardware_register;
 
-static uint16_t io_registers[1024 * 16];
+static GBA_EXT_BSS uint16_t io_registers[1024 * 16];
 
 // Note: Some comments below are from the GBATEK document
 // (http://problemkaputt.de/gbatek.htm).
@@ -644,14 +645,14 @@ static bool intState = false;
 static bus_t bus;
 static graphics_t graphics;
 
-static memoryMap map[256];
+static GBA_EXT_BSS memoryMap map[256];
 static int clockTicks;
 
 static int romSize = 0x2000000;
 uint32_t romMask = 0x1FFFFFF;
-static uint32_t line[6][240];
-static bool gfxInWin[2][240];
-static int lineOBJpixleft[128];
+static GBA_EXT_BSS uint32_t line[6][240];
+static GBA_EXT_BSS bool gfxInWin[2][240];
+static GBA_EXT_BSS int lineOBJpixleft[128];
 uint64_t joy = 0;
 
 static int gfxBG2Changed = 0;
@@ -662,7 +663,7 @@ static int gfxBG2Y = 0;
 static int gfxBG3X = 0;
 static int gfxBG3Y = 0;
 
-static bool ioReadable[0x400];
+static GBA_EXT_BSS bool ioReadable[0x400];
 static int gbaSaveType = 0; // used to remember the save type on reset
 
 //static int gfxLastVCOUNT = 0;
@@ -12020,7 +12021,7 @@ void CPUCheckDMA(int reason, int dmamask)
 	}
 }
 
-static uint16_t *address_lut[0x300];
+static GBA_EXT_BSS uint16_t *address_lut[0x300];
 
 void CPUUpdateRegister(uint32_t address, uint16_t value)
 {

@@ -47,6 +47,7 @@
 #ifndef SOLANA_OS_EMULATOR
 #include "freertos/idf_additions.h"
 #endif
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -102,7 +103,7 @@ static int64_t s_exit_since, s_save_since;
 static bool s_save_armed = true;
 static lv_obj_t *s_root, *s_msg, *s_hint;
 static ui_list_t *s_list;
-static char s_roms[MAX_ROMS][PATH_MAX_LEN];
+static EXT_RAM_BSS_ATTR char s_roms[MAX_ROMS][PATH_MAX_LEN];
 static char s_play_path[PATH_MAX_LEN];
 static char s_sav_path[PATH_MAX_LEN];
 static int s_rom_count;

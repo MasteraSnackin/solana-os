@@ -55,7 +55,7 @@
 #include "sa1.h"
 #include "snes_esp.h"
 
-char String[513];
+SNES_EXT_BSS char String[513];
 
 int (*APUMainLoop)(int);
 
@@ -75,7 +75,7 @@ SAPURegisters APURegisters;
 
 SSettings Settings;
 
-SDSP1 DSP1;
+SNES_EXT_BSS SDSP1 DSP1;
 
 #ifdef USE_SA1
 SSA1Registers SA1Registers;
@@ -99,8 +99,8 @@ SSNESGameFixes SNESGameFixes;
 
 FxInit_s SuperFX;
 
-SPPU PPU;
-InternalPPU IPPU;
+SNES_EXT_BSS SPPU PPU;
+SNES_EXT_BSS InternalPPU IPPU;
 
 SDMA DMA[8];
 
@@ -109,9 +109,9 @@ uint8* HDMABasePointers [8];
 
 SBG BG;
 
-SGFX GFX;
-SLineData LineData[240];
-SLineMatrixData LineMatrixData [240];
+SNES_EXT_BSS SGFX GFX;
+SNES_EXT_BSS SLineData LineData[240];
+SNES_EXT_BSS SLineMatrixData LineMatrixData [240];
 
 uint8 Mode7Depths [2];
 NormalTileRenderer DrawTilePtr = NULL;
@@ -120,10 +120,10 @@ NormalTileRenderer DrawHiResTilePtr = NULL;
 ClippedTileRenderer DrawHiResClippedTilePtr = NULL;
 LargePixelRenderer DrawLargePixelPtr = NULL;
 
-uint32_t odd_high[4][16];
-uint32_t odd_low[4][16];
-uint32_t even_high[4][16];
-uint32_t even_low[4][16];
+SNES_EXT_BSS uint32_t odd_high[4][16];
+SNES_EXT_BSS uint32_t odd_low[4][16];
+SNES_EXT_BSS uint32_t even_high[4][16];
+SNES_EXT_BSS uint32_t even_low[4][16];
 
 #ifdef GFX_MULTI_FORMAT
 
@@ -166,7 +166,7 @@ bool8 finishedFrame = false;
 #endif
 
 SoundStatus so;
-SSoundData SoundData;
+SNES_EXT_BSS SSoundData SoundData;
 SNES_EXT_BSS int Echo [24000];
 SNES_EXT_BSS int DummyEchoBuffer [SOUND_BUFFER_SIZE];
 SNES_EXT_BSS int MixBuffer [SOUND_BUFFER_SIZE];
