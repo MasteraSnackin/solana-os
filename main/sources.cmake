@@ -19,6 +19,8 @@ set(SOLANA_OS_SRCS
     game/game.c game/xdex.c game/trade.c game/quests.c game/beacon.c
     apps/registry.c
     apps/wifi/wifi_app.c
+    apps/scanner/scanner_app.c
+    apps/paint/paint_app.c
     apps/badge/badge_app.c
     apps/guide/guide_app.c apps/xdex/xdex_app.c apps/trade/trade_app.c apps/quests/quests_app.c
     apps/beacon/beacon_app.c
