@@ -16,6 +16,7 @@ extern const os_app_t app_wifi, app_scanner, app_paint, app_badge, app_ledbadge,
 extern const os_app_t app_guide, app_xdex, app_trade, app_quests, app_beacon, app_store, app_apps, app_gbemu, app_gbaemu, app_snesemu;
 extern const os_app_t app_tgclient;
 extern const os_app_t app_vidplayer;
+extern const os_app_t app_hermes;
 
 const os_app_t *const os_apps[] = {
     &app_wifi,
@@ -24,6 +25,7 @@ const os_app_t *const os_apps[] = {
     &app_badge,
     &app_ledbadge,
     &app_tgclient,
+    &app_hermes,
     &app_guide,
     &app_xdex,
     &app_trade,
