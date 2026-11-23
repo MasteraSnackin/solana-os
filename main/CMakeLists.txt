@@ -73,12 +73,12 @@ set_property(SOURCE ${SOLANA_OS_SNES_SRCS} APPEND PROPERTY COMPILE_OPTIONS
     -DHAVE_STRINGS_H -DHAVE_STDINT_H -DHAVE_INTTYPES_H
     -DUSE_SA1 -D__OLD_RASTER_FX__ -DRIGHTSHIFT_IS_SAR)
 
-# Peanut-GB CPU decode/execute and LCD line: -O3 in IRAM. gbemu_app.c
-# keeps the project's default -Os flags (picker, blit helper, save).
-set_property(SOURCE apps/gbemu/peanut_gb_cpu.c APPEND PROPERTY COMPILE_OPTIONS
-    -O3 -DPEANUT_GB_CPU_IRAM -Wno-error
+# Walnut-CGB CPU/PPU: -O3. Core is larger than Peanut (CGB WRAM/VRAM);
+# keep it out of IRAM. gbemu_app.c stays -Os (picker, blit, save).
+set_property(SOURCE apps/gbemu/walnut_cgb_cpu.c APPEND PROPERTY COMPILE_OPTIONS
+    -O3 -Wno-error
     -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
-    -Wno-implicit-fallthrough)
+    -Wno-implicit-fallthrough -Wno-type-limits)
 
 # cJSON (espressif/cjson) parses mesh JSON with a depth cap of 16:
 # CONFIG_CJSON_NESTING_LIMIT in sdkconfig.defaults.

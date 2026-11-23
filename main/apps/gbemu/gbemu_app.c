@@ -1,7 +1,8 @@
-// Game Boy: plays a .gb / .gbc ROM from the microSD card (/sdcard/roms).
+// Game Boy / Game Boy Color: plays a .gb / .gbc ROM from microSD (/sdcard/roms).
 //
-// The CPU/PPU core is Peanut-GB (peanut_gb.h, MIT, vendored next to this file).
-// peanut_gb_cpu.c builds the interpreter and LCD line at -O3 in IRAM.
+// The CPU/PPU core is Walnut-CGB (walnut_cgb.h, MIT) — Peanut-GB with full CGB
+// support. walnut_cgb_cpu.c builds the interpreter at -O3. We call
+// gb_run_frame() (8-bit Peanut dispatch), not dual-fetch.
 // No ROM ships with the firmware: copy a legally owned dump onto the card.
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
@@ -45,17 +46,20 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "mbedtls/base64.h"
 #include "bsp.h"
 #include "core/os.h"
 #include "core/os_mem.h"
 #include "core/ui.h"
 #include "apps/emu_pad.h"
 
-#define ENABLE_SOUND                0
-#define ENABLE_LCD                  1
-#define PEANUT_GB_IS_LITTLE_ENDIAN  1
-#define PEANUT_GB_HEADER_ONLY
-#include "peanut_gb.h"
+#define ENABLE_SOUND                 0
+#define ENABLE_LCD                   1
+#define WALNUT_GB_IS_LITTLE_ENDIAN   1
+#define WALNUT_FULL_GBC_SUPPORT      1
+#define WALNUT_GB_12_COLOUR          1
+#define WALNUT_GB_HEADER_ONLY
+#include "walnut_cgb.h"
 
 static const char *TAG = "gbemu";
 
@@ -65,8 +69,9 @@ static const char *TAG = "gbemu";
 #define SAVE_EVERY_US   (60 * 1000000LL)
 #define SAVE_IDLE_US    (1 * 1000000LL)
 #define ROM_MAX         (4u << 20)
-#define MAX_ROMS        32
+#define MAX_ROMS        48
 #define PATH_MAX_LEN    200
+/* emu_t holds struct gb_s (~50 KB with CGB WRAM/VRAM) — keep SRAM free. */
 #define SRAM_KEEP       (64 * 1024)
 #define CHORD_MS        250
 #define ROMS_DIR        BSP_SD_MOUNT "/roms"
@@ -123,6 +128,27 @@ static IRAM_ATTR uint8_t rom_read(struct gb_s *gb, const uint_fast32_t addr)
     return addr < e->rom_size ? e->rom[addr] : 0xFF;
 }
 
+static IRAM_ATTR uint16_t rom_read16(struct gb_s *gb, const uint_fast32_t addr)
+{
+    emu_t *e = gb->direct.priv;
+    if (addr + 1 >= e->rom_size) {
+        return 0xFFFF;
+    }
+    const uint8_t *p = e->rom + addr;
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static IRAM_ATTR uint32_t rom_read32(struct gb_s *gb, const uint_fast32_t addr)
+{
+    emu_t *e = gb->direct.priv;
+    if (addr + 3 >= e->rom_size) {
+        return 0xFFFFFFFF;
+    }
+    const uint8_t *p = e->rom + addr;
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
 static IRAM_ATTR uint8_t ram_read(struct gb_s *gb, const uint_fast32_t addr)
 {
     emu_t *e = gb->direct.priv;
@@ -148,8 +174,9 @@ static void gb_err(struct gb_s *gb, const enum gb_error_e err, const uint16_t ad
 }
 
 // Line y of 144 into the 320x240 back buffer. Width is 2x. Height is 5 dest
-// rows from 3 src (2, 2, then 1) so 144 fills 240. Stretch fills the panel
-// (Dave asked for fullscreen, same as GBA).
+// rows from 3 src (2, 2, then 1) so 144 fills 240. Stretch fills the panel.
+// CGB: pixels are indices into gb->cgb.fixPalette (RGB565). DMG: shade in
+// low 2 bits (12-colour layer bits ignored — we keep the 4-shade DMG look).
 static IRAM_ATTR void draw_line(struct gb_s *gb, const uint8_t *px, const uint_fast8_t y)
 {
     emu_t *e = gb->direct.priv;
@@ -157,13 +184,28 @@ static IRAM_ATTR void draw_line(struct gb_s *gb, const uint8_t *px, const uint_f
     int r = y - g * 3;
     int row = g * 5 + (r == 2 ? 4 : r * 2);
     uint16_t *dst = e->fb + row * SCALE_W;
-    for (int x = 0; x < LCD_WIDTH; x += 2) {
-        uint16_t a = e->pal[px[x] & 3], b = e->pal[px[x + 1] & 3];
-        dst[0] = a;
-        dst[1] = a;
-        dst[2] = b;
-        dst[3] = b;
-        dst += 4;
+#if WALNUT_FULL_GBC_SUPPORT
+    if (gb->cgb.cgbMode) {
+        const uint16_t *fp = gb->cgb.fixPalette;
+        for (int x = 0; x < LCD_WIDTH; x += 2) {
+            uint16_t a = fp[px[x]], b = fp[px[x + 1]];
+            dst[0] = a;
+            dst[1] = a;
+            dst[2] = b;
+            dst[3] = b;
+            dst += 4;
+        }
+    } else
+#endif
+    {
+        for (int x = 0; x < LCD_WIDTH; x += 2) {
+            uint16_t a = e->pal[px[x] & 3], b = e->pal[px[x + 1] & 3];
+            dst[0] = a;
+            dst[1] = a;
+            dst[2] = b;
+            dst[3] = b;
+            dst += 4;
+        }
     }
     if (r != 2) {
         memcpy(e->fb + (row + 1) * SCALE_W, e->fb + row * SCALE_W, SCALE_W * sizeof(uint16_t));
@@ -373,6 +415,46 @@ static bool blit_start(void)
     return true;
 }
 
+static bool gb_direct_shot(void)
+{
+    uint16_t *fb = NULL;
+    portENTER_CRITICAL(&s_blit_mux);
+    int i = s_blit_pending;
+    if (i < 0) {
+        i = s_blit_sending;
+    }
+    if (i < 0) {
+        i = s_draw;
+    }
+    if (i >= 0 && i < GB_BLIT_BUFS && s_blit_fb[i]) {
+        fb = s_blit_fb[i];
+    } else if (s_emu && s_emu->fb) {
+        fb = s_emu->fb;
+    }
+    portEXIT_CRITICAL(&s_blit_mux);
+
+    esp_log_level_set("*", ESP_LOG_NONE);
+    printf("\nSHOT-BEGIN %d %d\n", BOARD_LCD_H_RES, BOARD_LCD_V_RES);
+    static uint16_t row[BOARD_LCD_H_RES];
+    static unsigned char b64[BOARD_LCD_H_RES * 2 * 4 / 3 + 8];
+    for (int y = 0; y < BOARD_LCD_V_RES; y++) {
+        if (fb) {
+            memcpy(row, fb + y * SCALE_W, SCALE_W * sizeof(uint16_t));
+        } else {
+            memset(row, 0, sizeof(row));
+        }
+        size_t n = 0;
+        mbedtls_base64_encode(b64, sizeof(b64), &n, (const unsigned char *)row,
+                              sizeof(row));
+        b64[n] = 0;
+        printf("SHOT %d %d %d %s\n", 0, y, BOARD_LCD_H_RES, b64);
+    }
+    printf("SHOT-END\n");
+    fflush(stdout);
+    esp_log_level_set("*", ESP_LOG_INFO);
+    return true;
+}
+
 static void play_video(bool on)
 {
     if (on) {
@@ -381,9 +463,11 @@ static void play_video(bool on)
         lv_obj_set_hidden(s_root, false);
         lv_refr_now(NULL);
         lv_obj_set_hidden(s_root, true);
+        os_set_direct_shot(gb_direct_shot);
         bsp_display_pause_lvgl(true);
         blit_start();
     } else {
+        os_set_direct_shot(NULL);
         blit_stop();
         bsp_display_pause_lvgl(false);
         if (s_root) {
@@ -443,7 +527,8 @@ static void emu_task(void *arg)
         os_toast("Can't read that ROM (max 4 MB)");
         goto out;
     }
-    enum gb_init_error_e ie = gb_init(&e->gb, rom_read, ram_read, ram_write, gb_err, e);
+    enum gb_init_error_e ie = gb_init(&e->gb, rom_read, rom_read16, rom_read32,
+                                      ram_read, ram_write, gb_err, e);
     if (ie != GB_INIT_NO_ERROR) {
         os_toast(ie == GB_INIT_CARTRIDGE_UNSUPPORTED ? "Cartridge type not supported"
                                                     : "ROM header checksum is wrong");
@@ -474,8 +559,15 @@ static void emu_task(void *arg)
     s_save_armed = true;
     emu_pad_reset(&s_pad);
     char title[17];
-    ESP_LOGI(TAG, "%s: %u KB ROM, %u B cart RAM", gb_get_rom_name(&e->gb, title),
-             (unsigned)(e->rom_size >> 10), (unsigned)e->ram_size);
+    ESP_LOGI(TAG, "%s: %u KB ROM, %u B cart RAM, cgb=%u emu_t %u B",
+             gb_get_rom_name(&e->gb, title),
+             (unsigned)(e->rom_size >> 10), (unsigned)e->ram_size,
+#if WALNUT_FULL_GBC_SUPPORT
+             (unsigned)e->gb.cgb.cgbMode,
+#else
+             0u,
+#endif
+             (unsigned)sizeof(*e));
     os_background_pause();
 
     int64_t next = esp_timer_get_time(), last_save = next, stat_t = next, last_idle = next;
@@ -597,17 +689,13 @@ static void show_picker(void)
 
 static void start(const char *path)
 {
-    emu_t *e = NULL;
-    if (heap_caps_get_free_size(OS_MEM_SRAM_MALLOC) > sizeof(*e) + SRAM_KEEP) {
-        e = heap_caps_calloc(1, sizeof(*e), OS_MEM_SRAM);
-    }
-    if (!e) {
-        e = heap_caps_calloc(1, sizeof(*e), os_mem_bulk_caps());
-    }
+    /* struct gb_s with CGB WRAM/VRAM is ~50 KB — always put emu_t in PSRAM. */
+    emu_t *e = heap_caps_calloc(1, sizeof(*e), os_mem_bulk_caps());
     if (!e) {
         os_toast("Out of memory");
         return;
     }
+    (void)SRAM_KEEP;
     strlcpy(e->rom_path, path, sizeof(e->rom_path));
     sav_from_rom(e->sav_path, sizeof(e->sav_path), path);
     for (int i = 0; i < 4; i++) {
