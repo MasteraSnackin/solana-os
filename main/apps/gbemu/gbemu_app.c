@@ -1,8 +1,9 @@
 // Game Boy / Game Boy Color: plays a .gb / .gbc ROM from microSD (/sdcard/roms).
 //
 // The CPU/PPU core is Walnut-CGB (walnut_cgb.h, MIT) — Peanut-GB with full CGB
-// support. walnut_cgb_cpu.c builds the interpreter at -O3. We call
-// gb_run_frame() (8-bit Peanut dispatch), not dual-fetch.
+// support. walnut_cgb_cpu.c builds the interpreter at -O3 with hot paths in
+// IRAM (__gb_step_cpu_x, read/write, draw_line). We call gb_run_frame()
+// (8-bit Peanut dispatch), not dual-fetch.
 // No ROM ships with the firmware: copy a legally owned dump onto the card.
 //
 // Threads: OS callbacks run on the OS task (LVGL locked). Emulation runs in
@@ -184,6 +185,9 @@ static IRAM_ATTR void draw_line(struct gb_s *gb, const uint8_t *px, const uint_f
     int r = y - g * 3;
     int row = g * 5 + (r == 2 ? 4 : r * 2);
     uint16_t *dst = e->fb + row * SCALE_W;
+    /* Write the duplicated stretch row in the same pass (avoids a second
+     * PSRAM walk via memcpy for 2 of every 3 source lines). */
+    uint16_t *dst2 = (r != 2) ? e->fb + (row + 1) * SCALE_W : NULL;
 #if WALNUT_FULL_GBC_SUPPORT
     if (gb->cgb.cgbMode) {
         const uint16_t *fp = gb->cgb.fixPalette;
@@ -194,6 +198,13 @@ static IRAM_ATTR void draw_line(struct gb_s *gb, const uint8_t *px, const uint_f
             dst[2] = b;
             dst[3] = b;
             dst += 4;
+            if (dst2) {
+                dst2[0] = a;
+                dst2[1] = a;
+                dst2[2] = b;
+                dst2[3] = b;
+                dst2 += 4;
+            }
         }
     } else
 #endif
@@ -205,10 +216,14 @@ static IRAM_ATTR void draw_line(struct gb_s *gb, const uint8_t *px, const uint_f
             dst[2] = b;
             dst[3] = b;
             dst += 4;
+            if (dst2) {
+                dst2[0] = a;
+                dst2[1] = a;
+                dst2[2] = b;
+                dst2[3] = b;
+                dst2 += 4;
+            }
         }
-    }
-    if (r != 2) {
-        memcpy(e->fb + (row + 1) * SCALE_W, e->fb + row * SCALE_W, SCALE_W * sizeof(uint16_t));
     }
     if (y == LCD_HEIGHT - 1) {
         e->drawn = true;

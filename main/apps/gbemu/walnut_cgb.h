@@ -158,6 +158,18 @@ void __gb_step_cpu_x(struct gb_s *gb);
  * defined. */
 // #define WALNUT_GB_HEADER_ONLY
 
+/* ESP32-C5: put 8-bit CPU dispatch + LCD line compositor in IRAM when
+ * walnut_cgb_cpu.c defines WALNUT_GB_CPU_IRAM. Do not IRAM dual-fetch
+ * __gb_step_cpu (~32 KiB); gb_run_frame() uses __gb_step_cpu_x (~14 KiB). */
+#ifndef WALNUT_CPU_IRAM
+# if defined(WALNUT_GB_CPU_IRAM)
+#  include "esp_attr.h"
+#  define WALNUT_CPU_IRAM IRAM_ATTR
+# else
+#  define WALNUT_CPU_IRAM
+# endif
+#endif
+
 /** Internal source code. **/
 /* Interrupt masks */
 #define VBLANK_INTR	0x01
@@ -1504,7 +1516,7 @@ uint32_t __gb_read32(struct gb_s *gb, uint16_t addr)
  * Internal function used to read bytes.
  * addr is host platform endian.
  */
-uint8_t __gb_read(struct gb_s *gb, uint16_t addr)
+WALNUT_CPU_IRAM uint8_t __gb_read(struct gb_s *gb, uint16_t addr)
 {
 	switch(WALNUT_GB_GET_MSN16(addr))
 	{
@@ -1676,7 +1688,7 @@ uint8_t __gb_read(struct gb_s *gb, uint16_t addr)
 /**
  * Internal function used to write bytes.
  */
-void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
+WALNUT_CPU_IRAM void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 {
 	switch(WALNUT_GB_GET_MSN16(addr))
 	{
@@ -2452,7 +2464,7 @@ void __gb_write16(struct gb_s *gb, uint_fast16_t addr, uint16_t val)
     }
 }
 
-uint8_t __gb_execute_cb(struct gb_s *gb)
+WALNUT_CPU_IRAM uint8_t __gb_execute_cb(struct gb_s *gb)
 {
 	uint8_t inst_cycles;
 	uint8_t cbop = __gb_read(gb, gb->cpu_reg.pc.reg++);
@@ -2646,7 +2658,7 @@ struct sprite_data {
 };
 
 #if WALNUT_GB_HIGH_LCD_ACCURACY
-static int compare_sprites(const struct sprite_data *const sd1, const struct sprite_data *const sd2)
+static WALNUT_CPU_IRAM int compare_sprites(const struct sprite_data *const sd1, const struct sprite_data *const sd2)
 {
 	int x_res;
 
@@ -2659,7 +2671,7 @@ static int compare_sprites(const struct sprite_data *const sd1, const struct spr
 #endif
 
 
-void __gb_draw_line(struct gb_s *gb)
+WALNUT_CPU_IRAM void __gb_draw_line(struct gb_s *gb)
 {
 	uint8_t pixels[160] = {0};
 	const uint8_t hram_io_ly = gb->hram_io[IO_LY];
@@ -7382,7 +7394,7 @@ static inline void __gb_step_cpu(struct gb_s *gb)
 	} while(gb->gb_halt && (gb->hram_io[IO_IF] & gb->hram_io[IO_IE]) == 0);
 }
 
-void gb_run_frame(struct gb_s *gb)
+WALNUT_CPU_IRAM void gb_run_frame(struct gb_s *gb)
 {
 	gb->gb_frame = false;
 #if (WALNUT_GB_SAFE_DUALFETCH_DMA || WALNUT_GB_SAFE_DUALFETCH_MBC)
@@ -7952,7 +7964,7 @@ void gb_set_bootrom(struct gb_s *gb,
 
 #ifndef WALNUT_GB_HEADER_ONLY
 /* Steps the cpu by one instruction, this is the original Peanut-GB dispatch method here for compatibility, or for burning cycles inefficiently if doing preemptive execution */
-void __gb_step_cpu_x(struct gb_s *gb)
+WALNUT_CPU_IRAM void __gb_step_cpu_x(struct gb_s *gb)
 {
 	uint8_t opcode;
 	uint_fast16_t inst_cycles;

@@ -73,8 +73,9 @@ set_property(SOURCE ${SOLANA_OS_SNES_SRCS} APPEND PROPERTY COMPILE_OPTIONS
     -DHAVE_STRINGS_H -DHAVE_STDINT_H -DHAVE_INTTYPES_H
     -DUSE_SA1 -D__OLD_RASTER_FX__ -DRIGHTSHIFT_IS_SAR)
 
-# Walnut-CGB CPU/PPU: -O3. Core is larger than Peanut (CGB WRAM/VRAM);
-# keep it out of IRAM. gbemu_app.c stays -Os (picker, blit, save).
+# Walnut-CGB CPU/PPU: -O3 + IRAM on 8-bit dispatch / draw_line (see
+# WALNUT_GB_CPU_IRAM). Dual-fetch interpreter stays in flash. gbemu_app.c
+# stays -Os (picker, blit, save).
 set_property(SOURCE apps/gbemu/walnut_cgb_cpu.c APPEND PROPERTY COMPILE_OPTIONS
     -O3 -Wno-error
     -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
