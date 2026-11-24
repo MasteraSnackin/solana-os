@@ -1,5 +1,6 @@
 // ILI9341 on the shared SPI bus, driven by LVGL through esp_lvgl_port.
 
+#include <stddef.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "driver/gpio.h"
@@ -11,14 +12,21 @@
 #include "display/lv_display_private.h"     // the dirty-area list, for merge_dirty()
 #include "misc/lv_area_private.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "bsp.h"
 #include "bsp_bus.h"
 
 static const char *TAG = "bsp_display";
 static SemaphoreHandle_t s_lcd_idle;    // see bsp_bus.h
+static SemaphoreHandle_t s_xfer_done;   // one DMA; used by direct blit
 static esp_lcd_panel_handle_t s_panel;
 static bool s_inverted;
+static volatile bool s_direct;
+static bool s_lvgl_paused;
+static uint16_t *s_blit;
+#define BLIT_ROWS  16
+#define BLIT_MAX_W BOARD_LCD_H_RES
 
 void bsp_lcd_hold(void)
 {
@@ -83,8 +91,12 @@ static void merge_dirty(lv_event_t *e)
 static bool flush_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata, void *ctx)
 {
     BaseType_t woken = pdFALSE;
-    lv_display_flush_ready(ctx);
-    xSemaphoreGiveFromISR(s_lcd_idle, &woken);
+    if (s_direct) {
+        xSemaphoreGiveFromISR(s_xfer_done, &woken);
+    } else {
+        lv_display_flush_ready(ctx);
+        xSemaphoreGiveFromISR(s_lcd_idle, &woken);
+    }
     return woken == pdTRUE;
 }
 
@@ -204,6 +216,9 @@ lv_display_t *bsp_display_start(void)
     ESP_RETURN_ON_FALSE(disp, NULL, TAG, "lvgl display");
     s_lcd_idle = xSemaphoreCreateBinary();
     xSemaphoreGive(s_lcd_idle);
+    s_xfer_done = xSemaphoreCreateBinary();
+    s_blit = heap_caps_malloc(BLIT_ROWS * BLIT_MAX_W * sizeof(uint16_t),
+                              MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     const esp_lcd_panel_io_callbacks_t cbs = { .on_color_trans_done = flush_done };
     ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io, &cbs, disp));
     lv_display_add_event_cb(disp, flush_start, LV_EVENT_FLUSH_START, NULL);
@@ -237,4 +252,71 @@ void bsp_display_invert(bool on)
 bool bsp_display_inverted(void)
 {
     return s_inverted;
+}
+
+esp_err_t bsp_lcd_blit_rgb565(int x, int y, int w, int h, const uint16_t *src, int stride)
+{
+    if (!s_panel || !s_blit || !src || w <= 0 || h <= 0 || w > BLIT_MAX_W) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    bsp_lcd_hold();
+    s_direct = true;
+    while (xSemaphoreTake(s_xfer_done, 0) == pdTRUE) {
+    }
+    esp_err_t err = ESP_OK;
+    for (int row = 0; row < h && err == ESP_OK; ) {
+        int n = h - row;
+        if (n > BLIT_ROWS) {
+            n = BLIT_ROWS;
+        }
+        uint16_t *dst = s_blit;
+        const uint16_t *srow = src + (size_t)row * (size_t)stride;
+        for (int r = 0; r < n; r++) {
+            const uint16_t *s = srow;
+            uint16_t *d = dst;
+            int c = w;
+            while (c >= 4) {
+                d[0] = __builtin_bswap16(s[0]);
+                d[1] = __builtin_bswap16(s[1]);
+                d[2] = __builtin_bswap16(s[2]);
+                d[3] = __builtin_bswap16(s[3]);
+                s += 4;
+                d += 4;
+                c -= 4;
+            }
+            while (c--) {
+                *d++ = __builtin_bswap16(*s++);
+            }
+            srow += stride;
+            dst += w;
+        }
+        err = esp_lcd_panel_draw_bitmap(s_panel, x, y + row, x + w, y + row + n, s_blit);
+        if (err == ESP_OK && xSemaphoreTake(s_xfer_done, pdMS_TO_TICKS(80)) != pdTRUE) {
+            err = ESP_ERR_TIMEOUT;
+        }
+        row += n;
+    }
+    s_direct = false;
+    bsp_lcd_release();
+    return err;
+}
+
+void bsp_display_pause_lvgl(bool pause)
+{
+    lv_display_t *d = lv_display_get_default();
+    lv_timer_t *t = d ? lv_display_get_refr_timer(d) : NULL;
+    if (!t) {
+        return;
+    }
+    if (pause) {
+        lv_timer_pause(t);
+    } else {
+        lv_timer_resume(t);
+    }
+    s_lvgl_paused = pause;
+}
+
+bool bsp_display_lvgl_paused(void)
+{
+    return s_lvgl_paused;
 }

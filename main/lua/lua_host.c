@@ -69,6 +69,7 @@ static lua_pkg_t s_next;            // app to start on the next enter (under lh_
 static char s_title[21] = "Lua";
 static bool s_busy;                 // a lua task exists (under lh_mx)
 static char s_task_id[LUA_PKG_ID_MAX + 1];  // ... running this app (under lh_mx)
+static volatile bool s_play_pause;
 
 // Native C stack guard (vendor/luaconf.h luai_cstackfull): Lua asks before
 // every new C level. The leaf work under a level (LVGL, printf, JSON, pattern
@@ -707,6 +708,16 @@ static void lua_task(void *arg)
 
     while (s->L && !s->failed && !s->quit) {
         lh_ev_t ev;
+        if (s_play_pause) {
+            bool got = xQueueReceive(s_q, &ev, pdMS_TO_TICKS(500)) == pdTRUE;
+            if (got && ev.kind == LH_EV_QUIT) {
+                break;
+            }
+            if (got) {
+                free(ev.data);
+            }
+            continue;
+        }
         bool got = xQueueReceive(s_q, &ev, wait_ticks(s)) == pdTRUE;
         if (got && ev.gen != s->gen) {
             free(ev.data);
@@ -889,6 +900,16 @@ bool lua_host_active(const char *id)
     bool active = s_busy && id && !strcmp(s_task_id, id);
     xSemaphoreGive(lh_mx);
     return active;
+}
+
+void lua_host_pause(void)
+{
+    s_play_pause = true;
+}
+
+void lua_host_unpause(void)
+{
+    s_play_pause = false;
 }
 
 void lua_host_init(void)

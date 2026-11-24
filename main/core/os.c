@@ -16,9 +16,14 @@
 #include "lvgl_private.h"
 #include "bsp.h"
 #include "os.h"
+#include "os_ble.h"
+#include "os_cloud.h"
+#include "os_mesh.h"
 #include "os_wifi.h"
 #include "os_settings.h"
 #include "ui.h"
+#include "game/game.h"
+#include "lua/lua_host.h"
 
 static const char *TAG = "os";
 
@@ -26,6 +31,7 @@ static const char *TAG = "os";
 #define REPEAT_RATE_MS      90
 #define TOAST_MS            2200
 #define STATUS_EVERY_MS     1000
+#define STATUS_PLAY_MS      5000    // battery only, while a ROM owns the chip
 
 typedef enum { EV_BUTTONS, EV_KEY, EV_LAUNCH, EV_SHOT, EV_CALL } ev_kind_t;
 typedef struct {
@@ -43,6 +49,7 @@ static lv_obj_t *s_root, *s_title, *s_wifi, *s_batt, *s_toast;
 static int64_t s_toast_until;
 static void (*s_usb_cb)(void);          // os_on_usb_power: waiting for USB power
 static bool s_usb;                      // the last battery reading said USB (or no sense)
+static bool s_bg_pause;
 
 static int64_t now_ms(void)
 {
@@ -173,6 +180,12 @@ static void status_update(void)
         lv_label_set_text_fmt(s_batt, "%s %d%%", sym, pct);
     }
     lv_obj_align(s_batt, LV_ALIGN_RIGHT_MID, -6, 0);
+
+    if (s_bg_pause) {
+        lv_obj_set_style_text_color(s_wifi, ui_col(COL_DIM), 0);
+        lv_obj_align_to(s_wifi, s_batt, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+        return;
+    }
 
     uint32_t c = COL_DIM;
     switch (os_wifi_state()) {
@@ -504,6 +517,27 @@ void os_inject_key(os_key_t key)
     post((os_event_t){ .kind = EV_KEY, .a = key });
 }
 
+static uint32_t s_pad_bits;
+static int64_t s_pad_until;
+
+void os_pad_inject(uint32_t bits, int ms)
+{
+    s_pad_bits = bits;
+    s_pad_until = esp_timer_get_time() + (int64_t)ms * 1000LL;
+}
+
+uint32_t os_pad_injected(void)
+{
+    if (!s_pad_bits) {
+        return 0;
+    }
+    if (esp_timer_get_time() >= s_pad_until) {
+        s_pad_bits = 0;
+        return 0;
+    }
+    return s_pad_bits;
+}
+
 const os_app_t *os_current(void)
 {
     return s_app;
@@ -522,6 +556,12 @@ static void on_buttons(uint32_t pressed, uint32_t changed)
 
 static lv_display_flush_cb_t s_orig_flush;
 static volatile bool s_capturing;
+static os_direct_shot_fn s_direct_shot;
+
+void os_set_direct_shot(os_direct_shot_fn fn)
+{
+    s_direct_shot = fn;
+}
 
 static void capture_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
 {
@@ -579,9 +619,14 @@ static void repin_display_events(void)
 }
 
 // OS task (LVGL locked): arm the capture; the LVGL task renders it next.
+// Direct blit (GBA/GB) pauses the refresh timer, so an LVGL invalidate never
+// flushes — dump that app's last packed frame instead.
 static void take_screenshot(void)
 {
     if (s_capturing) {
+        return;
+    }
+    if (bsp_display_lvgl_paused() && s_direct_shot && s_direct_shot()) {
         return;
     }
     lv_display_t *disp = lv_display_get_default();
@@ -682,9 +727,12 @@ static void os_task(void *arg)
 
     for (;;) {
         int64_t now = now_ms();
-        int64_t wake = next_tick;
+        int64_t wake = s_bg_pause ? next_status : next_tick;
         if (held != OS_KEY_NONE && next_repeat < wake) {
             wake = next_repeat;
+        }
+        if (s_bg_pause && s_toast_until && s_toast_until < wake) {
+            wake = s_toast_until;
         }
         os_event_t ev;
         bool got = xQueueReceive(s_q, &ev, wake > now ? pdMS_TO_TICKS(wake - now) : 0);
@@ -704,12 +752,14 @@ static void os_task(void *arg)
             }
         }
         if (now >= next_tick) {
-            next_tick = now + OS_TICK_MS;
-            if (s_app->on_tick) {
-                s_app->on_tick();
-            }
-            if (s_overlay && s_overlay->on_tick) {
-                s_overlay->on_tick();
+            next_tick = now + (s_bg_pause ? STATUS_PLAY_MS : OS_TICK_MS);
+            if (!s_bg_pause) {
+                if (s_app->on_tick) {
+                    s_app->on_tick();
+                }
+                if (s_overlay && s_overlay->on_tick) {
+                    s_overlay->on_tick();
+                }
             }
             if (s_toast_until && now >= s_toast_until) {
                 lv_obj_set_hidden(s_toast, true);
@@ -717,8 +767,14 @@ static void os_task(void *arg)
             }
         }
         if (now >= next_status) {
-            next_status = now + STATUS_EVERY_MS;
+            next_status = now + (s_bg_pause ? STATUS_PLAY_MS : STATUS_EVERY_MS);
             status_update();
+            // GBA/GB own the panel while paused. Flushing LVGL here fights the
+            // SD card on SPI2 (4 MB ROM copies time out). Objects still update;
+            // the next unpaused refresh shows them.
+            if (bsp_display_lvgl_paused() && !s_bg_pause) {
+                lv_refr_now(NULL);
+            }
         }
         lvgl_port_unlock();
     }
@@ -785,7 +841,7 @@ void os_start(void)
     if (bsp_buttons_start(on_buttons) != ESP_OK) {
         ESP_LOGE(TAG, "buttons unavailable; use the console 'key' command");
     }
-    xTaskCreate(os_task, "os", 6144, NULL, 4, &s_task);
+    xTaskCreate(os_task, "os", 6144, NULL, 5, &s_task);  /* above gbemu prio 4 so HOME preempts */
 }
 
 void os_hold(const char *why)
@@ -813,4 +869,38 @@ void os_theme_apply(void)
     if (s_app->on_enter) {
         s_app->on_enter(s_root);
     }
+}
+
+void os_background_pause(void)
+{
+    if (s_bg_pause) {
+        return;
+    }
+    s_bg_pause = true;
+    os_wifi_pause();
+    os_mesh_pause();
+    os_cloud_pause();
+    game_pause();
+    lua_host_pause();
+    os_ble_pause();
+    ESP_LOGI(TAG, "background paused (wifi/mesh/cloud/game/lua/ble)");
+}
+
+void os_background_unpause(void)
+{
+    if (!s_bg_pause) {
+        return;
+    }
+    s_bg_pause = false;
+    lua_host_unpause();
+    game_unpause();
+    os_cloud_unpause();
+    os_mesh_unpause();
+    os_wifi_unpause();
+    ESP_LOGI(TAG, "background unpaused");
+}
+
+bool os_background_paused(void)
+{
+    return s_bg_pause;
 }
