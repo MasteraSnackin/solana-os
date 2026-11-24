@@ -208,13 +208,43 @@ static int cmd_open(int argc, char **argv)
     return 0;
 }
 
+#define PAD_INJECT_MS  2000
+
 static int cmd_key(int argc, char **argv)
 {
     if (argc < 2) {
-        printf("usage: key <up|down|left|right|select|back|home>... \n");
+        printf("usage: key <up|down|left|right|select|back|home|start|a|b|l|r [ms]>...\n");
         return 1;
     }
     for (int i = 1; i < argc; i++) {
+        uint32_t pad = 0;
+        if (!strcmp(argv[i], "start")) {
+            pad = 1u << 3;
+        } else if (!strcmp(argv[i], "a")) {
+            pad = 1u << 0;
+        } else if (!strcmp(argv[i], "b")) {
+            pad = 1u << 1;
+        } else if (!strcmp(argv[i], "l")) {
+            pad = 1u << 9;
+        } else if (!strcmp(argv[i], "r")) {
+            pad = 1u << 8;
+        }
+        if (pad) {
+            const char *name = argv[i];
+            int ms = PAD_INJECT_MS;
+            if (i + 1 < argc) {
+                char *end = NULL;
+                long v = strtol(argv[i + 1], &end, 10);
+                if (end && !*end && v > 0 && v <= 8000) {
+                    ms = (int)v;
+                    i++;
+                }
+            }
+            os_pad_inject(pad, ms);
+            printf("inject %s %d ms\n", name, ms);
+            vTaskDelay(pdMS_TO_TICKS(ms + 50));
+            continue;
+        }
         os_key_t k = os_key_parse(argv[i]);
         if (k == OS_KEY_NONE) {
             printf("unknown key '%s'\n", argv[i]);
@@ -245,8 +275,9 @@ static int cmd_wifi(int argc, char **argv)
     static const char *names[] = {"idle", "connecting", "connected", "failed", "suspended"};
     os_wifi_info_t in;
     os_wifi_get_info(&in);
-    printf("wifi: %s (%s)  ssid='%s' ip=%s rssi=%d ch=%d %s\n", names[in.state], in.enabled ? "on" : "off", in.ssid,
-           in.ip, in.rssi, in.channel, in.fail_reason ? in.fail_reason : "");
+    printf("wifi: %s (%s)%s  ssid='%s' ip=%s rssi=%d ch=%d %s\n", names[in.state], in.enabled ? "on" : "off",
+           os_wifi_paused() ? " radio-off" : "", in.ssid, in.ip, in.rssi, in.channel,
+           in.fail_reason ? in.fail_reason : "");
     return 0;
 }
 
@@ -373,7 +404,7 @@ static void start_now(void)
         { .command = "rgb", .help = "rgb <index|all> <r> <g> <b>", .func = cmd_rgb },
         { .command = "apps", .help = "List installed apps", .func = cmd_apps },
         { .command = "open", .help = "open <app id|home> - launch an app", .func = cmd_open },
-        { .command = "key", .help = "key <up|down|left|right|select|back|home>... - press keys", .func = cmd_key },
+        { .command = "key", .help = "key <up|down|left|right|select|back|home|start|l|r>... - press keys", .func = cmd_key },
         { .command = "wifi", .help = "wifi [status|on|off|connect <ssid> [pass [channel]]|forget]", .func = cmd_wifi },
         { .command = "server", .help = "server [url|clear] - show or set the badge server", .func = cmd_server },
         { .command = "cloud", .help = "cloud [hangup] - badge server link: state, badge ID, owner, claim URL; hangup closes the connection", .func = cmd_cloud },

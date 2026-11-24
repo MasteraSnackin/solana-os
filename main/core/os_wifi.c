@@ -31,7 +31,7 @@ static const char *TAG = "os_wifi";
 static SemaphoreHandle_t s_lock;
 static os_wifi_state_t s_state = OS_WIFI_IDLE;
 static char s_ssid[33], s_pass[65], s_ip[16];
-static bool s_save_on_ip, s_suspended, s_started, s_enabled, s_scanning;
+static bool s_save_on_ip, s_suspended, s_started, s_enabled, s_scanning, s_paused;
 static bool s_join_scan;        // the one-channel scan before a join is running
 static bool s_join_pending;     // a join waits for the app's scan to finish
 static bool s_pinned;           // the STA config names one AP (BSSID + channel)
@@ -201,11 +201,13 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     LOCK();
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         s_started = true;
-        if (s_enabled && s_ssid[0] && !s_suspended) {
+        if (s_enabled && s_ssid[0] && !s_suspended && !s_paused) {
             start_connect_locked();     // turned on (os_wifi_boot) before the driver had started
         } else {
             park_locked();
         }
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_STOP) {
+        s_started = false;
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *d = data;
         s_ip[0] = 0;
@@ -437,6 +439,60 @@ void os_wifi_resume(void)
         park_locked();
     }
     UNLOCK();
+}
+
+void os_wifi_pause(void)
+{
+    LOCK();
+    if (s_paused) {
+        UNLOCK();
+        return;
+    }
+    s_paused = true;
+    s_suspended = true;
+    s_state = OS_WIFI_SUSPENDED;
+    s_ip[0] = 0;
+    s_scanning = s_join_pending = false;
+    UNLOCK();
+    esp_wifi_scan_stop();
+    esp_wifi_disconnect();
+    esp_err_t err = esp_wifi_stop();
+    LOCK();
+    s_started = false;
+    UNLOCK();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "wifi pause stop: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "wifi paused (radio off)");
+    }
+}
+
+void os_wifi_unpause(void)
+{
+    LOCK();
+    if (!s_paused) {
+        UNLOCK();
+        return;
+    }
+    s_paused = false;
+    s_suspended = false;
+    s_state = OS_WIFI_IDLE;
+    s_retries = 0;
+    UNLOCK();
+    esp_err_t err = esp_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "wifi unpause start: %s", esp_err_to_name(err));
+        return;
+    }
+    if (esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO) != ESP_OK) {
+        ESP_LOGW(TAG, "dual-band mode unavailable");
+    }
+    ESP_LOGI(TAG, "wifi unpaused");
+}
+
+bool os_wifi_paused(void)
+{
+    return s_paused;
 }
 
 void os_wifi_set_enabled(bool on)
