@@ -1,0 +1,17 @@
+snes9x2002 (PocketSNES / Snes9x 1.39 libretro port)
+https://github.com/libretro/snes9x2002
+vendored at commit 6ffbf9ef4f0063e1f1b78a40d10c50fc52f2524c
+
+Interpreter C path only (ppu_.c / gfx.c / tile.c). ARM assembler, ASMCPU,
+and ASM_SPC700 are not shipped.
+
+Snes9x is freeware for PERSONAL / non-commercial use. See LICENSE.
+libretro-common headers (boolean.h, retro_inline.h, retro_common_api.h,
+memory_stream) are MIT.
+
+Local patches:
+- MAX_ROM_SIZE 4 MB (was 6 MB) plus 64 KB C4 RAM after the ROM buffer
+- LoadROM can consume a ROM already copied into Memory.ROM (no second copy)
+- memset32/memset16 fill a 32/16-bit pattern on non-ARM (was a byte memset)
+- Large BSS (maps, echo, DMA scratch, DSP tables) in PSRAM via EXT_RAM_BSS_ATTR
+- Cheat search RAM omitted; S9xInitCheatData / S9xApplyCheats are empty stubs
