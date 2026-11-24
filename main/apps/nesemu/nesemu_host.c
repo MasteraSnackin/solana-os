@@ -70,6 +70,8 @@ static uint8_t *s_sram_snap;
 static size_t s_sram_bytes;
 static bool s_save_dirty;
 static bitmap_t *s_hw_bmp;
+/* vid_init probe only. clear callback is a no-op so size can stay tiny —
+ * a full 256x240 stub would steal ~60 KB internal DRAM (BSS) and OOM SD/TLS. */
 static uint8_t s_dummy_fb[4];
 
 /* ---- OSD / video ------------------------------------------------------- */
@@ -107,9 +109,9 @@ static void vid_clear_cb(uint8 color)
 
 static bitmap_t *vid_lock_write_cb(void)
 {
-    /* Only used during vid_init probe; real pixels go to vid_setmode's buffer. */
+    /* Probe only; primary_buffer from vid_setmode holds real pixels. */
     if (!s_hw_bmp) {
-        s_hw_bmp = bmp_createhw(s_dummy_fb, NES_WIDTH, NES_HEIGHT, NES_WIDTH);
+        s_hw_bmp = bmp_createhw(s_dummy_fb, 1, 1, 1);
     }
     return s_hw_bmp;
 }
@@ -408,7 +410,10 @@ bool nes_core_boot(const char *rom_path, const char *sav_path)
         s_nes->rominfo->filename[PATH_MAX] = 0;
     }
 
-    if (vid_setmode(NES_WIDTH, NES_HEIGHT)) {
+    /* PPU writes scanlines 0..239; custom_blit crops 8 lines top/bottom to
+     * NES_HEIGHT (224). A 224-tall primary_buffer OOB-reads line[224..] and
+     * panics (Load access fault) on the first vid_flush. */
+    if (vid_setmode(NES_SCREEN_WIDTH, NES_SCREEN_HEIGHT)) {
         ESP_LOGE(TAG, "vid_setmode");
         goto fail;
     }
