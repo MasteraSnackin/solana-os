@@ -36,6 +36,7 @@ set(SOLANA_OS_SRCS
     apps/gbemu/walnut_cgb_cpu.c
     apps/gbaemu/gbaemu_app.c
     apps/snesemu/snesemu_app.c
+    apps/nesemu/nesemu_app.c
     lua/lua_host.c lua/lua_ui.c lua/lua_sys.c lua/lua_net.c lua/lua_json.c lua/lua_pkg.c lua/lua_cmd.c
     lua/lua_fs.c lua/lua_install.c lua/lua_code.c lua/lua_ws.c lua/lua_img.c lua/lua_png.c lua/lua_gif.c lua/lua_meet.c
     lua/lua_ble.c lua/lua_crypto.c
