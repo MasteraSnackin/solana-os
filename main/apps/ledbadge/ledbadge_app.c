@@ -14,7 +14,7 @@
 #include "core/ui.h"
 
 #define NVS_NS          "ledbadge"
-#define NAME_MAX        24
+#define LEDBADGE_NAME_MAX 24  /* avoid clash with POSIX NAME_MAX */
 #define FRAME_MS        40
 #define PREVIEW_Y       4
 #define PREVIEW_H       28
@@ -81,7 +81,7 @@ static int s_mode = MODE_GRADIENT;
 static int s_bright = OS_LED_MAX;       // 1..OS_LED_MAX
 static int s_color;                     // palette index
 static int s_speed = SPEED_NORMAL;
-static char s_name[NAME_MAX] = "SOLANA";
+static char s_name[LEDBADGE_NAME_MAX] = "SOLANA";
 static int s_tick;
 static int s_scroll;                    // column offset for name mode
 static uint32_t s_rand;
@@ -482,7 +482,7 @@ static void build_preview(lv_obj_t *root)
 
 static void open_name_kb(void)
 {
-    s_kb = ui_kb_create(s_root, "Badge name (A-Z, 0-9)", NAME_MAX - 1);
+    s_kb = ui_kb_create(s_root, "Badge name (A-Z, 0-9)", LEDBADGE_NAME_MAX - 1);
 }
 
 static void enter(lv_obj_t *root)
