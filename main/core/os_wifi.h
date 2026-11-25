@@ -68,3 +68,10 @@ void os_wifi_set_park_channel(int channel);
 
 void os_wifi_suspend(void);
 void os_wifi_resume(void);
+
+// Stop the Wi-Fi driver (radio off: no STA, no ESP-NOW). Does not change
+// whether Wi-Fi is enabled. Unpause starts the driver again and reconnects
+// if it was on, else parks on the mesh channel. Nested calls are no-ops.
+void os_wifi_pause(void);
+void os_wifi_unpause(void);
+bool os_wifi_paused(void);

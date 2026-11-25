@@ -43,6 +43,11 @@ void os_splash(void);
 void os_launch(const os_app_t *app);
 void os_launch_id(const char *id);
 void os_inject_key(os_key_t key);
+// Overlay bits for apps that poll bsp_buttons_get() (gbemu / gbaemu). Same
+// layout as GBA P1 / GB joypad before invert. Console `key start|l|r` uses this
+// because those names are not OS keys. Timed; any task.
+void os_pad_inject(uint32_t bits, int ms);
+uint32_t os_pad_injected(void);
 
 // Run fn(arg) on the OS task with the LVGL lock held, after the current
 // callback. Safe from any task (mesh handlers, API callbacks, timers). Returns
@@ -100,3 +105,17 @@ void os_invert_apply(void);
 
 // Screenshot of the live screen over the console, see tools/badge.py.
 void os_screenshot(void);
+// While LVGL is paused (GBA/GB/SNES direct blit), `shot` calls this instead of an
+// LVGL refresh that would never flush. Print SHOT-BEGIN..SHOT-END and return
+// true; NULL restores the LVGL capture. Any task.
+typedef bool (*os_direct_shot_fn)(void);
+void os_set_direct_shot(os_direct_shot_fn fn);
+
+// While a heavy native app is playing (GBA, GB, or SNES ROM, not the picker): stop Wi-Fi,
+// ESP-NOW mesh, the cloud task, the 250 ms game tick, Lua if a host task is
+// still alive, and BLE. The OS task sleeps on buttons and a cheap battery
+// tick instead of its 100 ms loop. Nested calls are no-ops. Matching unpause
+// restores the same set (ROM list, HOME, app exit). Any task.
+void os_background_pause(void);
+void os_background_unpause(void);
+bool os_background_paused(void);

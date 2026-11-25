@@ -53,6 +53,10 @@ typedef struct {
 } os_cloud_info_t;
 
 void os_cloud_init(void);                   // after os_wifi_init()
+
+// Park the cloud task (no hello, no 1 s Wi-Fi poll) while a ROM is playing.
+void os_cloud_pause(void);
+void os_cloud_unpause(void);
 void os_cloud_get_info(os_cloud_info_t *out);
 void os_cloud_refresh(void);                // say hello now instead of at the next poll
 void os_cloud_set_server(const char *url);  // saved to NVS; "" clears

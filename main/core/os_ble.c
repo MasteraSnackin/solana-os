@@ -1694,6 +1694,17 @@ esp_err_t os_ble_start(os_ble_wake_t wake, void *ctx)
     return ESP_OK;
 }
 
+void os_ble_pause(void)
+{
+    void *ctx;
+    lock();
+    ctx = s_owner;
+    unlock();
+    if (ctx) {
+        os_ble_stop(ctx);
+    }
+}
+
 void os_ble_stop(void *ctx)
 {
     lock();

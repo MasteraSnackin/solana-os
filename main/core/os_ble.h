@@ -113,6 +113,9 @@ esp_err_t os_ble_start(os_ble_wake_t wake, void *ctx);
 void os_ble_stop(void *ctx);
 
 bool os_ble_active(void);                       // on, for anyone
+// Turn BLE off if someone has it (a leftover Lua session). Stays off until
+// an app calls os_ble_start again.
+void os_ble_pause(void);
 bool os_ble_address(os_ble_addr_t *out);        // this badge's own address; false while off
 
 // --- being found -----------------------------------------------------------
