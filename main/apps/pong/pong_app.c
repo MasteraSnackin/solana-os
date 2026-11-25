@@ -1,6 +1,7 @@
 // Pong: 1P vs AI or local 2P for the BP26 badge.
 // P1: UP/DOWN. 2P: LEFT=up / RIGHT=down for the right paddle.
 // SELECT start·resume·restart; CANCEL pause / title / exit. Offline; NVS best.
+// Soft beep only when board.h defines BOARD_BEEP_GPIO (stock BP26: silent).
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,9 +11,18 @@
 #include "esp_random.h"
 #include "nvs.h"
 
+#include "board.h"
 #include "core/os.h"
 #include "core/os_mem.h"
 #include "core/ui.h"
+
+#include "apps/pong/pong_spin.h"
+
+#if defined(BOARD_BEEP_GPIO)
+#include "driver/ledc.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#endif
 
 #define NVS_NS          "pong"
 #define NVS_BEST        "best"
@@ -128,6 +138,38 @@ static int ai_max_step(void)
     default:
         return 8;
     }
+}
+
+/* Soft UI beep. Stock board.h has no audio path — no-op unless BOARD_BEEP_GPIO. */
+static void soft_beep(int freq_hz, int ms)
+{
+#if defined(BOARD_BEEP_GPIO)
+    /* One-shot LEDC chirp on the piezo pin (timer/channel 1 — BL uses 0). */
+    ledc_timer_config_t t = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_10_BIT,
+        .timer_num = LEDC_TIMER_1,
+        .freq_hz = (uint32_t)(freq_hz > 0 ? freq_hz : 1200),
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ledc_channel_config_t ch = {
+        .gpio_num = BOARD_BEEP_GPIO,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_1,
+        .timer_sel = LEDC_TIMER_1,
+        .duty = 128, /* soft ~12% of 10-bit */
+        .hpoint = 0,
+    };
+    if (ledc_timer_config(&t) != ESP_OK || ledc_channel_config(&ch) != ESP_OK) {
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(ms > 0 ? ms : 20));
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+#else
+    (void)freq_hz;
+    (void)ms;
+#endif
 }
 
 // ---- NVS ------------------------------------------------------------------
@@ -416,21 +458,16 @@ static void ai_tick(void)
 
 static void bounce_paddle(int paddle_y, int dir)
 {
-    /* reverse horizontal; spin from hit offset */
+    /* reverse horizontal; paddle-edge spin from hit Y */
     s_vx = (s_vx < 0 ? -s_vx : s_vx);
     if (dir < 0) {
         s_vx = -s_vx;
     }
-    int hit = (s_ball_y + BALL_S / 2) - (paddle_y + PADDLE_H / 2);
-    s_vy = hit / 6;
+    int ball_cy = s_ball_y + BALL_S / 2;
+    s_vy = pong_edge_spin(ball_cy, paddle_y, PADDLE_H);
     if (s_vy == 0) {
+        /* dead-centre: keep a tiny non-flat rally */
         s_vy = (esp_random() & 1) ? 1 : -1;
-    }
-    if (s_vy > 6) {
-        s_vy = 6;
-    }
-    if (s_vy < -6) {
-        s_vy = -6;
     }
     /* slight speed-up on bounce, cap */
     if (s_vx > 0 && s_vx < 14) {
@@ -438,6 +475,7 @@ static void bounce_paddle(int paddle_y, int dir)
     } else if (s_vx < 0 && s_vx > -14) {
         s_vx--;
     }
+    soft_beep(1800, 18); /* paddle tick */
 }
 
 static void score_point(bool left_scored)
@@ -447,6 +485,7 @@ static void score_point(bool left_scored)
     } else {
         s_score_r++;
     }
+    soft_beep(600, 40); /* point */
     refresh_hud();
     if (s_score_l >= WIN_SCORE || s_score_r >= WIN_SCORE) {
         match_over(s_score_l > s_score_r);
@@ -473,9 +512,11 @@ static void physics_step(void)
     if (s_ball_y < 2) {
         s_ball_y = 2;
         s_vy = -s_vy;
+        soft_beep(900, 12);
     } else if (s_ball_y + BALL_S > COURT_H - 2) {
         s_ball_y = COURT_H - 2 - BALL_S;
         s_vy = -s_vy;
+        soft_beep(900, 12);
     }
 
     int p1_x = PADDLE_MARGIN;
