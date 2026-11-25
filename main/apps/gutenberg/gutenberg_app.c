@@ -40,6 +40,8 @@ static const char *TAG = "gutenberg";
 #define VIEW_H          (OS_ROOT_H - UI_HINT_H)
 #define WORKER_STACK    8192
 #define URL_MAX         128
+#define SEARCH_MAX      32
+#define CTRL_SEARCH     0   // catalog list row 0: open on-screen search keyboard
 
 enum { FONT_SM = 0, FONT_MD, FONT_LG, FONT_COUNT };
 static const lv_font_t *const k_fonts[FONT_COUNT] = {
@@ -62,26 +64,74 @@ typedef struct {
 
 // Curated public-domain classics (plain-text UTF-8). No modern copyrighted works.
 static const pg_entry_t k_catalog[] = {
-    { 11,   "Alice in Wonderland",           "Lewis Carroll",          "alice" },
-    { 16,   "Peter Pan",                     "J. M. Barrie",           "peter-pan" },
-    { 35,   "The Time Machine",              "H. G. Wells",            "time-machine" },
-    { 36,   "The War of the Worlds",         "H. G. Wells",            "war-worlds" },
-    { 43,   "Dr. Jekyll and Mr. Hyde",       "R. L. Stevenson",        "jekyll-hyde" },
-    { 74,   "Tom Sawyer",                    "Mark Twain",             "tom-sawyer" },
-    { 76,   "Huckleberry Finn",              "Mark Twain",             "huck-finn" },
-    { 84,   "Frankenstein",                  "Mary Shelley",           "frankenstein" },
-    { 98,   "A Tale of Two Cities",          "Charles Dickens",        "two-cities" },
-    { 174,  "The Picture of Dorian Gray",    "Oscar Wilde",            "dorian-gray" },
-    { 345,  "Dracula",                       "Bram Stoker",            "dracula" },
-    { 1342, "Pride and Prejudice",           "Jane Austen",            "pride-prejudice" },
-    { 1661, "Sherlock Holmes (Adventures)",  "Arthur Conan Doyle",     "sherlock" },
-    { 2701, "Moby Dick",                     "Herman Melville",        "moby-dick" },
-    { 5200, "Metamorphosis",                 "Franz Kafka",            "metamorphosis" },
+    { 11,    "Alice in Wonderland",           "Lewis Carroll",          "alice" },
+    { 12,    "Through the Looking-Glass",     "Lewis Carroll",          "looking-glass" },
+    { 16,    "Peter Pan",                     "J. M. Barrie",           "peter-pan" },
+    { 20,    "Paradise Lost",                 "John Milton",            "paradise-lost" },
+    { 23,    "Narrative of Frederick Douglass", "Frederick Douglass",   "douglass" },
+    { 33,    "The Scarlet Letter",            "Nathaniel Hawthorne",    "scarlet-letter" },
+    { 35,    "The Time Machine",              "H. G. Wells",            "time-machine" },
+    { 36,    "The War of the Worlds",         "H. G. Wells",            "war-worlds" },
+    { 41,    "The Legend of Sleepy Hollow",   "Washington Irving",      "sleepy-hollow" },
+    { 43,    "Dr. Jekyll and Mr. Hyde",       "R. L. Stevenson",        "jekyll-hyde" },
+    { 45,    "Anne of Green Gables",          "L. M. Montgomery",       "anne-green" },
+    { 46,    "A Christmas Carol",             "Charles Dickens",        "christmas-carol" },
+    { 55,    "The Wonderful Wizard of Oz",    "L. Frank Baum",          "wizard-oz" },
+    { 74,    "Tom Sawyer",                    "Mark Twain",             "tom-sawyer" },
+    { 76,    "Huckleberry Finn",              "Mark Twain",             "huck-finn" },
+    { 84,    "Frankenstein",                  "Mary Shelley",           "frankenstein" },
+    { 98,    "A Tale of Two Cities",          "Charles Dickens",        "two-cities" },
+    { 103,   "Around the World in 80 Days",   "Jules Verne",            "80-days" },
+    { 105,   "Persuasion",                    "Jane Austen",            "persuasion" },
+    { 120,   "Treasure Island",               "R. L. Stevenson",        "treasure-island" },
+    { 121,   "Journey to the Center of the Earth", "Jules Verne",       "journey-earth" },
+    { 158,   "Emma",                          "Jane Austen",            "emma" },
+    { 161,   "Sense and Sensibility",         "Jane Austen",            "sense-sensibility" },
+    { 164,   "Twenty Thousand Leagues",       "Jules Verne",            "20k-leagues" },
+    { 174,   "The Picture of Dorian Gray",    "Oscar Wilde",            "dorian-gray" },
+    { 203,   "Uncle Tom's Cabin",             "Harriet Beecher Stowe",  "uncle-tom" },
+    { 205,   "Walden",                        "Henry David Thoreau",    "walden" },
+    { 215,   "The Call of the Wild",          "Jack London",            "call-wild" },
+    { 219,   "Heart of Darkness",             "Joseph Conrad",          "heart-darkness" },
+    { 236,   "The Jungle Book",               "Rudyard Kipling",        "jungle-book" },
+    { 244,   "A Study in Scarlet",            "Arthur Conan Doyle",     "study-scarlet" },
+    { 345,   "Dracula",                       "Bram Stoker",            "dracula" },
+    { 421,   "Kidnapped",                     "R. L. Stevenson",        "kidnapped" },
+    { 514,   "Little Women",                  "Louisa May Alcott",      "little-women" },
+    { 730,   "The Red Badge of Courage",      "Stephen Crane",          "red-badge" },
+    { 768,   "Wuthering Heights",             "Emily Bronte",           "wuthering" },
+    { 829,   "Gulliver's Travels",            "Jonathan Swift",         "gulliver" },
+    { 844,   "The Importance of Being Earnest", "Oscar Wilde",          "earnest" },
+    { 996,   "Don Quixote",                   "Miguel de Cervantes",    "don-quixote" },
+    { 1080,  "A Modest Proposal",             "Jonathan Swift",         "modest-proposal" },
+    { 1184,  "The Count of Monte Cristo",     "Alexandre Dumas",        "monte-cristo" },
+    { 1232,  "The Prince",                    "Niccolo Machiavelli",    "the-prince" },
+    { 1260,  "Jane Eyre",                     "Charlotte Bronte",       "jane-eyre" },
+    { 1342,  "Pride and Prejudice",           "Jane Austen",            "pride-prejudice" },
+    { 1399,  "Anna Karenina",                 "Leo Tolstoy",            "anna-karenina" },
+    { 1400,  "Great Expectations",            "Charles Dickens",        "great-expectations" },
+    { 1497,  "The Republic",                  "Plato",                  "republic" },
+    { 1513,  "Romeo and Juliet",              "William Shakespeare",    "romeo-juliet" },
+    { 1524,  "Hamlet",                        "William Shakespeare",    "hamlet" },
+    { 1533,  "Macbeth",                       "William Shakespeare",    "macbeth" },
+    { 1661,  "Sherlock Holmes (Adventures)",  "Arthur Conan Doyle",     "sherlock" },
+    { 1727,  "The Odyssey",                   "Homer (Butler)",         "odyssey" },
+    { 1952,  "The Yellow Wallpaper",          "Charlotte Perkins Gilman", "yellow-wallpaper" },
+    { 2554,  "Crime and Punishment",          "Fyodor Dostoevsky",      "crime-punishment" },
+    { 2600,  "War and Peace",                 "Leo Tolstoy",            "war-peace" },
+    { 2701,  "Moby Dick",                     "Herman Melville",        "moby-dick" },
+    { 2814,  "Dubliners",                     "James Joyce",            "dubliners" },
+    { 2852,  "The Hound of the Baskervilles", "Arthur Conan Doyle",     "baskervilles" },
+    { 5200,  "Metamorphosis",                 "Franz Kafka",            "metamorphosis" },
+    { 6130,  "The Iliad",                     "Homer (Butler)",         "iliad" },
+    { 16328, "Beowulf",                       "Anonymous",              "beowulf" },
+    { 64317, "The Great Gatsby",              "F. Scott Fitzgerald",    "gatsby" },
 };
 static const int k_catalog_n = sizeof(k_catalog) / sizeof(k_catalog[0]);
 
 static lv_obj_t *s_root, *s_hint, *s_msg, *s_scroll, *s_body, *s_title, *s_tab_lbl, *s_offline;
 static ui_list_t *s_list;
+static ui_kb_t *s_kb;
 static view_t s_view;
 static tab_t s_tab;
 static int s_font;
@@ -92,6 +142,10 @@ static char s_books[MAX_BOOKS][PATH_MAX_LEN];
 static int s_nbooks;
 static int32_t s_restore_y = -1;
 
+static char s_q[SEARCH_MAX];
+static int s_filt[sizeof(k_catalog) / sizeof(k_catalog[0])];
+static int s_nfilt;
+
 static volatile dl_t s_dl;
 static char s_err[96];
 static int s_dl_catalog_i = -1;
@@ -101,6 +155,7 @@ static void show_picker(void);
 static void open_book(const char *path);
 static void save_pos(void);
 static void load_pos(char *path_out, size_t path_n, int *font, int32_t *scroll_y);
+static void rebuild_filter(void);
 
 static bool wifi_ready(void)
 {
@@ -144,14 +199,56 @@ static bool catalog_on_sd(const pg_entry_t *e, char *out, size_t n)
     return access(out, R_OK) == 0;
 }
 
+static void rebuild_filter(void)
+{
+    s_nfilt = 0;
+    for (int i = 0; i < k_catalog_n; i++) {
+        if (s_q[0]) {
+            if (!strcasestr(k_catalog[i].title, s_q) &&
+                !strcasestr(k_catalog[i].author, s_q) &&
+                !strcasestr(k_catalog[i].slug, s_q)) {
+                continue;
+            }
+        }
+        s_filt[s_nfilt++] = i;
+    }
+}
+
+static int catalog_list_count(void)
+{
+    return 1 + s_nfilt;   // search row + matches
+}
+
+static const pg_entry_t *catalog_at_list(int list_i)
+{
+    int fi = list_i - 1;
+    if (fi < 0 || fi >= s_nfilt) {
+        return NULL;
+    }
+    return &k_catalog[s_filt[fi]];
+}
+
 static void book_row(int i, ui_row_t *row, void *ctx)
 {
     (void)ctx;
     if (s_tab == TAB_CATALOG) {
-        if (i < 0 || i >= k_catalog_n) {
+        if (i == CTRL_SEARCH) {
+            strlcpy(row->title, LV_SYMBOL_EYE_OPEN "  Search", sizeof(row->title));
+            if (s_q[0]) {
+                strlcpy(row->sub, s_q, sizeof(row->sub));
+                snprintf(row->right, sizeof(row->right), "%d", s_nfilt);
+                row->right_color = COL_OK;
+            } else {
+                strlcpy(row->sub, "Filter by title or author", sizeof(row->sub));
+                strlcpy(row->right, "kb", sizeof(row->right));
+                row->right_color = COL_DIM;
+            }
             return;
         }
-        const pg_entry_t *e = &k_catalog[i];
+        const pg_entry_t *e = catalog_at_list(i);
+        if (!e) {
+            return;
+        }
         strlcpy(row->title, e->title, sizeof(row->title));
         strlcpy(row->sub, e->author, sizeof(row->sub));
         char path[PATH_MAX_LEN];
@@ -188,7 +285,8 @@ static void message(const char *text)
 static void clear_picker_ui(void)
 {
     // Drop every root child except the offline panel (ui_list frees itself on
-    // box DELETE). Avoids leaking a new list each tab switch.
+    // box DELETE). Avoids leaking a new list each tab switch. Do not call
+    // while s_kb is open — delete the keyboard first.
     s_list = NULL;
     s_msg = s_hint = s_tab_lbl = NULL;
     if (!s_root) {
@@ -493,7 +591,7 @@ static void set_picker_hint(void)
     if (s_tab == TAB_CATALOG) {
         lv_label_set_text(s_hint,
                           LV_SYMBOL_UP LV_SYMBOL_DOWN "  "
-                          LV_SYMBOL_LEFT LV_SYMBOL_RIGHT " tab  SELECT get/open  CANCEL");
+                          LV_SYMBOL_LEFT LV_SYMBOL_RIGHT " tab  SELECT get/search  CANCEL");
     } else {
         lv_label_set_text(s_hint,
                           LV_SYMBOL_UP LV_SYMBOL_DOWN "  "
@@ -524,8 +622,10 @@ static void show_picker(void)
             set_picker_hint();
             return;
         }
+        rebuild_filter();
         s_list = ui_list_create(s_root, list_y, list_h, book_row, NULL);
-        ui_list_set_count(s_list, k_catalog_n);
+        ui_list_set_count(s_list, catalog_list_count());
+        ui_list_set_empty(s_list, s_q[0] ? "No matches" : "Catalog empty");
         s_hint = ui_hint(s_root, "");
         set_picker_hint();
         return;
@@ -573,9 +673,12 @@ static void enter(lv_obj_t *root)
     s_tab = TAB_SD;
     s_scroll = s_body = s_title = s_hint = s_msg = s_tab_lbl = NULL;
     s_list = NULL;
+    s_kb = NULL;
     s_text = NULL;
     s_text_len = 0;
     s_path[0] = 0;
+    s_q[0] = 0;
+    s_nfilt = 0;
     s_restore_y = -1;
     s_dl = DL_IDLE;
     s_err[0] = 0;
@@ -609,12 +712,17 @@ static void exit_app(void)
     for (int i = 0; i < 50 && s_dl == DL_BUSY; i++) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
+    if (s_kb) {
+        ui_kb_delete(s_kb);
+        s_kb = NULL;
+    }
     free(s_text);
     s_text = NULL;
     s_text_len = 0;
     s_root = s_hint = s_msg = s_scroll = s_body = s_title = s_tab_lbl = s_offline = NULL;
     s_list = NULL;
     s_path[0] = 0;
+    s_q[0] = 0;
     s_dl = DL_IDLE;
 }
 
@@ -665,6 +773,22 @@ static bool on_key(os_key_t key, bool repeat)
         return true;
     }
 
+    if (s_kb) {
+        ui_kb_result_t r = ui_kb_key(s_kb, key, repeat);
+        if (r != UI_KB_BUSY) {
+            if (r == UI_KB_DONE) {
+                strlcpy(s_q, ui_kb_text(s_kb), sizeof(s_q));
+            }
+            ui_kb_delete(s_kb);
+            s_kb = NULL;
+            if (r == UI_KB_DONE) {
+                clear_picker_ui();
+                show_picker();
+            }
+        }
+        return true;
+    }
+
     if (s_view == V_PICKER) {
         if (s_dl == DL_BUSY) {
             return key != OS_KEY_HOME;  // block exit keys except HOME
@@ -681,11 +805,17 @@ static bool on_key(os_key_t key, bool repeat)
         if (key == OS_KEY_SELECT && s_list) {
             int i = ui_list_selected(s_list);
             if (s_tab == TAB_CATALOG) {
-                if (i < 0 || i >= k_catalog_n) {
+                if (i == CTRL_SEARCH) {
+                    s_kb = ui_kb_create(s_root, "Search catalog", sizeof(s_q) - 1);
                     return true;
                 }
+                const pg_entry_t *e = catalog_at_list(i);
+                if (!e) {
+                    return true;
+                }
+                int catalog_i = s_filt[i - 1];
                 char path[PATH_MAX_LEN];
-                if (catalog_on_sd(&k_catalog[i], path, sizeof(path))) {
+                if (catalog_on_sd(e, path, sizeof(path))) {
                     s_restore_y = -1;
                     char last[PATH_MAX_LEN];
                     int font;
@@ -701,7 +831,7 @@ static bool on_key(os_key_t key, bool repeat)
                     message("Downloading from\nProject Gutenberg…");
                     s_hint = ui_hint(s_root, "");
                     set_picker_hint();
-                    if (!start_download(i)) {
+                    if (!start_download(catalog_i)) {
                         show_picker();
                     }
                 }
