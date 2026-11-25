@@ -1,8 +1,9 @@
 // LED Badge: wearable patterns on the BP26's 8x WS2812B strip (GPIO27).
 // Pick a pattern, brightness and colour on device; optionally set a name that
-// scrolls on the LCD and as a bit-column sweep across the LEDs. An esp_timer
-// keeps the strip animating after you leave the app (turn Pattern to Off to
-// stop). Brightness is capped at OS_LED_MAX like the rest of the OS.
+// shows on the LCD and LEDs. Name text has two layouts: Scroll (LCD marquee +
+// LED column sweep) or Full display (static LCD name + entire message fitted
+// across the 8 LEDs). An esp_timer keeps the strip animating after you leave
+// the app (turn Pattern to Off to stop). Brightness is capped at OS_LED_MAX.
 
 #include <stdio.h>
 #include <string.h>
@@ -32,9 +33,12 @@ enum {
     MODE_COUNT
 };
 
-enum { ROW_PATTERN, ROW_BRIGHT, ROW_COLOR, ROW_SPEED, ROW_NAME, ROW_COUNT };
+enum { ROW_PATTERN, ROW_BRIGHT, ROW_COLOR, ROW_SPEED, ROW_DISPLAY, ROW_NAME, ROW_COUNT };
 
 enum { SPEED_SLOW, SPEED_NORMAL, SPEED_FAST, SPEED_COUNT };
+
+// How Name mode paints the message on the strip / LCD preview.
+enum { NAME_DISP_SCROLL, NAME_DISP_FULL, NAME_DISP_COUNT };
 
 static const char *const mode_names[MODE_COUNT] = {
     "Off", "Solid", "Solana gradient", "Rainbow chase",
@@ -43,6 +47,10 @@ static const char *const mode_names[MODE_COUNT] = {
 
 static const char *const speed_names[SPEED_COUNT] = { "Slow", "Normal", "Fast" };
 static const int speed_div[SPEED_COUNT] = { 3, 2, 1 };
+
+static const char *const name_disp_names[NAME_DISP_COUNT] = {
+    "Scroll", "Full display",
+};
 
 static const uint32_t palette[] = {
     COL_PURPLE, COL_GREEN, COL_PINK, COL_BLUE, COL_AQUA, COL_LIME, COL_YELLOW, COL_ORANGE, 0xFFFFFF,
@@ -81,9 +89,10 @@ static int s_mode = MODE_GRADIENT;
 static int s_bright = OS_LED_MAX;       // 1..OS_LED_MAX
 static int s_color;                     // palette index
 static int s_speed = SPEED_NORMAL;
+static int s_name_disp = NAME_DISP_SCROLL;
 static char s_name[LEDBADGE_NAME_MAX] = "SOLANA";
 static int s_tick;
-static int s_scroll;                    // column offset for name mode
+static int s_scroll;                    // column offset for name scroll mode
 static uint32_t s_rand;
 
 static lv_obj_t *s_root, *s_preview[BOARD_RGB_COUNT], *s_hint, *s_marquee;
@@ -158,15 +167,25 @@ static const uint8_t *glyph_cols(char c, int *n)
     return font_sp;
 }
 
-// Total pixel columns in the scrolling message (glyphs + 1-column gaps + pad).
-static int name_width(void)
+// Pixel columns of the message itself (glyphs + 1-column gaps), no scroll pad.
+static int name_content_width(void)
 {
-    int w = BOARD_RGB_COUNT;            // trailing blank so it clears the strip
+    int w = 0;
     for (const char *p = s_name; *p; p++) {
         int n;
         glyph_cols(*p, &n);
         w += n + 1;
     }
+    if (w > 0) {
+        w--;                            // drop trailing gap after last glyph
+    }
+    return w;
+}
+
+// Total pixel columns in the scrolling message (content + pad to clear strip).
+static int name_width(void)
+{
+    int w = name_content_width() + BOARD_RGB_COUNT;
     return w < BOARD_RGB_COUNT ? BOARD_RGB_COUNT : w;
 }
 
@@ -189,6 +208,40 @@ static uint8_t name_column(int col)
         at++;
     }
     return 0;
+}
+
+// Map LED index 0..BOARD_RGB_COUNT-1 onto a font column for Full display:
+// short messages are centered; longer ones are scaled to span the whole strip.
+static uint8_t name_column_full(int led)
+{
+    int w = name_content_width();
+    if (w <= 0 || led < 0 || led >= BOARD_RGB_COUNT) {
+        return 0;
+    }
+    if (w <= BOARD_RGB_COUNT) {
+        int pad = (BOARD_RGB_COUNT - w) / 2;
+        return name_column(led - pad);
+    }
+    // Sample across the full message so every LED shows a slice of the text.
+    int col = (led * w) / BOARD_RGB_COUNT;
+    if (col >= w) {
+        col = w - 1;
+    }
+    return name_column(col);
+}
+
+static void paint_name_led(int i, uint8_t col, uint32_t solid)
+{
+    if (col) {
+        int bits = 0;
+        for (uint8_t m = col; m; m >>= 1) {
+            bits += m & 1;
+        }
+        uint32_t c = lerp_rgb(0, solid, 4 + bits * 4, 32);
+        led_scaled(i, c);
+    } else {
+        bsp_rgb_set(i, 0, 0, 0);
+    }
 }
 
 static void apply_frame(void)
@@ -256,19 +309,12 @@ static void apply_frame(void)
         }
         break;
     case MODE_NAME:
-        // Spatial window: LED i shows font column (scroll+i); on if any ink.
+        // Scroll: sliding window over font columns. Full: fit whole message.
         for (int i = 0; i < BOARD_RGB_COUNT; i++) {
-            uint8_t col = name_column(s_scroll + i);
-            if (col) {
-                int bits = 0;
-                for (uint8_t m = col; m; m >>= 1) {
-                    bits += m & 1;
-                }
-                uint32_t c = lerp_rgb(0, solid, 4 + bits * 4, 32);
-                led_scaled(i, c);
-            } else {
-                bsp_rgb_set(i, 0, 0, 0);
-            }
+            uint8_t col = (s_name_disp == NAME_DISP_FULL)
+                ? name_column_full(i)
+                : name_column(s_scroll + i);
+            paint_name_led(i, col, solid);
         }
         break;
     }
@@ -309,12 +355,36 @@ static void preview_sync(void)
     if (s_marquee) {
         if (name_ui) {
             lv_label_set_text(s_marquee, s_name);
-            int w = (int)lv_obj_get_width(s_marquee);
-            if (w < 8) {
-                w = (int)strlen(s_name) * 10;
+            if (s_name_disp == NAME_DISP_FULL) {
+                // Static full-preview render: large centered name, no marquee.
+                lv_obj_set_style_text_font(s_marquee, &sol_font_32, 0);
+                lv_obj_update_layout(s_marquee);
+                int w = (int)lv_obj_get_width(s_marquee);
+                int h = (int)lv_obj_get_height(s_marquee);
+                if (w < 8) {
+                    w = (int)strlen(s_name) * 16;
+                }
+                if (h < 8) {
+                    h = 28;
+                }
+                int x = (OS_ROOT_W - w) / 2;
+                if (x < 0) {
+                    x = 0;
+                }
+                int y = PREVIEW_Y + (PREVIEW_H - h) / 2;
+                if (y < PREVIEW_Y) {
+                    y = PREVIEW_Y;
+                }
+                lv_obj_set_pos(s_marquee, x, y);
+            } else {
+                lv_obj_set_style_text_font(s_marquee, &sol_font_20, 0);
+                int w = (int)lv_obj_get_width(s_marquee);
+                if (w < 8) {
+                    w = (int)strlen(s_name) * 10;
+                }
+                int x = OS_ROOT_W - ((s_tick * 3) % (OS_ROOT_W + w));
+                lv_obj_set_pos(s_marquee, x, PREVIEW_Y + 2);
             }
-            int x = OS_ROOT_W - ((s_tick * 3) % (OS_ROOT_W + w));
-            lv_obj_set_pos(s_marquee, x, PREVIEW_Y + 2);
             lv_obj_set_hidden(s_marquee, false);
         } else {
             lv_obj_set_hidden(s_marquee, true);
@@ -329,7 +399,7 @@ static void timer_cb(void *arg)
         return;
     }
     if (s_tick % speed_div[s_speed] == 0) {
-        if (s_mode == MODE_NAME) {
+        if (s_mode == MODE_NAME && s_name_disp == NAME_DISP_SCROLL) {
             s_scroll++;
             if (s_scroll >= name_width()) {
                 s_scroll = 0;
@@ -369,6 +439,7 @@ static void save_settings(void)
     nvs_set_i32(h, "bright", s_bright);
     nvs_set_i32(h, "color", s_color);
     nvs_set_i32(h, "speed", s_speed);
+    nvs_set_i32(h, "namedisp", s_name_disp);
     nvs_set_str(h, "name", s_name);
     nvs_commit(h);
     nvs_close(h);
@@ -392,6 +463,9 @@ static void load_settings(void)
     }
     if (nvs_get_i32(h, "speed", &v) == ESP_OK && v >= 0 && v < SPEED_COUNT) {
         s_speed = (int)v;
+    }
+    if (nvs_get_i32(h, "namedisp", &v) == ESP_OK && v >= 0 && v < NAME_DISP_COUNT) {
+        s_name_disp = (int)v;
     }
     size_t n = sizeof(s_name);
     nvs_get_str(h, "name", s_name, &n);
@@ -432,9 +506,19 @@ static void row(int i, ui_row_t *r, void *ctx)
         strlcpy(r->right, speed_names[s_speed], sizeof(r->right));
         r->right_color = COL_TEXT;
         break;
+    case ROW_DISPLAY:
+        strlcpy(r->title, "Display", sizeof(r->title));
+        strlcpy(r->sub, "Name: scroll/marquee or full strip", sizeof(r->sub));
+        strlcpy(r->right, name_disp_names[s_name_disp], sizeof(r->right));
+        r->right_color = s_name_disp == NAME_DISP_FULL ? COL_GREEN : COL_TEXT;
+        break;
     case ROW_NAME:
         strlcpy(r->title, "Name", sizeof(r->title));
-        snprintf(r->sub, sizeof(r->sub), "LCD marquee + LED column scroll");
+        if (s_name_disp == NAME_DISP_FULL) {
+            strlcpy(r->sub, "Full display: fit text across LEDs", sizeof(r->sub));
+        } else {
+            strlcpy(r->sub, "Scroll: LCD marquee + LED columns", sizeof(r->sub));
+        }
         strlcpy(r->right, s_name[0] ? s_name : "(set)", sizeof(r->right));
         r->right_color = s_name[0] ? COL_TEXT : COL_DIM;
         break;
@@ -607,6 +691,14 @@ static bool on_key(os_key_t k, bool repeat)
             ui_list_refresh(s_list);
             save_settings();
             return true;
+        case ROW_DISPLAY:
+            s_name_disp = (s_name_disp + dir + NAME_DISP_COUNT) % NAME_DISP_COUNT;
+            s_scroll = 0;
+            apply_frame();
+            preview_sync();
+            ui_list_refresh(s_list);
+            save_settings();
+            return true;
         default:
             break;
         }
@@ -630,6 +722,14 @@ static bool on_key(os_key_t k, bool repeat)
         break;
     case ROW_SPEED:
         s_speed = (s_speed + 1) % SPEED_COUNT;
+        ui_list_refresh(s_list);
+        save_settings();
+        break;
+    case ROW_DISPLAY:
+        s_name_disp = (s_name_disp + 1) % NAME_DISP_COUNT;
+        s_scroll = 0;
+        apply_frame();
+        preview_sync();
         ui_list_refresh(s_list);
         save_settings();
         break;
