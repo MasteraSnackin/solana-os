@@ -1,6 +1,7 @@
-// Breakout: paddle, ball, bricks, lives, and score for the BP26 badge
-// (320×240). LEFT/RIGHT move the paddle; SELECT launches / starts /
-// resumes; CANCEL pauses or exits. Offline — RGB565 playfield blit only.
+// Breakout: paddle, multiball, power-ups (multi / sticky), bricks, lives,
+// and score for the BP26 badge (320×240). LEFT/RIGHT move the paddle;
+// SELECT launches / starts / resumes; CANCEL pauses or exits.
+// Offline — RGB565 playfield blit only.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,8 @@
 #include "core/os.h"
 #include "core/os_mem.h"
 #include "core/ui.h"
+
+#include "breakout_logic.h"
 
 #define NVS_NS          "breakout"
 #define NVS_BEST        "best"
@@ -43,8 +46,11 @@
 #define PX_FIELD        0x0A1020
 #define PX_WALL         0x2A3858
 #define PX_PADDLE       0xF0E8D0
+#define PX_PADDLE_STICKY 0x80ECFF
 #define PX_BALL         0xFFFFFF
 #define PX_LIFE         0xFF754A
+#define PX_DROP_MULTI   0x14F195
+#define PX_DROP_STICKY  0xFFB84A
 
 #define UI_TITLE        0x80ECFF
 #define UI_SCORE        0x14F195
@@ -88,9 +94,9 @@ static bool s_brick[BRICK_ROWS][BRICK_COLS];
 static int s_bricks_left;
 
 static int s_paddle_x;          /* left edge */
-static int s_ball_x, s_ball_y;  /* top-left of ball */
-static int s_vx, s_vy;          /* px per tick */
-static bool s_stuck;            /* ball rides paddle until launch */
+static bo_ball_t s_balls[BO_MAX_BALLS];
+static bo_drop_t s_drops[BO_MAX_DROPS];
+static bool s_sticky;           /* sticky-paddle power-up active */
 
 // ---- colour / blit --------------------------------------------------------
 
@@ -195,6 +201,52 @@ static void overlay_show(bool on, const char *title, const char *sub)
     }
 }
 
+// ---- balls / drops --------------------------------------------------------
+
+static void clear_drops(void)
+{
+    memset(s_drops, 0, sizeof(s_drops));
+}
+
+static void clear_extra_balls(void)
+{
+    for (int i = 1; i < BO_MAX_BALLS; i++) {
+        s_balls[i].alive = false;
+        s_balls[i].stuck = false;
+    }
+}
+
+static void reset_powerups(void)
+{
+    s_sticky = false;
+    clear_drops();
+    clear_extra_balls();
+}
+
+static void glue_primary(void)
+{
+    memset(s_balls, 0, sizeof(s_balls));
+    bo_glue_ball(&s_balls[0], s_paddle_x, PADDLE_W, PADDLE_Y, BALL_S);
+}
+
+static int ball_speed(void)
+{
+    int sp = BALL_SPEED0 + (s_level - 1);
+    if (sp > BALL_SPEED_MAX) {
+        sp = BALL_SPEED_MAX;
+    }
+    return sp;
+}
+
+static void launch_stuck(void)
+{
+    int n = bo_launch_all_stuck(s_balls, BO_MAX_BALLS, ball_speed(), esp_random());
+    if (n > 0) {
+        s_state = ST_PLAY;
+        set_hint(s_sticky ? "STICKY  L/R  SELECT launch  CANCEL" : "L/R paddle  CANCEL pause");
+    }
+}
+
 // ---- draw -----------------------------------------------------------------
 
 static void redraw(void)
@@ -223,8 +275,25 @@ static void redraw(void)
         }
     }
 
-    fill_rect(s_paddle_x, PADDLE_Y, PADDLE_W, PADDLE_H, color_u16(PX_PADDLE));
-    fill_rect(s_ball_x, s_ball_y, BALL_S, BALL_S, color_u16(PX_BALL));
+    uint32_t paddle_col = s_sticky ? PX_PADDLE_STICKY : PX_PADDLE;
+    fill_rect(s_paddle_x, PADDLE_Y, PADDLE_W, PADDLE_H, color_u16(paddle_col));
+
+    for (int i = 0; i < BO_MAX_BALLS; i++) {
+        if (!s_balls[i].alive) {
+            continue;
+        }
+        fill_rect(s_balls[i].x, s_balls[i].y, BALL_S, BALL_S, color_u16(PX_BALL));
+    }
+
+    for (int i = 0; i < BO_MAX_DROPS; i++) {
+        if (!s_drops[i].alive) {
+            continue;
+        }
+        uint32_t dc = (s_drops[i].kind == BO_PU_MULTI) ? PX_DROP_MULTI : PX_DROP_STICKY;
+        fill_rect(s_drops[i].x, s_drops[i].y, BO_DROP_W, BO_DROP_H, color_u16(dc));
+        /* centre pip */
+        fill_rect(s_drops[i].x + 4, s_drops[i].y + 2, 4, 4, color_u16(0x0A1020));
+    }
 
     /* life pips above paddle */
     uint16_t life = color_u16(PX_LIFE);
@@ -239,15 +308,6 @@ static void redraw(void)
 
 // ---- game -----------------------------------------------------------------
 
-static int ball_speed(void)
-{
-    int sp = BALL_SPEED0 + (s_level - 1);
-    if (sp > BALL_SPEED_MAX) {
-        sp = BALL_SPEED_MAX;
-    }
-    return sp;
-}
-
 static void reset_bricks(void)
 {
     s_bricks_left = 0;
@@ -259,27 +319,6 @@ static void reset_bricks(void)
     }
 }
 
-static void glue_ball(void)
-{
-    s_stuck = true;
-    s_ball_x = s_paddle_x + PADDLE_W / 2 - BALL_S / 2;
-    s_ball_y = PADDLE_Y - BALL_S - 1;
-    s_vx = 0;
-    s_vy = 0;
-}
-
-static void launch_ball(void)
-{
-    if (!s_stuck) {
-        return;
-    }
-    s_stuck = false;
-    int sp = ball_speed();
-    /* random left/right; always up */
-    s_vx = (esp_random() & 1) ? sp : -sp;
-    s_vy = -sp;
-}
-
 static void clamp_paddle(void)
 {
     if (s_paddle_x < 2) {
@@ -288,10 +327,7 @@ static void clamp_paddle(void)
     if (s_paddle_x + PADDLE_W > FIELD_W - 2) {
         s_paddle_x = FIELD_W - 2 - PADDLE_W;
     }
-    if (s_stuck) {
-        s_ball_x = s_paddle_x + PADDLE_W / 2 - BALL_S / 2;
-        s_ball_y = PADDLE_Y - BALL_S - 1;
-    }
+    bo_sync_stuck_balls(s_balls, BO_MAX_BALLS, s_paddle_x, PADDLE_W, PADDLE_Y, BALL_S);
 }
 
 static void move_paddle(int dx)
@@ -304,9 +340,11 @@ static void move_paddle(int dx)
 static void go_ready(void)
 {
     s_state = ST_READY;
-    glue_ball();
+    clear_drops();
+    clear_extra_balls();
+    glue_primary();
     overlay_show(false, NULL, NULL);
-    set_hint("SELECT launch  L/R paddle  CANCEL pause");
+    set_hint(s_sticky ? "STICKY on — SELECT launch  L/R" : "SELECT launch  L/R paddle  CANCEL pause");
     refresh_hud();
     redraw();
 }
@@ -325,8 +363,9 @@ static void go_idle(void)
     s_level = 1;
     s_clear_ticks = 0;
     s_paddle_x = (FIELD_W - PADDLE_W) / 2;
+    reset_powerups();
     reset_bricks();
-    glue_ball();
+    glue_primary();
     refresh_hud();
     idle_overlay();
     redraw();
@@ -342,13 +381,27 @@ static void go_pause(void)
 
 static void resume_play(void)
 {
-    if (s_stuck) {
-        go_ready();
-        return;
+    if (bo_any_stuck(s_balls, BO_MAX_BALLS) && bo_alive_balls(s_balls, BO_MAX_BALLS) == 1) {
+        /* single stuck ball → ready */
+        bool only_stuck = true;
+        for (int i = 0; i < BO_MAX_BALLS; i++) {
+            if (s_balls[i].alive && !s_balls[i].stuck) {
+                only_stuck = false;
+                break;
+            }
+        }
+        if (only_stuck) {
+            go_ready();
+            return;
+        }
     }
     s_state = ST_PLAY;
     overlay_show(false, NULL, NULL);
-    set_hint("L/R paddle  CANCEL pause");
+    if (bo_any_stuck(s_balls, BO_MAX_BALLS)) {
+        set_hint("STICKY  SELECT launch stuck  CANCEL");
+    } else {
+        set_hint(s_sticky ? "STICKY on  L/R  CANCEL pause" : "L/R paddle  CANCEL pause");
+    }
     redraw();
 }
 
@@ -373,6 +426,8 @@ static void game_over(void)
 static void lose_life(void)
 {
     s_lives--;
+    s_sticky = false;
+    clear_drops();
     refresh_hud();
     if (s_lives <= 0) {
         game_over();
@@ -386,6 +441,7 @@ static void level_clear(void)
 {
     s_state = ST_CLEAR;
     s_clear_ticks = 8;      /* ~0.8 s */
+    reset_powerups();
     overlay_show(true, "CLEAR!", "next level…");
     set_hint("");
     redraw();
@@ -407,33 +463,60 @@ static void start_game(void)
     s_level = 1;
     s_clear_ticks = 0;
     s_paddle_x = (FIELD_W - PADDLE_W) / 2;
+    reset_powerups();
     reset_bricks();
     refresh_hud();
     go_ready();
 }
 
-static void bounce_paddle(void)
+static void bounce_paddle(bo_ball_t *b)
 {
+    if (s_sticky) {
+        bo_glue_ball(b, s_paddle_x, PADDLE_W, PADDLE_Y, BALL_S);
+        set_hint("STICKY catch — SELECT launch");
+        return;
+    }
     /* hit zone → angle: left third hard left, mid slight, right hard right */
     int mid = s_paddle_x + PADDLE_W / 2;
-    int bx = s_ball_x + BALL_S / 2;
+    int bx = b->x + BALL_S / 2;
     int sp = ball_speed();
     int zone = bx - mid;
     if (zone < -PADDLE_W / 6) {
-        s_vx = -sp;
+        b->vx = -sp;
     } else if (zone > PADDLE_W / 6) {
-        s_vx = sp;
+        b->vx = sp;
     } else {
-        /* keep horizontal sign; ensure non-zero */
-        if (s_vx == 0) {
-            s_vx = (esp_random() & 1) ? sp : -sp;
+        if (b->vx == 0) {
+            b->vx = (esp_random() & 1) ? sp : -sp;
         } else {
-            s_vx = (s_vx > 0) ? sp : -sp;
+            b->vx = (b->vx > 0) ? sp : -sp;
         }
     }
-    s_vy = -sp;
-    /* sit just above paddle to avoid re-hit */
-    s_ball_y = PADDLE_Y - BALL_S - 1;
+    b->vy = -sp;
+    b->y = PADDLE_Y - BALL_S - 1;
+}
+
+static void apply_powerup(bo_powerup_t kind)
+{
+    if (kind == BO_PU_MULTI) {
+        int n = bo_activate_multiball(s_balls, BO_MAX_BALLS, ball_speed());
+        os_toast(n > 0 ? "Multiball!" : "Balls full");
+        set_hint("MULTIBALL  L/R paddle  CANCEL");
+    } else if (kind == BO_PU_STICKY) {
+        s_sticky = true;
+        os_toast("Sticky paddle!");
+        set_hint("STICKY on  L/R  CANCEL pause");
+    }
+}
+
+static void maybe_drop_from_brick(int bx, int by, int bw, int bh)
+{
+    uint32_t rnd = esp_random();
+    if (!bo_should_spawn_drop(rnd)) {
+        return;
+    }
+    bo_powerup_t kind = bo_pick_powerup(rnd >> 8);
+    bo_spawn_drop(s_drops, BO_MAX_DROPS, kind, bx + bw / 2, by + bh / 2);
 }
 
 static bool hit_brick_at(int cx, int cy)
@@ -450,10 +533,10 @@ static bool hit_brick_at(int cx, int cy)
                 s_bricks_left--;
                 s_score += s_row_points[r];
                 if (s_score > s_best) {
-                    /* live best update while playing */
                     best_save();
                 }
                 refresh_hud();
+                maybe_drop_from_brick(x, y, w, h);
                 return true;
             }
         }
@@ -461,20 +544,18 @@ static bool hit_brick_at(int cx, int cy)
     return false;
 }
 
-static void resolve_brick_hits(void)
+static void resolve_brick_hits(bo_ball_t *b)
 {
-    /* sample ball corners + centre against bricks; bounce on first hit */
     int pts[5][2] = {
-        { s_ball_x, s_ball_y },
-        { s_ball_x + BALL_S - 1, s_ball_y },
-        { s_ball_x, s_ball_y + BALL_S - 1 },
-        { s_ball_x + BALL_S - 1, s_ball_y + BALL_S - 1 },
-        { s_ball_x + BALL_S / 2, s_ball_y + BALL_S / 2 },
+        { b->x, b->y },
+        { b->x + BALL_S - 1, b->y },
+        { b->x, b->y + BALL_S - 1 },
+        { b->x + BALL_S - 1, b->y + BALL_S - 1 },
+        { b->x + BALL_S / 2, b->y + BALL_S / 2 },
     };
     for (int i = 0; i < 5; i++) {
         if (hit_brick_at(pts[i][0], pts[i][1])) {
-            /* simple vertical bounce keeps the ball moving through the wall */
-            s_vy = -s_vy;
+            b->vy = -b->vy;
             if (s_bricks_left <= 0) {
                 level_clear();
             }
@@ -483,45 +564,81 @@ static void resolve_brick_hits(void)
     }
 }
 
+static void step_drops(void)
+{
+    for (int i = 0; i < BO_MAX_DROPS; i++) {
+        bo_drop_t *d = &s_drops[i];
+        if (!d->alive) {
+            continue;
+        }
+        d->y += BO_DROP_SPEED;
+        if (d->y > FIELD_H) {
+            d->alive = false;
+            continue;
+        }
+        if (bo_drop_hits_paddle(d, s_paddle_x, PADDLE_W, PADDLE_Y, PADDLE_H)) {
+            bo_powerup_t kind = d->kind;
+            d->alive = false;
+            apply_powerup(kind);
+        }
+    }
+}
+
+static void step_one_ball(bo_ball_t *b)
+{
+    if (!b->alive || b->stuck) {
+        return;
+    }
+
+    b->x += b->vx;
+    b->y += b->vy;
+
+    if (b->x < 2) {
+        b->x = 2;
+        b->vx = -b->vx;
+    } else if (b->x + BALL_S > FIELD_W - 2) {
+        b->x = FIELD_W - 2 - BALL_S;
+        b->vx = -b->vx;
+    }
+    if (b->y < 2) {
+        b->y = 2;
+        b->vy = -b->vy;
+    }
+
+    if (b->y > FIELD_H) {
+        b->alive = false;
+        return;
+    }
+
+    if (b->vy > 0 &&
+        b->y + BALL_S >= PADDLE_Y &&
+        b->y < PADDLE_Y + PADDLE_H &&
+        b->x + BALL_S > s_paddle_x &&
+        b->x < s_paddle_x + PADDLE_W) {
+        bounce_paddle(b);
+    }
+
+    if (b->alive && !b->stuck && s_state == ST_PLAY) {
+        resolve_brick_hits(b);
+    }
+}
+
 static void step(void)
 {
-    if (s_stuck) {
-        return;
+    for (int i = 0; i < BO_MAX_BALLS; i++) {
+        step_one_ball(&s_balls[i]);
+        if (s_state != ST_PLAY) {
+            return;
+        }
     }
 
-    s_ball_x += s_vx;
-    s_ball_y += s_vy;
-
-    /* walls */
-    if (s_ball_x < 2) {
-        s_ball_x = 2;
-        s_vx = -s_vx;
-    } else if (s_ball_x + BALL_S > FIELD_W - 2) {
-        s_ball_x = FIELD_W - 2 - BALL_S;
-        s_vx = -s_vx;
-    }
-    if (s_ball_y < 2) {
-        s_ball_y = 2;
-        s_vy = -s_vy;
-    }
-
-    /* fallen off bottom */
-    if (s_ball_y > FIELD_H) {
-        lose_life();
-        return;
-    }
-
-    /* paddle */
-    if (s_vy > 0 &&
-        s_ball_y + BALL_S >= PADDLE_Y &&
-        s_ball_y < PADDLE_Y + PADDLE_H &&
-        s_ball_x + BALL_S > s_paddle_x &&
-        s_ball_x < s_paddle_x + PADDLE_W) {
-        bounce_paddle();
-    }
-
-    resolve_brick_hits();
+    step_drops();
     if (s_state != ST_PLAY) {
+        return;
+    }
+
+    if (bo_alive_balls(s_balls, BO_MAX_BALLS) <= 0) {
+        lose_life();
         return;
     }
 
@@ -537,6 +654,9 @@ static void enter(lv_obj_t *root)
     s_score = 0;
     s_lives = LIVES_START;
     s_level = 1;
+    s_sticky = false;
+    memset(s_balls, 0, sizeof(s_balls));
+    memset(s_drops, 0, sizeof(s_drops));
     s_fb = NULL;
     s_canvas = NULL;
     s_overlay = NULL;
@@ -642,7 +762,6 @@ static void on_tick(void)
 
 static bool on_key(os_key_t k, bool repeat)
 {
-    /* paddle moves accept repeats while playing / ready */
     if ((s_state == ST_PLAY || s_state == ST_READY) &&
         (k == OS_KEY_LEFT || k == OS_KEY_RIGHT)) {
         move_paddle(k == OS_KEY_LEFT ? -PADDLE_SPEED : PADDLE_SPEED);
@@ -694,9 +813,7 @@ static bool on_key(os_key_t k, bool repeat)
 
     if (s_state == ST_READY) {
         if (k == OS_KEY_SELECT) {
-            launch_ball();
-            s_state = ST_PLAY;
-            set_hint("L/R paddle  CANCEL pause");
+            launch_stuck();
             redraw();
             return true;
         }
@@ -712,8 +829,9 @@ static bool on_key(os_key_t k, bool repeat)
             go_pause();
             return true;
         }
-        if (k == OS_KEY_SELECT && s_stuck) {
-            launch_ball();
+        if (k == OS_KEY_SELECT && bo_any_stuck(s_balls, BO_MAX_BALLS)) {
+            launch_stuck();
+            redraw();
             return true;
         }
         return true;
