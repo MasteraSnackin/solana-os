@@ -1,4 +1,4 @@
-// Snake: classic grow-on-food for the BP26 badge.
+// Snake: classic grow-on-food for the BP26 badge (320×240).
 // D-pad steers; SELECT starts / restarts; CANCEL exits from idle / game over.
 // Wall death (and self-hit) — the playfield does not wrap. Offline; NVS best.
 
@@ -17,16 +17,30 @@
 #define NVS_NS          "snake"
 #define NVS_BEST        "best"
 
-#define HDR_H           28
+#define HUD_H           22
 #define GRID_COLS       20
 #define GRID_ROWS       12
-#define CELL            12              /* 240×144 playfield; leaves room for status + hint */
+#define CELL            12              /* 240×144 playfield */
 #define GRID_PX_W       (GRID_COLS * CELL)
 #define GRID_PX_H       (GRID_ROWS * CELL)
+#define FRAME_PAD       2
 #define SNAKE_MAX       (GRID_COLS * GRID_ROWS)
 
 #define TICKS_START     3       /* move every N × OS_TICK_MS (100 ms) */
 #define TICKS_MIN       1
+
+/* Playfield palette — tuned for contrast on the 320×240 panel */
+#define PX_CHECK_A      0x0C0C12
+#define PX_CHECK_B      0x101018
+#define PX_GRID         0x1E1E2A
+#define PX_WALL         0x9945FF        /* Solana purple — wall death reminder */
+#define PX_BODY         0x14F195        /* Solana green */
+#define PX_BODY_DIM     0x0E8F5C        /* deeper green for segments */
+#define PX_HEAD         0x80ECFF        /* aqua — pops vs body */
+#define PX_HEAD_EYE     0xFFFFFF
+#define PX_FOOD         0xFF754A        /* orange */
+#define PX_FOOD_CORE    0xE8F180        /* yellow core */
+#define PX_DEAD_TINT    0x2A1520        /* soft red wash on game over */
 
 typedef enum {
     ST_IDLE = 0,
@@ -38,7 +52,8 @@ typedef struct {
     int8_t x, y;
 } cell_t;
 
-static lv_obj_t *s_root, *s_title, *s_meta, *s_status, *s_hint, *s_canvas;
+static lv_obj_t *s_root, *s_title, *s_score_lab, *s_best_lab, *s_hint;
+static lv_obj_t *s_frame, *s_canvas, *s_overlay;
 static lv_image_dsc_t s_dsc;
 static uint16_t *s_fb;
 static state_t s_state;
@@ -88,6 +103,33 @@ static void paint_cell(int cx, int cy, uint32_t rgb, int inset)
     fill_rect(x, y, s, s, color_u16(rgb));
 }
 
+static void paint_head(int cx, int cy)
+{
+    paint_cell(cx, cy, PX_HEAD, 1);
+    /* eyes toward current heading */
+    int ex = cx * CELL + CELL / 2;
+    int ey = cy * CELL + CELL / 2;
+    int ox = s_dx * 2;
+    int oy = s_dy * 2;
+    int px = 2, py = 2;
+    if (s_dx != 0) {
+        px = 1;
+        py = 2;
+    } else if (s_dy != 0) {
+        px = 2;
+        py = 1;
+    }
+    fill_rect(ex + ox - px - 1, ey + oy - py, px, py, color_u16(PX_HEAD_EYE));
+    fill_rect(ex + ox + 1, ey + oy - py, px, py, color_u16(PX_HEAD_EYE));
+}
+
+static void paint_food(int cx, int cy)
+{
+    /* bright orange pad + yellow core — readable against green body */
+    paint_cell(cx, cy, PX_FOOD, 1);
+    paint_cell(cx, cy, PX_FOOD_CORE, 4);
+}
+
 // ---- NVS ------------------------------------------------------------------
 
 static void best_load(void)
@@ -119,57 +161,106 @@ static void best_save(void)
     nvs_close(h);
 }
 
-// ---- draw -----------------------------------------------------------------
+// ---- HUD / overlay --------------------------------------------------------
 
-static void refresh_meta(void)
+static void refresh_hud(void)
 {
-    if (!s_meta) {
+    if (s_score_lab) {
+        lv_label_set_text_fmt(s_score_lab, "SCORE  %d", s_score);
+    }
+    if (s_best_lab) {
+        lv_label_set_text_fmt(s_best_lab, "BEST  %ld", (long)s_best);
+    }
+}
+
+static void set_hint(const char *msg)
+{
+    if (s_hint) {
+        lv_label_set_text(s_hint, msg);
+    }
+}
+
+static void overlay_show(bool on, const char *title, const char *sub)
+{
+    if (!s_overlay) {
         return;
     }
-    lv_label_set_text_fmt(s_meta, "score %d   best %ld", s_score, (long)s_best);
-}
-
-static void set_status(const char *msg)
-{
-    if (s_status) {
-        lv_label_set_text(s_status, msg);
+    if (!on) {
+        lv_obj_set_hidden(s_overlay, true);
+        return;
+    }
+    lv_obj_set_hidden(s_overlay, false);
+    lv_obj_t *t = lv_obj_get_child(s_overlay, 0);
+    lv_obj_t *s = lv_obj_get_child(s_overlay, 1);
+    if (t) {
+        lv_label_set_text(t, title ? title : "");
+    }
+    if (s) {
+        lv_label_set_text(s, sub ? sub : "");
     }
 }
+
+// ---- draw -----------------------------------------------------------------
 
 static void redraw(void)
 {
     if (!s_fb) {
         return;
     }
-    /* playfield + 1 px grid lines */
-    uint16_t bg = color_u16(COL_PANEL);
-    uint16_t line = color_u16(COL_BORDER);
-    for (int i = 0; i < GRID_PX_W * GRID_PX_H; i++) {
-        s_fb[i] = bg;
-    }
-    for (int c = 0; c <= GRID_COLS; c++) {
-        int x = c * CELL;
-        if (x >= GRID_PX_W) {
-            x = GRID_PX_W - 1;
-        }
-        for (int y = 0; y < GRID_PX_H; y++) {
-            s_fb[y * GRID_PX_W + x] = line;
-        }
-    }
-    for (int r = 0; r <= GRID_ROWS; r++) {
-        int y = r * CELL;
-        if (y >= GRID_PX_H) {
-            y = GRID_PX_H - 1;
-        }
-        for (int x = 0; x < GRID_PX_W; x++) {
-            s_fb[y * GRID_PX_W + x] = line;
+
+    uint16_t a = color_u16(PX_CHECK_A);
+    uint16_t b = color_u16(PX_CHECK_B);
+    uint16_t grid = color_u16(PX_GRID);
+    uint16_t wall = color_u16(PX_WALL);
+
+    /* checkerboard floor */
+    for (int cy = 0; cy < GRID_ROWS; cy++) {
+        for (int cx = 0; cx < GRID_COLS; cx++) {
+            uint16_t c = ((cx + cy) & 1) ? a : b;
+            fill_rect(cx * CELL, cy * CELL, CELL, CELL, c);
         }
     }
 
-    paint_cell(s_food.x, s_food.y, COL_ORANGE, 2);
-    for (int i = s_len - 1; i >= 0; i--) {
-        uint32_t c = (i == 0) ? COL_GREEN : COL_LIME;
-        paint_cell(s_body[i].x, s_body[i].y, c, 2);
+    /* subtle inner grid */
+    for (int c = 1; c < GRID_COLS; c++) {
+        int x = c * CELL;
+        for (int y = 0; y < GRID_PX_H; y++) {
+            s_fb[y * GRID_PX_W + x] = grid;
+        }
+    }
+    for (int r = 1; r < GRID_ROWS; r++) {
+        int y = r * CELL;
+        for (int x = 0; x < GRID_PX_W; x++) {
+            s_fb[y * GRID_PX_W + x] = grid;
+        }
+    }
+
+    /* 2 px wall rim — visual cue that edges kill */
+    fill_rect(0, 0, GRID_PX_W, 2, wall);
+    fill_rect(0, GRID_PX_H - 2, GRID_PX_W, 2, wall);
+    fill_rect(0, 0, 2, GRID_PX_H, wall);
+    fill_rect(GRID_PX_W - 2, 0, 2, GRID_PX_H, wall);
+
+    if (s_food.x >= 0) {
+        paint_food(s_food.x, s_food.y);
+    }
+
+    for (int i = s_len - 1; i >= 1; i--) {
+        uint32_t c = (i & 1) ? PX_BODY : PX_BODY_DIM;
+        paint_cell(s_body[i].x, s_body[i].y, c, 1);
+    }
+    if (s_len > 0) {
+        paint_head(s_body[0].x, s_body[0].y);
+    }
+
+    /* soft wash on game over so overlay text stays readable */
+    if (s_state == ST_OVER) {
+        uint16_t tint = color_u16(PX_DEAD_TINT);
+        for (int i = 0; i < GRID_PX_W * GRID_PX_H; i++) {
+            /* cheap darken: blend toward tint by keeping half the bits */
+            uint16_t p = s_fb[i];
+            s_fb[i] = (uint16_t)(((p & 0xF7DE) >> 1) + ((tint & 0xF7DE) >> 1));
+        }
     }
 
     if (s_canvas) {
@@ -196,7 +287,6 @@ static void place_food(void)
         s_food.y = -1;
         return;
     }
-    /* rejection sampling; grid is small */
     for (int tries = 0; tries < 200; tries++) {
         int x = (int)(esp_random() % GRID_COLS);
         int y = (int)(esp_random() % GRID_ROWS);
@@ -206,7 +296,6 @@ static void place_food(void)
             return;
         }
     }
-    /* dense: linear scan */
     for (int y = 0; y < GRID_ROWS; y++) {
         for (int x = 0; x < GRID_COLS; x++) {
             if (!occupied(x, y)) {
@@ -222,20 +311,37 @@ static void place_food(void)
 
 static void update_speed(void)
 {
-    /* every 5 points shave one tick period, floor at TICKS_MIN */
     int p = TICKS_START - s_score / 5;
     s_step_period = p < TICKS_MIN ? TICKS_MIN : p;
+}
+
+static void go_idle(void)
+{
+    s_state = ST_IDLE;
+    refresh_hud();
+    overlay_show(true, "SNAKE", "SELECT start");
+    set_hint("SELECT start  D-pad steer  CANCEL exit");
+    /* preview snake */
+    s_len = 4;
+    s_body[0] = (cell_t){ 9, 6 };
+    s_body[1] = (cell_t){ 8, 6 };
+    s_body[2] = (cell_t){ 7, 6 };
+    s_body[3] = (cell_t){ 6, 6 };
+    s_dx = 1;
+    s_dy = 0;
+    s_food = (cell_t){ 14, 6 };
+    redraw();
 }
 
 static void game_over(void)
 {
     s_state = ST_OVER;
     best_save();
-    refresh_meta();
-    set_status("Game over");
-    if (s_hint) {
-        lv_label_set_text(s_hint, "SELECT again  CANCEL exit");
-    }
+    refresh_hud();
+    char sub[32];
+    snprintf(sub, sizeof(sub), "score %d — SELECT again", s_score);
+    overlay_show(true, "GAME OVER", sub);
+    set_hint("SELECT again  CANCEL exit");
     os_toast("Game over — %d", s_score);
     redraw();
 }
@@ -255,17 +361,14 @@ static void start_game(void)
     update_speed();
     s_wait = s_step_period;
     place_food();
-    refresh_meta();
-    set_status("Go!");
-    if (s_hint) {
-        lv_label_set_text(s_hint, "D-pad steer  CANCEL pause");
-    }
+    refresh_hud();
+    overlay_show(false, NULL, NULL);
+    set_hint("D-pad steer  CANCEL pause");
     redraw();
 }
 
 static void step(void)
 {
-    /* apply queued turn; ignore 180° reverse */
     if (!(s_ndx == -s_dx && s_ndy == -s_dy)) {
         s_dx = s_ndx;
         s_dy = s_ndy;
@@ -280,7 +383,6 @@ static void step(void)
         return;
     }
 
-    /* self-hit: allow sliding into the vacating tail unless growing */
     bool grow = (s_food.x == nx && s_food.y == ny);
     int check_len = grow ? s_len : s_len - 1;
     for (int i = 0; i < check_len; i++) {
@@ -297,7 +399,7 @@ static void step(void)
         s_score++;
         best_save();
         update_speed();
-        refresh_meta();
+        refresh_hud();
     }
 
     for (int i = s_len - 1; i > 0; i--) {
@@ -309,13 +411,13 @@ static void step(void)
     if (grow) {
         place_food();
         if (s_food.x < 0) {
-            /* filled the board */
             best_save();
             s_state = ST_OVER;
-            set_status("You win!");
-            if (s_hint) {
-                lv_label_set_text(s_hint, "SELECT again  CANCEL exit");
-            }
+            refresh_hud();
+            char sub[32];
+            snprintf(sub, sizeof(sub), "score %d — SELECT again", s_score);
+            overlay_show(true, "YOU WIN!", sub);
+            set_hint("SELECT again  CANCEL exit");
             os_toast("Perfect — %d", s_score);
         }
     }
@@ -325,7 +427,6 @@ static void step(void)
 
 static void queue_dir(int8_t dx, int8_t dy)
 {
-    /* only one turn per step; reject immediate reverse vs current heading */
     if (dx == -s_dx && dy == -s_dy) {
         return;
     }
@@ -346,16 +447,21 @@ static void enter(lv_obj_t *root)
     s_food.x = s_food.y = -1;
     s_fb = NULL;
     s_canvas = NULL;
+    s_overlay = NULL;
+    s_frame = NULL;
 
     best_load();
 
+    /* compact top HUD — fits 320×240 under the status bar */
     s_title = ui_label(root, &sol_font_20, COL_GREEN, "Snake");
-    lv_obj_set_pos(s_title, 10, 4);
+    lv_obj_set_pos(s_title, 8, 2);
 
-    s_meta = ui_label(root, &sol_mono_12, COL_DIM, "");
-    lv_obj_set_pos(s_meta, 10, 26);
-    lv_obj_set_width(s_meta, OS_ROOT_W - 20);
-    refresh_meta();
+    s_score_lab = ui_label(root, &sol_mono_12, COL_TEXT, "");
+    lv_obj_set_pos(s_score_lab, 100, 6);
+
+    s_best_lab = ui_label(root, &sol_mono_12, COL_DIM, "");
+    lv_obj_set_pos(s_best_lab, 210, 6);
+    refresh_hud();
 
     size_t bytes = (size_t)GRID_PX_W * GRID_PX_H * 2;
     s_fb = heap_caps_malloc(bytes, os_mem_bulk_caps());
@@ -378,26 +484,38 @@ static void enter(lv_obj_t *root)
     s_dsc.data = (const uint8_t *)s_fb;
 
     int gx = (OS_ROOT_W - GRID_PX_W) / 2;
-    int gy = HDR_H + 4;
+    int gy = HUD_H + 2;
+
+    s_frame = ui_panel(root, gx - FRAME_PAD, gy - FRAME_PAD,
+                       GRID_PX_W + 2 * FRAME_PAD, GRID_PX_H + 2 * FRAME_PAD);
+    lv_obj_set_style_pad_all(s_frame, 0, 0);
+    lv_obj_set_style_bg_color(s_frame, lv_color_hex(PX_WALL), 0);
+    lv_obj_set_style_border_width(s_frame, 0, 0);
+
     s_canvas = lv_image_create(root);
     lv_image_set_src(s_canvas, &s_dsc);
     lv_obj_set_pos(s_canvas, gx, gy);
 
-    /* seed a preview snake so idle isn't an empty board */
-    s_len = 3;
-    s_body[0] = (cell_t){ 8, 6 };
-    s_body[1] = (cell_t){ 7, 6 };
-    s_body[2] = (cell_t){ 6, 6 };
-    s_food = (cell_t){ 12, 6 };
-    redraw();
+    /* title / game-over overlay centered on the playfield */
+    s_overlay = lv_obj_create(root);
+    lv_obj_remove_style_all(s_overlay);
+    lv_obj_set_size(s_overlay, GRID_PX_W - 16, 52);
+    lv_obj_set_pos(s_overlay, gx + 8, gy + (GRID_PX_H - 52) / 2);
+    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_80, 0);
+    lv_obj_set_style_bg_color(s_overlay, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_radius(s_overlay, 4, 0);
+    lv_obj_set_scrollable(s_overlay, false);
+    lv_obj_t *ot = ui_label(s_overlay, &sol_font_20, COL_GREEN, "");
+    lv_obj_set_width(ot, GRID_PX_W - 16);
+    lv_obj_set_style_text_align(ot, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(ot, LV_ALIGN_TOP_MID, 0, 6);
+    lv_obj_t *os = ui_label(s_overlay, &sol_mono_12, COL_TEXT, "");
+    lv_obj_set_width(os, GRID_PX_W - 16);
+    lv_obj_set_style_text_align(os, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(os, LV_ALIGN_BOTTOM_MID, 0, -6);
 
-    int status_y = gy + GRID_PX_H + 2;
-    s_status = ui_label(root, &sol_font_14, COL_TEXT, "SELECT to start");
-    lv_obj_set_pos(s_status, 10, status_y);
-    lv_obj_set_width(s_status, OS_ROOT_W - 20);
-    lv_obj_set_style_text_align(s_status, LV_TEXT_ALIGN_CENTER, 0);
-
-    s_hint = ui_hint(root, "SELECT start  D-pad steer  CANCEL exit");
+    s_hint = ui_hint(root, "");
+    go_idle();
 }
 
 static void leave(void)
@@ -406,10 +524,12 @@ static void leave(void)
     s_fb = NULL;
     s_root = NULL;
     s_title = NULL;
-    s_meta = NULL;
-    s_status = NULL;
+    s_score_lab = NULL;
+    s_best_lab = NULL;
     s_hint = NULL;
+    s_frame = NULL;
     s_canvas = NULL;
+    s_overlay = NULL;
 }
 
 static void on_tick(void)
@@ -446,13 +566,8 @@ static bool on_key(os_key_t k, bool repeat)
 
     if (s_state == ST_PLAY) {
         if (k == OS_KEY_BACK) {
-            s_state = ST_IDLE;
             best_save();
-            refresh_meta();
-            set_status("SELECT to start");
-            if (s_hint) {
-                lv_label_set_text(s_hint, "SELECT start  D-pad steer  CANCEL exit");
-            }
+            go_idle();
             return true;
         }
         if (k == OS_KEY_UP) {
