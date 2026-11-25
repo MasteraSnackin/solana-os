@@ -17,7 +17,6 @@
 #include "core/os_mesh.h"
 #include "core/os_ota.h"
 #include "core/console.h"
-#include "lua/lua_host.h"
 #include "game/game.h"
 
 static const char *TAG = "solana_os";
@@ -108,7 +107,6 @@ void app_main(void)
     game_init();
     os_cloud_set_server(server);
     boot_sweep();
-    lua_host_init();
 
     os_start();
     os_ota_init();
