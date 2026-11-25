@@ -1,6 +1,8 @@
 // Classic Tetris for the BP26 badge (320×240, Solana OS).
 // Seven tetrominoes, rotate, soft drop, line clear, score / level speed-up.
 // Offline — no Wi-Fi, mesh, or SD. Best score kept in NVS.
+// Visual theme: handheld-RPG battle-menu palette (original colours; no
+// copyrighted creature sprites or trade names in art or strings).
 
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +34,26 @@
 #define NEXT_GAP        12
 #define NEXT_BOX        (4 * NEXT_GAP)
 
+/* Pocket-trainer field palette — original hues inspired by classic handheld
+ * RPG menus (cream cards, ink borders, grass well). Not brand IP. */
+#define TET_CREAM       0xF8F0D8
+#define TET_CREAM_HI    0xFFF8E8
+#define TET_INK         0x1A1A20
+#define TET_MUTED       0x6A6458
+#define TET_WELL        0x1E3A32
+#define TET_CELL_EMPTY  0x2A4A40
+#define TET_CELL_LINE   0x3A5C50
+#define TET_GOLD        0xE8C840
+#define TET_RED         0xD04040
+#define TET_LEAF        0x38A050
+#define TET_SKY         0x58C8E8
+#define TET_OCEAN       0x4070D0
+#define TET_FLAME       0xE05050
+#define TET_SUN         0xF0D030
+#define TET_ORANGE      0xE88830
+#define TET_LEAF2       0x50B848
+#define TET_PSY         0xA060C8
+
 typedef enum {
     ST_TITLE = 0,
     ST_PLAY,
@@ -49,70 +71,70 @@ typedef struct {
     uint32_t color;
 } piece_def_t;
 
-// I J L O S T Z — classic Guideline colours on the Solana palette.
+// I J L O S T Z — Guideline roles with bright type-inspired fills.
 static const piece_def_t k_pieces[PIECE_N] = {
-    { /* I — cyan */
+    { /* I — sky cyan */
         {
             {{0, 1}, {1, 1}, {2, 1}, {3, 1}},
             {{2, 0}, {2, 1}, {2, 2}, {2, 3}},
             {{0, 2}, {1, 2}, {2, 2}, {3, 2}},
             {{1, 0}, {1, 1}, {1, 2}, {1, 3}},
         },
-        COL_AQUA,
+        TET_SKY,
     },
-    { /* J — blue */
+    { /* J — ocean blue */
         {
             {{0, 0}, {0, 1}, {1, 1}, {2, 1}},
             {{1, 0}, {2, 0}, {1, 1}, {1, 2}},
             {{0, 1}, {1, 1}, {2, 1}, {2, 2}},
             {{1, 0}, {1, 1}, {0, 2}, {1, 2}},
         },
-        COL_BLUE,
+        TET_OCEAN,
     },
-    { /* L — orange */
+    { /* L — warm orange */
         {
             {{2, 0}, {0, 1}, {1, 1}, {2, 1}},
             {{1, 0}, {1, 1}, {1, 2}, {2, 2}},
             {{0, 1}, {1, 1}, {2, 1}, {0, 2}},
             {{0, 0}, {1, 0}, {1, 1}, {1, 2}},
         },
-        COL_ORANGE,
+        TET_ORANGE,
     },
-    { /* O — yellow */
+    { /* O — sun yellow */
         {
             {{1, 0}, {2, 0}, {1, 1}, {2, 1}},
             {{1, 0}, {2, 0}, {1, 1}, {2, 1}},
             {{1, 0}, {2, 0}, {1, 1}, {2, 1}},
             {{1, 0}, {2, 0}, {1, 1}, {2, 1}},
         },
-        COL_YELLOW,
+        TET_SUN,
     },
-    { /* S — green */
+    { /* S — leaf green */
         {
             {{1, 0}, {2, 0}, {0, 1}, {1, 1}},
             {{1, 0}, {1, 1}, {2, 1}, {2, 2}},
             {{1, 1}, {2, 1}, {0, 2}, {1, 2}},
             {{0, 0}, {0, 1}, {1, 1}, {1, 2}},
         },
-        COL_GREEN,
+        TET_LEAF2,
     },
-    { /* T — purple */
+    { /* T — psychedelic purple */
         {
             {{1, 0}, {0, 1}, {1, 1}, {2, 1}},
             {{1, 0}, {1, 1}, {2, 1}, {1, 2}},
             {{0, 1}, {1, 1}, {2, 1}, {1, 2}},
             {{1, 0}, {0, 1}, {1, 1}, {1, 2}},
         },
-        COL_PURPLE,
+        TET_PSY,
     },
-    { /* Z — pink (Solana stand-in for classic red) */
+    { /* Z — flame red */
         {
             {{0, 0}, {1, 0}, {1, 1}, {2, 1}},
             {{2, 0}, {1, 1}, {2, 1}, {1, 2}},
             {{0, 1}, {1, 1}, {1, 2}, {2, 2}},
             {{1, 0}, {0, 1}, {1, 1}, {0, 2}},
         },
-        COL_PINK,
+        TET_FLAME,
     },
 };
 
@@ -312,7 +334,7 @@ static bool spawn_ok(void)
 static uint32_t color_for(uint8_t id)
 {
     if (id == 0 || id > PIECE_N) {
-        return COL_PANEL;
+        return TET_CELL_EMPTY;
     }
     return k_pieces[id - 1].color;
 }
@@ -338,13 +360,13 @@ static void paint_cell(lv_obj_t *obj, uint32_t c, cell_look_t look)
         return;
     }
     if (look == CELL_EMPTY) {
-        lv_obj_set_style_bg_color(obj, ui_col(COL_PANEL), 0);
-        lv_obj_set_style_border_color(obj, ui_col(COL_BORDER), 0);
+        lv_obj_set_style_bg_color(obj, lv_color_hex(TET_CELL_EMPTY), 0);
+        lv_obj_set_style_border_color(obj, lv_color_hex(TET_CELL_LINE), 0);
         lv_obj_set_style_border_width(obj, 1, 0);
         lv_obj_set_style_radius(obj, 1, 0);
     } else if (look == CELL_GHOST) {
-        lv_obj_set_style_bg_color(obj, ui_col(COL_PANEL), 0);
-        lv_obj_set_style_border_color(obj, lv_color_hex(shade_rgb(c, 2, 3)), 0);
+        lv_obj_set_style_bg_color(obj, lv_color_hex(TET_CELL_EMPTY), 0);
+        lv_obj_set_style_border_color(obj, lv_color_hex(shade_rgb(c, 3, 4)), 0);
         lv_obj_set_style_border_width(obj, 2, 0);
         lv_obj_set_style_radius(obj, 1, 0);
     } else {
@@ -390,7 +412,7 @@ static void paint_board(void)
             } else if (ghost[y][x]) {
                 paint_cell(s_cell[y][x], color_for(ghost[y][x]), CELL_GHOST);
             } else {
-                paint_cell(s_cell[y][x], COL_PANEL, CELL_EMPTY);
+                paint_cell(s_cell[y][x], TET_CELL_EMPTY, CELL_EMPTY);
             }
         }
     }
@@ -400,7 +422,7 @@ static void paint_next(void)
 {
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {
-            paint_cell(s_next_cell[y][x], COL_PANEL, CELL_EMPTY);
+            paint_cell(s_next_cell[y][x], TET_CELL_EMPTY, CELL_EMPTY);
         }
     }
     if (s_state == ST_TITLE) {
@@ -630,24 +652,37 @@ static lv_obj_t *make_cell(lv_obj_t *parent, int x, int y, int size)
     lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(c, 1, 0);
     lv_obj_set_scrollable(c, false);
-    paint_cell(c, COL_PANEL, CELL_EMPTY);
+    paint_cell(c, TET_CELL_EMPTY, CELL_EMPTY);
     return c;
 }
 
-static lv_obj_t *hud_caption(lv_obj_t *parent, int x, int y, const char *text)
+static lv_obj_t *hud_caption(lv_obj_t *parent, int x, int y, int w, const char *text)
 {
-    lv_obj_t *l = ui_label(parent, &sol_mono_12, COL_DIM, text);
+    lv_obj_t *l = ui_label(parent, &sol_mono_12, TET_MUTED, text);
     lv_obj_set_pos(l, x, y);
-    lv_obj_set_width(l, HUD_W);
+    lv_obj_set_width(l, w);
     return l;
 }
 
-static lv_obj_t *hud_value(lv_obj_t *parent, int x, int y, const lv_font_t *font, uint32_t color)
+static lv_obj_t *hud_value(lv_obj_t *parent, int x, int y, int w,
+                           const lv_font_t *font, uint32_t color)
 {
     lv_obj_t *l = ui_label(parent, font, color, "0");
     lv_obj_set_pos(l, x, y);
-    lv_obj_set_width(l, HUD_W);
+    lv_obj_set_width(l, w);
     return l;
+}
+
+/* Cream status card — thick ink rim like a handheld RPG menu box. */
+static lv_obj_t *hud_card(lv_obj_t *parent, int x, int y, int w, int h)
+{
+    lv_obj_t *p = ui_panel(parent, x, y, w, h);
+    lv_obj_set_style_pad_all(p, 0, 0);
+    lv_obj_set_style_radius(p, 4, 0);
+    lv_obj_set_style_bg_color(p, lv_color_hex(TET_CREAM), 0);
+    lv_obj_set_style_border_color(p, lv_color_hex(TET_INK), 0);
+    lv_obj_set_style_border_width(p, 2, 0);
+    return p;
 }
 
 static void enter(lv_obj_t *root)
@@ -655,13 +690,20 @@ static void enter(lv_obj_t *root)
     s_root = root;
     best_load();
 
-    /* Playfield well — dark inset framed by brand border. */
+    /* Soft field wash behind the well (reads as grass, not Solana black). */
+    lv_obj_t *field = ui_panel(root, 0, 0, OS_ROOT_W, OS_ROOT_H - UI_HINT_H);
+    lv_obj_set_style_pad_all(field, 0, 0);
+    lv_obj_set_style_radius(field, 0, 0);
+    lv_obj_set_style_bg_color(field, lv_color_hex(0x244038), 0);
+    lv_obj_set_style_border_width(field, 0, 0);
+
+    /* Playfield well — deep green inset with ink frame. */
     s_board_bg = ui_panel(root, BOARD_X - 3, BOARD_Y, BOARD_W + 6, BOARD_H + 4);
     lv_obj_set_style_pad_all(s_board_bg, 0, 0);
     lv_obj_set_style_radius(s_board_bg, 4, 0);
-    lv_obj_set_style_bg_color(s_board_bg, ui_col(COL_BG), 0);
-    lv_obj_set_style_border_color(s_board_bg, ui_col(COL_BORDER), 0);
-    lv_obj_set_style_border_width(s_board_bg, 2, 0);
+    lv_obj_set_style_bg_color(s_board_bg, lv_color_hex(TET_WELL), 0);
+    lv_obj_set_style_border_color(s_board_bg, lv_color_hex(TET_INK), 0);
+    lv_obj_set_style_border_width(s_board_bg, 3, 0);
 
     for (int y = 0; y < ROWS; y++) {
         for (int x = 0; x < COLS; x++) {
@@ -673,61 +715,78 @@ static void enter(lv_obj_t *root)
     }
 
     int hx = HUD_X;
+    int hw = HUD_W;
 
-    /* HUD must clear the bottom hint bar (OS_ROOT_H - UI_HINT_H ≈ 202). */
-    lv_obj_t *title = ui_label(root, &sol_font_20, COL_AQUA, "Tetris");
-    lv_obj_set_pos(title, hx, 0);
-    ui_gradient_bar(root, hx, 22, HUD_W > 100 ? 100 : HUD_W, 3);
+    /* Title strip on cream card + gold underline (menu-bar cue). */
+    lv_obj_t *title_card = hud_card(root, hx, 0, hw, 24);
+    lv_obj_t *title = ui_label(title_card, &sol_font_14, TET_INK, "TETRIS");
+    lv_obj_set_pos(title, 6, 3);
+    lv_obj_t *gold = ui_panel(root, hx + 2, 22, hw - 4, 3);
+    lv_obj_set_style_pad_all(gold, 0, 0);
+    lv_obj_set_style_radius(gold, 0, 0);
+    lv_obj_set_style_bg_color(gold, lv_color_hex(TET_GOLD), 0);
+    lv_obj_set_style_border_width(gold, 0, 0);
 
-    hud_caption(root, hx, 30, "SCORE");
-    s_score_val = hud_value(root, hx, 44, &sol_font_20, COL_GREEN);
+    /* SCORE card — bold red value. */
+    lv_obj_t *score_card = hud_card(root, hx, 28, hw, 34);
+    hud_caption(score_card, 6, 2, hw - 12, "SCORE");
+    s_score_val = hud_value(score_card, 6, 13, hw - 12, &sol_font_20, TET_RED);
 
-    hud_caption(root, hx, 68, "LEVEL");
-    s_level_val = hud_value(root, hx, 82, &sol_font_14, COL_TEXT);
+    /* LV / LINES side-by-side cards. */
+    int half = (hw - 4) / 2;
+    lv_obj_t *lv_card = hud_card(root, hx, 66, half, 32);
+    hud_caption(lv_card, 4, 2, half - 8, "LV");
+    s_level_val = hud_value(lv_card, 4, 13, half - 8, &sol_font_14, TET_INK);
 
-    hud_caption(root, hx + HUD_W / 2, 68, "LINES");
-    s_lines_val = hud_value(root, hx + HUD_W / 2, 82, &sol_font_14, COL_TEXT);
+    lv_obj_t *ln_card = hud_card(root, hx + half + 4, 66, half, 32);
+    hud_caption(ln_card, 4, 2, half - 8, "LINES");
+    s_lines_val = hud_value(ln_card, 4, 13, half - 8, &sol_font_14, TET_INK);
 
-    hud_caption(root, hx, 104, "BEST");
-    s_best_val = hud_value(root, hx, 118, &sol_mono_12, COL_DIM);
+    /* BEST + NEXT — must clear hint bar (y + h ≤ OS_ROOT_H - UI_HINT_H ≈ 202). */
+    lv_obj_t *best_card = hud_card(root, hx, 102, hw, 26);
+    hud_caption(best_card, 6, 1, hw - 12, "BEST");
+    s_best_val = hud_value(best_card, 6, 11, hw - 12, &sol_mono_12, TET_LEAF);
 
-    hud_caption(root, hx, 136, "NEXT");
+    lv_obj_t *next_card = hud_card(root, hx, 132, hw, NEXT_BOX + 16);
+    hud_caption(next_card, 6, 1, hw - 12, "NEXT");
 
-    int nx = hx;
-    int ny = 150;
+    int nx = hx + (hw - NEXT_BOX) / 2;
+    int ny = 146;
     lv_obj_t *next_bg = ui_panel(root, nx - 2, ny - 2, NEXT_BOX + 4, NEXT_BOX + 4);
     lv_obj_set_style_pad_all(next_bg, 0, 0);
-    lv_obj_set_style_radius(next_bg, 4, 0);
-    lv_obj_set_style_bg_color(next_bg, ui_col(COL_BG), 0);
+    lv_obj_set_style_radius(next_bg, 3, 0);
+    lv_obj_set_style_bg_color(next_bg, lv_color_hex(TET_WELL), 0);
+    lv_obj_set_style_border_color(next_bg, lv_color_hex(TET_INK), 0);
+    lv_obj_set_style_border_width(next_bg, 2, 0);
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {
             s_next_cell[y][x] = make_cell(root, nx + x * NEXT_GAP, ny + y * NEXT_GAP, NEXT_CELL);
         }
     }
 
-    /* Overlay card centred on the playfield. */
+    /* Overlay: cream dialogue card on the playfield. */
     s_overlay = lv_obj_create(root);
     lv_obj_remove_style_all(s_overlay);
     lv_obj_set_size(s_overlay, BOARD_W - 4, 78);
     lv_obj_set_pos(s_overlay, BOARD_X + 2, BOARD_Y + 2 + (BOARD_H - 78) / 2);
-    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_90, 0);
-    lv_obj_set_style_bg_color(s_overlay, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_border_width(s_overlay, 1, 0);
-    lv_obj_set_style_border_color(s_overlay, ui_col(COL_BORDER), 0);
+    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_overlay, lv_color_hex(TET_CREAM_HI), 0);
+    lv_obj_set_style_border_width(s_overlay, 3, 0);
+    lv_obj_set_style_border_color(s_overlay, lv_color_hex(TET_INK), 0);
     lv_obj_set_style_radius(s_overlay, 6, 0);
     lv_obj_set_scrollable(s_overlay, false);
 
-    s_ov_title = ui_label(s_overlay, &sol_font_20, COL_AQUA, "");
+    s_ov_title = ui_label(s_overlay, &sol_font_20, TET_RED, "");
     lv_obj_set_width(s_ov_title, BOARD_W - 12);
     lv_obj_set_style_text_align(s_ov_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_ov_title, LV_ALIGN_TOP_MID, 0, 8);
 
-    s_ov_score = ui_label(s_overlay, &sol_mono_12, COL_GREEN, "");
+    s_ov_score = ui_label(s_overlay, &sol_mono_12, TET_LEAF, "");
     lv_obj_set_width(s_ov_score, BOARD_W - 12);
     lv_obj_set_style_text_align(s_ov_score, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_ov_score, LV_ALIGN_CENTER, 0, 4);
 
-    s_ov_sub = ui_label(s_overlay, &sol_mono_12, COL_TEXT, "");
+    s_ov_sub = ui_label(s_overlay, &sol_mono_12, TET_INK, "");
     lv_obj_set_width(s_ov_sub, BOARD_W - 12);
     lv_obj_set_style_text_align(s_ov_sub, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_ov_sub, LV_ALIGN_BOTTOM_MID, 0, -8);
@@ -831,7 +890,7 @@ const os_app_t app_tetris = {
     .id = "tetris",
     .name = "Tetris",
     .symbol = LV_SYMBOL_PLAY,
-    .accent = COL_AQUA,
+    .accent = TET_GOLD,
     .on_enter = enter,
     .on_exit = leave,
     .on_key = on_key,
