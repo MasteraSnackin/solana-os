@@ -23,6 +23,7 @@ set(SOLANA_OS_SRCS
     apps/paint/paint_app.c
     apps/badge/badge_app.c
     apps/ledbadge/ledbadge_app.c
+    apps/tgclient/tgclient_app.c
     apps/guide/guide_app.c apps/xdex/xdex_app.c apps/trade/trade_app.c apps/quests/quests_app.c
     apps/beacon/beacon_app.c
     apps/espnow/espnow_app.c
