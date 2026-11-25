@@ -31,6 +31,7 @@ set(SOLANA_OS_SRCS
     apps/settings/settings_app.c
     apps/update/update_app.c
     apps/about/about_app.c
+    apps/contact/contact_app.c
     apps/store/store_app.c
     apps/apps/apps_app.c
     apps/timer/timer_app.c
