@@ -5,6 +5,8 @@
 // Needs Wi-Fi up. Reuses ui_offline when disconnected. HTTP runs on a worker
 // task with its own esp_http_client (after os_http_hangup) so streaming a
 // multi-MB body does not go through the badge-server keep-alive client.
+//
+// Visual theme: shared pocket-battle chrome (sky stage, cream metric tiles).
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +23,7 @@
 #include "core/os_cmd.h"
 #include "core/os_http.h"
 #include "core/os_wifi.h"
+#include "core/theme_battle.h"
 #include "core/ui.h"
 
 #ifndef SOLANA_OS_EMULATOR
@@ -248,7 +251,8 @@ static void render_link(void)
         set_text(s_ssid, line);
         snprintf(line, sizeof(line), "%d dBm   %s", w.rssi, w.ip);
         set_text(s_rssi, line);
-        lv_obj_set_style_text_color(s_rssi, ui_col(w.rssi >= -60 ? COL_GREEN : w.rssi >= -75 ? COL_YELLOW : COL_ORANGE), 0);
+        lv_obj_set_style_text_color(s_rssi, lv_color_hex(w.rssi >= -60 ? T_TEAL :
+                                                         w.rssi >= -75 ? T_YELLOW : T_ORANGE), 0);
     } else {
         set_text(s_ssid, LV_SYMBOL_WIFI "  (not joined)");
         set_text(s_rssi, "");
@@ -282,11 +286,11 @@ static void render_results(const result_t *r)
     set_text(s_up, up);
 
     const char *prog = "";
-    uint32_t col = COL_DIM;
+    uint32_t col = T_DIM;
     switch (r->phase) {
     case PHASE_LATENCY:
         prog = "Measuring latency...";
-        col = COL_AQUA;
+        col = T_BLUE;
         break;
     case PHASE_DOWNLOAD:
         if (r->bytes_total) {
@@ -296,7 +300,7 @@ static void render_results(const result_t *r)
             snprintf(line, sizeof(line), "Downloading %u KB...", (unsigned)(r->bytes_done / 1024));
         }
         prog = line;
-        col = COL_AQUA;
+        col = T_BLUE;
         break;
     case PHASE_UPLOAD:
         if (r->bytes_total) {
@@ -306,23 +310,23 @@ static void render_results(const result_t *r)
             snprintf(line, sizeof(line), "Uploading %u KB...", (unsigned)(r->bytes_done / 1024));
         }
         prog = line;
-        col = COL_AQUA;
+        col = T_TEAL;
         break;
     case PHASE_DONE:
         prog = "Done. SELECT to run again.";
-        col = COL_GREEN;
+        col = T_TEAL;
         break;
     case PHASE_FAIL:
         prog = r->err[0] ? r->err : "Failed";
-        col = COL_ERR;
+        col = T_RED;
         break;
     default:
         prog = s_want_upload ? "SELECT run (down+up)  LEFT toggle up" : "SELECT run (down)  LEFT toggle up";
-        col = COL_DIM;
+        col = T_DIM;
         break;
     }
     set_text(s_prog, prog);
-    lv_obj_set_style_text_color(s_prog, ui_col(col), 0);
+    lv_obj_set_style_text_color(s_prog, lv_color_hex(col), 0);
 }
 
 static void publish_live(const result_t *r)
@@ -791,9 +795,9 @@ __attribute__((constructor)) static void wifispeed_ctor(void)
 
 static lv_obj_t *row_label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, int y)
 {
-    lv_obj_t *l = ui_label(parent, font, color, "");
+    lv_obj_t *l = battle_label(parent, font, color, "");
     lv_obj_set_pos(l, 10, y);
-    lv_obj_set_width(l, OS_ROOT_W - 20);
+    lv_obj_set_width(l, OS_ROOT_W - 28);
     lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_DOTS);
     return l;
 }
@@ -810,21 +814,27 @@ static void enter(lv_obj_t *root)
     s_last.up_mbps = -1;
     s_live = s_last;
 
-    s_ssid = row_label(root, &sol_font_14, COL_TEXT, 8);
-    s_rssi = row_label(root, &sol_mono_12, COL_DIM, 28);
-    s_host = row_label(root, &sol_mono_12, COL_DIM, 46);
+    battle_paint_stage(root);
 
-    s_lat = row_label(root, &sol_font_14, COL_TEXT, 78);
-    s_down = row_label(root, &sol_font_20, COL_GREEN, 104);
-    s_up = row_label(root, &sol_font_20, COL_AQUA, 132);
-    s_prog = row_label(root, &sol_mono_12, COL_DIM, 168);
+    lv_obj_t *link = battle_card(root, 6, 4, OS_ROOT_W - 12, 58, T_BLUE);
+    s_ssid = row_label(link, &sol_font_14, T_NAVY, BATTLE_STRIPE_H + 4);
+    s_rssi = row_label(link, &sol_mono_12, T_DIM, BATTLE_STRIPE_H + 22);
+    s_host = row_label(link, &sol_mono_12, T_DIM, BATTLE_STRIPE_H + 36);
+
+    lv_obj_t *stats = battle_card(root, 6, 68, OS_ROOT_W - 12, 100, T_YELLOW);
+    s_lat = row_label(stats, &sol_font_14, T_INK, BATTLE_STRIPE_H + 6);
+    s_down = row_label(stats, &sol_font_20, T_RED, BATTLE_STRIPE_H + 28);
+    s_up = row_label(stats, &sol_font_20, T_BLUE, BATTLE_STRIPE_H + 54);
+
+    lv_obj_t *prog_card = battle_card(root, 6, 174, OS_ROOT_W - 12, 28, T_TEAL);
+    s_prog = row_label(prog_card, &sol_mono_12, T_DIM, BATTLE_STRIPE_H + 4);
     lv_label_set_long_mode(s_prog, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_height(s_prog, 36);
+    lv_obj_set_height(s_prog, 16);
 
     // Shared offline panel over the content; force-hidden once Wi-Fi has an IP
     // so a speed test is not blocked waiting for badge-server registration.
     s_offline = ui_offline_create(root, 0, CONTENT_H, false);
-    s_hint = ui_hint(root, "SELECT run  LEFT upload on/off  CANCEL exit");
+    s_hint = battle_hint(root, "SELECT run  LEFT upload on/off  CANCEL exit");
     render_link();
     render_results(&s_last);
 }
@@ -891,7 +901,7 @@ const os_app_t app_wifispeed = {
     .id = "wifispeed",
     .name = "Wi-Fi Speed",
     .symbol = LV_SYMBOL_WIFI,
-    .accent = COL_GREEN,
+    .accent = T_BLUE,
     .on_enter = enter,
     .on_exit = leave,
     .on_key = key,

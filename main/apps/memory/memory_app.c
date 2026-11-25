@@ -1,6 +1,9 @@
 // Memory: Simon-style four-pad recall for the BP26 badge.
 // Watch the pattern (pads + all 8 WS2812 LEDs), then repeat with the D-pad.
 // Offline — LEDs only; no Wi-Fi, mesh, or SD. Best confirmed-block run in NVS.
+//
+// Visual theme: shared pocket-battle palette (red / yellow / blue / teal cream
+// tiles). Original colours only — no copyrighted creature art or names.
 
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +13,7 @@
 
 #include "bsp.h"
 #include "core/os.h"
+#include "core/theme_battle.h"
 #include "core/ui.h"
 
 #define NVS_NS          "memory"
@@ -18,10 +22,10 @@
 #define PAD_N           4
 #define SEQ_MAX         64
 
-#define HDR_H           36
-#define PAD_GAP         8
-#define PAD_W           88
-#define PAD_H           56
+#define HDR_H           30
+#define PAD_GAP         4
+#define PAD_W           86
+#define PAD_H           46
 
 typedef enum {
     ST_IDLE = 0,
@@ -40,16 +44,16 @@ typedef struct {
     int y;
 } pad_t;
 
-// Diamond matching the D-pad: UP / LEFT / RIGHT / DOWN.
+// Diamond matching the D-pad: UP / LEFT / RIGHT / DOWN — battle primaries.
 static const pad_t k_pads[PAD_N] = {
-    { COL_GREEN,  "UP",    OS_KEY_UP,    (OS_ROOT_W - PAD_W) / 2,               HDR_H + 8 },
-    { COL_ORANGE, "LEFT",  OS_KEY_LEFT,  (OS_ROOT_W / 2) - PAD_W - PAD_GAP / 2, HDR_H + 8 + PAD_H + PAD_GAP },
-    { COL_YELLOW, "RIGHT", OS_KEY_RIGHT, (OS_ROOT_W / 2) + PAD_GAP / 2,         HDR_H + 8 + PAD_H + PAD_GAP },
-    { COL_BLUE,   "DOWN",  OS_KEY_DOWN,  (OS_ROOT_W - PAD_W) / 2,               HDR_H + 8 + 2 * (PAD_H + PAD_GAP) },
+    { T_RED,    "UP",    OS_KEY_UP,    (OS_ROOT_W - PAD_W) / 2,               HDR_H + 8 },
+    { T_YELLOW, "LEFT",  OS_KEY_LEFT,  (OS_ROOT_W / 2) - PAD_W - PAD_GAP / 2, HDR_H + 8 + PAD_H + PAD_GAP },
+    { T_BLUE,   "RIGHT", OS_KEY_RIGHT, (OS_ROOT_W / 2) + PAD_GAP / 2,         HDR_H + 8 + PAD_H + PAD_GAP },
+    { T_TEAL,   "DOWN",  OS_KEY_DOWN,  (OS_ROOT_W - PAD_W) / 2,               HDR_H + 8 + 2 * (PAD_H + PAD_GAP) },
 };
 
 static lv_obj_t *s_root, *s_title, *s_meta, *s_status, *s_hint;
-static lv_obj_t *s_pad[PAD_N];
+static lv_obj_t *s_pad[PAD_N], *s_pad_lab[PAD_N], *s_stripe[PAD_N];
 static state_t s_state;
 static uint8_t s_seq[SEQ_MAX];
 static int s_len;               /* pattern length this round */
@@ -114,21 +118,23 @@ static void led_pad(int pi)
     bsp_rgb_show();
 }
 
-static uint32_t dim_color(uint32_t c)
-{
-    uint8_t r = ((c >> 16) & 0xFF) * 40 / 255;
-    uint8_t g = ((c >> 8) & 0xFF) * 40 / 255;
-    uint8_t b = (c & 0xFF) * 40 / 255;
-    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
-}
-
 static void paint_pads(void)
 {
     for (int i = 0; i < PAD_N; i++) {
         bool on = (s_lit == i) || (s_flash_pad == i);
-        uint32_t c = on ? k_pads[i].color : dim_color(k_pads[i].color);
-        lv_obj_set_style_bg_color(s_pad[i], lv_color_hex(c), 0);
-        lv_obj_set_style_border_color(s_pad[i], lv_color_hex(k_pads[i].color), 0);
+        uint32_t fill = on ? k_pads[i].color : T_FACE;
+        uint32_t border = on ? T_NAVY : k_pads[i].color;
+        uint32_t ink = on ? T_INK : T_NAVY;
+        lv_obj_set_style_bg_color(s_pad[i], lv_color_hex(fill), 0);
+        lv_obj_set_style_border_color(s_pad[i], lv_color_hex(border), 0);
+        lv_obj_set_style_border_width(s_pad[i], on ? 3 : 2, 0);
+        if (s_stripe[i]) {
+            lv_obj_set_style_bg_color(s_stripe[i],
+                                      lv_color_hex(on ? T_NAVY : k_pads[i].color), 0);
+        }
+        if (s_pad_lab[i]) {
+            lv_obj_set_style_text_color(s_pad_lab[i], lv_color_hex(ink), 0);
+        }
     }
 }
 
@@ -190,9 +196,7 @@ static void begin_show(void)
     set_lit(-1);
     s_wait = 2;     /* brief pause before first pad */
     set_status("Watch…");
-    if (s_hint) {
-        lv_label_set_text(s_hint, "Watch the pattern");
-    }
+    battle_set_hint(s_hint, "Watch the pattern");
 }
 
 static void start_game(void)
@@ -213,9 +217,7 @@ static void game_over(void)
     best_save();
     refresh_meta();
     set_status("Game over");
-    if (s_hint) {
-        lv_label_set_text(s_hint, "SELECT again  CANCEL exit");
-    }
+    battle_set_hint(s_hint, "SELECT again  CANCEL exit");
     os_toast("Game over — %d blocks", s_blocks);
 }
 
@@ -228,10 +230,10 @@ static void confirm_block(void)
     s_wait = 4;
     s_flash_pad = -1;
     set_lit(-1);
-    /* brief green strip flash for confirmation */
-    uint8_t r = ((COL_GREEN >> 16) & 0xFF) * OS_LED_MAX / 255;
-    uint8_t g = ((COL_GREEN >> 8) & 0xFF) * OS_LED_MAX / 255;
-    uint8_t b = (COL_GREEN & 0xFF) * OS_LED_MAX / 255;
+    /* brief yellow strip flash for confirmation */
+    uint8_t r = ((T_YELLOW >> 16) & 0xFF) * OS_LED_MAX / 255;
+    uint8_t g = ((T_YELLOW >> 8) & 0xFF) * OS_LED_MAX / 255;
+    uint8_t b = (T_YELLOW & 0xFF) * OS_LED_MAX / 255;
     bsp_rgb_fill(r, g, b);
     bsp_rgb_show();
     set_status("Nice!");
@@ -291,32 +293,33 @@ static void enter(lv_obj_t *root)
     s_wait = 0;
 
     best_load();
+    battle_paint_stage(root);
 
-    s_title = ui_label(root, &sol_font_20, COL_GREEN, "Memory");
-    lv_obj_set_pos(s_title, 10, 6);
+    s_title = battle_label(root, &sol_font_20, T_NAVY, "Memory");
+    lv_obj_set_pos(s_title, 10, 4);
 
-    s_meta = ui_label(root, &sol_mono_12, COL_DIM, "");
-    lv_obj_set_pos(s_meta, 10, 28);
+    s_meta = battle_label(root, &sol_mono_12, T_DIM, "");
+    lv_obj_set_pos(s_meta, 10, 26);
     lv_obj_set_width(s_meta, OS_ROOT_W - 20);
     refresh_meta();
 
     for (int i = 0; i < PAD_N; i++) {
-        s_pad[i] = ui_panel(root, k_pads[i].x, k_pads[i].y, PAD_W, PAD_H);
-        lv_obj_set_style_radius(s_pad[i], 8, 0);
-        lv_obj_set_style_border_width(s_pad[i], 2, 0);
-        lv_obj_set_style_border_color(s_pad[i], lv_color_hex(k_pads[i].color), 0);
-        lv_obj_t *lab = ui_label(s_pad[i], &sol_mono_12, COL_TEXT, k_pads[i].name);
-        lv_obj_center(lab);
+        s_pad[i] = battle_card(root, k_pads[i].x, k_pads[i].y, PAD_W, PAD_H,
+                               k_pads[i].color);
+        /* battle_card already made a stripe as first child */
+        s_stripe[i] = lv_obj_get_child(s_pad[i], 0);
+        s_pad_lab[i] = battle_label(s_pad[i], &sol_mono_12, T_NAVY, k_pads[i].name);
+        lv_obj_center(s_pad_lab[i]);
     }
     paint_pads();
 
     int status_y = HDR_H + 8 + 3 * (PAD_H + PAD_GAP) + 4;
-    s_status = ui_label(root, &sol_font_14, COL_TEXT, "SELECT to start");
+    s_status = battle_label(root, &sol_font_14, T_INK, "SELECT to start");
     lv_obj_set_pos(s_status, 10, status_y);
     lv_obj_set_width(s_status, OS_ROOT_W - 20);
     lv_obj_set_style_text_align(s_status, LV_TEXT_ALIGN_CENTER, 0);
 
-    s_hint = ui_hint(root, "SELECT start  D-pad play  CANCEL exit");
+    s_hint = battle_hint(root, "SELECT start  D-pad play  CANCEL exit");
     led_off();
 }
 
@@ -330,6 +333,8 @@ static void leave(void)
     s_hint = NULL;
     for (int i = 0; i < PAD_N; i++) {
         s_pad[i] = NULL;
+        s_pad_lab[i] = NULL;
+        s_stripe[i] = NULL;
     }
 }
 
@@ -350,9 +355,7 @@ static void on_tick(void)
             s_input_i = 0;
             s_flash_pad = -1;
             set_status("Your turn");
-            if (s_hint) {
-                lv_label_set_text(s_hint, "UP LEFT RIGHT DOWN");
-            }
+            battle_set_hint(s_hint, "UP LEFT RIGHT DOWN");
             return;
         }
         set_lit(s_seq[s_show_i]);
@@ -410,9 +413,7 @@ static bool on_key(os_key_t k, bool repeat)
             set_lit(-1);
             refresh_meta();
             set_status("SELECT to start");
-            if (s_hint) {
-                lv_label_set_text(s_hint, "SELECT start  D-pad play  CANCEL exit");
-            }
+            battle_set_hint(s_hint, "SELECT start  D-pad play  CANCEL exit");
             return true;
         }
         return true;
@@ -426,9 +427,7 @@ static bool on_key(os_key_t k, bool repeat)
             best_save();
             refresh_meta();
             set_status("SELECT to start");
-            if (s_hint) {
-                lv_label_set_text(s_hint, "SELECT start  D-pad play  CANCEL exit");
-            }
+            battle_set_hint(s_hint, "SELECT start  D-pad play  CANCEL exit");
             return true;
         }
         int pi = pad_for_key(k);
@@ -445,7 +444,7 @@ const os_app_t app_memory = {
     .id = "memory",
     .name = "Memory",
     .symbol = LV_SYMBOL_LIST,
-    .accent = COL_GREEN,
+    .accent = T_RED,
     .on_enter = enter,
     .on_exit = leave,
     .on_key = on_key,

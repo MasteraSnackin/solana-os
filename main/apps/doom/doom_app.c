@@ -41,6 +41,7 @@
 
 #include "bsp.h"
 #include "core/os.h"
+#include "core/theme_battle.h"
 #include "core/ui.h"
 #include "apps/emu_pad.h"
 #include "doom_host.h"
@@ -82,7 +83,7 @@ static volatile bool s_blit_quit;
 static volatile unsigned s_fb_nonblack;
 static volatile bool s_have_picture;
 static int64_t s_exit_since;
-static lv_obj_t *s_root, *s_msg, *s_hint;
+static lv_obj_t *s_root, *s_msg, *s_hint, *s_banner;
 static ui_list_t *s_list;
 static EXT_RAM_BSS_ATTR char s_wads[MAX_WADS][PATH_MAX_LEN];
 static char s_play_path[PATH_MAX_LEN];
@@ -476,35 +477,49 @@ static void wad_row(int i, ui_row_t *row, void *ctx)
     strlcpy(row->sub, s_wads[i], sizeof(row->sub));
 }
 
+static void paint_banner(void)
+{
+    s_banner = battle_card(s_root, 8, 4, OS_ROOT_W - 16, 36, T_RED);
+    lv_obj_t *title = battle_label(s_banner, &sol_font_20, T_NAVY, "Doom");
+    lv_obj_align(title, LV_ALIGN_LEFT_MID, 12, BATTLE_STRIPE_H / 2);
+}
+
 static void message(const char *text)
 {
-    s_msg = ui_label(s_root, &sol_font_14, COL_TEXT, text);
-    lv_obj_set_width(s_msg, OS_ROOT_W - 32);
+    lv_obj_t *card = battle_card(s_root, 16, 56, OS_ROOT_W - 32, 96, T_YELLOW);
+    s_msg = battle_label(card, &sol_font_14, T_INK, text);
+    lv_obj_set_width(s_msg, OS_ROOT_W - 56);
     lv_obj_set_style_text_align(s_msg, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_msg, LV_ALIGN_CENTER, 0, -8);
+    lv_obj_align(s_msg, LV_ALIGN_CENTER, 0, BATTLE_STRIPE_H / 2);
 }
 
 static void show_picker(void)
 {
     s_list = NULL;
-    s_msg = s_hint = NULL;
+    s_msg = s_hint = s_banner = NULL;
     s_wad_count = 0;
+
+    battle_paint_stage(s_root);
+    paint_banner();
 
     bsp_sd_info_t in;
     bsp_sd_get_info(&in);
     if (in.state != BSP_SD_MOUNTED) {
         message("No microSD card.\nInsert one with a .wad in /doom.");
+        s_hint = battle_hint(s_root, "CANCEL exit");
         return;
     }
     scan(WADS_DIR);
     ESP_LOGI(TAG, "picker %d .wad in %s", s_wad_count, WADS_DIR);
     if (!s_wad_count) {
         message("No WAD found.\nCopy a .wad file to /doom on the card.");
+        s_hint = battle_hint(s_root, "CANCEL exit");
         return;
     }
-    s_list = ui_list_create(s_root, 0, OS_ROOT_H - UI_HINT_H, wad_row, NULL);
+    /* List sits under the cream banner; shared ui_list keeps Solana row chrome. */
+    s_list = ui_list_create(s_root, 44, OS_ROOT_H - UI_HINT_H - 44, wad_row, NULL);
     ui_list_set_count(s_list, s_wad_count);
-    s_hint = ui_hint(s_root, LV_SYMBOL_UP LV_SYMBOL_DOWN " choose   SELECT play   CANCEL exit");
+    s_hint = battle_hint(s_root, LV_SYMBOL_UP LV_SYMBOL_DOWN " choose   SELECT play   CANCEL exit");
 }
 
 static void start(const char *path)
@@ -518,12 +533,18 @@ static void start(const char *path)
         s_list = NULL;
     }
     if (s_hint) {
-        lv_obj_delete(s_hint);
+        lv_obj_t *bar = lv_obj_get_parent(s_hint);
+        lv_obj_delete(bar);
         s_hint = NULL;
     }
     if (s_msg) {
-        lv_obj_delete(s_msg);
+        lv_obj_t *card = lv_obj_get_parent(s_msg);
+        lv_obj_delete(card);
         s_msg = NULL;
+    }
+    if (s_banner) {
+        lv_obj_delete(s_banner);
+        s_banner = NULL;
     }
     message("Loading…");
     lv_refr_now(NULL);
@@ -604,7 +625,7 @@ const os_app_t app_doom = {
     .id = "doom",
     .name = "Doom",
     .symbol = LV_SYMBOL_PLAY,
-    .accent = COL_ORANGE,
+    .accent = T_RED,
     .on_enter = enter,
     .on_exit = leave,
     .on_key = key,

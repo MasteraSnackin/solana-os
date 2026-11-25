@@ -1,6 +1,8 @@
 // Dopewars: classic buy-low / sell-high trading sim for the BP26 badge.
 // D-pad UI on the 320×240 panel; in-progress run + high score persist in NVS.
 // Offline — no Wi-Fi, mesh, or SD required.
+//
+// Visual theme: shared pocket-battle chrome (sky stage, cream header tile).
 
 #include <stdio.h>
 #include <string.h>
@@ -9,6 +11,7 @@
 #include "nvs.h"
 
 #include "core/os.h"
+#include "core/theme_battle.h"
 #include "core/ui.h"
 
 #define NVS_NS          "dopewars"
@@ -504,10 +507,11 @@ static void hdr_debt_line(void)
 static lv_obj_t *make_panel(void)
 {
     clear_content();
-    s_content = ui_panel(s_root, 8, LIST_Y, OS_ROOT_W - 16, LIST_H - 4);
-    s_body = ui_label(s_content, &sol_font_14, COL_TEXT, "");
+    s_content = battle_card(s_root, 8, LIST_Y, OS_ROOT_W - 16, LIST_H - 4, T_YELLOW);
+    s_body = battle_label(s_content, &sol_font_14, T_INK, "");
     lv_obj_set_width(s_body, OS_ROOT_W - 32);
     lv_obj_set_style_pad_all(s_body, 8, 0);
+    lv_obj_set_pos(s_body, 8, BATTLE_STRIPE_H + 4);
     lv_label_set_long_mode(s_body, LV_LABEL_LONG_MODE_WRAP);
     return s_content;
 }
@@ -1149,19 +1153,20 @@ static void enter(lv_obj_t *root)
     s_over_msg[0] = 0;
 
     hiscore_load();
+    battle_paint_stage(root);
 
-    s_hdr = ui_panel(root, 0, 0, OS_ROOT_W, HDR_H);
-    s_cash = ui_label(s_hdr, &sol_font_20, COL_GREEN, "Dopewars");
-    lv_obj_set_pos(s_cash, 10, 4);
-    lv_obj_set_width(s_cash, OS_ROOT_W - 20);
+    s_hdr = battle_card(root, 4, 2, OS_ROOT_W - 8, HDR_H, T_ORANGE);
+    s_cash = battle_label(s_hdr, &sol_font_20, T_NAVY, "Dopewars");
+    lv_obj_set_pos(s_cash, 10, BATTLE_STRIPE_H + 2);
+    lv_obj_set_width(s_cash, OS_ROOT_W - 28);
     lv_label_set_long_mode(s_cash, LV_LABEL_LONG_MODE_DOTS);
 
-    s_meta = ui_label(s_hdr, &sol_mono_12, COL_DIM, "");
-    lv_obj_set_pos(s_meta, 10, 26);
-    lv_obj_set_width(s_meta, OS_ROOT_W - 20);
+    s_meta = battle_label(s_hdr, &sol_mono_12, T_DIM, "");
+    lv_obj_set_pos(s_meta, 10, BATTLE_STRIPE_H + 22);
+    lv_obj_set_width(s_meta, OS_ROOT_W - 28);
     lv_label_set_long_mode(s_meta, LV_LABEL_LONG_MODE_DOTS);
 
-    s_hint = ui_hint(root, "");
+    s_hint = battle_hint(root, "");
     show_title();
 }
 
@@ -1327,7 +1332,7 @@ const os_app_t app_dopewars = {
     .id = "dopewars",
     .name = "Dopewars",
     .symbol = LV_SYMBOL_CHARGE,
-    .accent = COL_ORANGE,
+    .accent = T_ORANGE,
     .on_enter = enter,
     .on_exit = leave,
     .on_key = key,
