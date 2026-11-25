@@ -7,6 +7,7 @@
 
 extern const os_app_t app_wifi, app_badge, app_espnow, app_debug, app_settings, app_about;
 extern const os_app_t app_guide, app_xdex, app_trade, app_quests, app_beacon, app_store, app_apps;
+extern const os_app_t app_calc;
 
 const os_app_t *const os_apps[] = {
     &app_wifi,
@@ -18,6 +19,7 @@ const os_app_t *const os_apps[] = {
     &app_beacon,            // only on badges paired as a quest beacon (visible())
     &app_store,
     &app_apps,
+    &app_calc,
     &app_espnow,
     &app_debug,
     &app_settings,
