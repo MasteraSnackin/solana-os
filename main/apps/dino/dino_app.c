@@ -1,7 +1,8 @@
 // Dino: side-scrolling desert runner for the BP26 badge (320×240).
 // Auto-run; UP/SELECT jump; DOWN duck; CANCEL pause / exit. Score grows with
-// distance; obstacles (spires + soarers) speed up over time. Game over /
-// restart. Original pixel art only — no Chrome / Google assets or marks.
+// distance; obstacles (spires + soarers) speed up over time. Night mode every
+// 700 pts; top-5 high-score board in NVS. Original pixel art only — no Chrome /
+// Google assets or marks.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,7 @@
 
 #define NVS_NS          "dino"
 #define NVS_BEST        "best"
+#define HI_N            5
 
 #define HUD_H           20
 #define FIELD_W         320
@@ -29,21 +31,38 @@
 #define SPEED_MAX       14
 #define JUMP_V0         (-13)
 #define GRAVITY         2
+#define NIGHT_EVERY     700             /* day↔night flip each N points */
 
-/* Desert dusk palette — original colours */
-#define PX_SKY_TOP      0x3A6FA8
-#define PX_SKY_MID      0xC87848
-#define PX_SKY_LOW      0xE8B070
-#define PX_SAND         0xD8B070
-#define PX_SAND_DARK    0xB89050
-#define PX_GROUND       0x8A6840
-#define PX_LINE         0x5A4030
-#define PX_RUNNER       0x2A3040
-#define PX_RUNNER_EYE   0xF0F0E0
-#define PX_SPIRE        0x2E8A48
-#define PX_SPIRE_LIT    0x48B060
-#define PX_SOAR         0x4A3858
-#define PX_CLOUD        0xF0D8C0
+/* Day — desert dusk */
+#define DAY_SKY_TOP     0x3A6FA8
+#define DAY_SKY_MID     0xC87848
+#define DAY_SKY_LOW     0xE8B070
+#define DAY_SAND        0xD8B070
+#define DAY_SAND_DARK   0xB89050
+#define DAY_GROUND      0x8A6840
+#define DAY_LINE        0x5A4030
+#define DAY_RUNNER      0x2A3040
+#define DAY_RUNNER_EYE  0xF0F0E0
+#define DAY_SPIRE       0x2E8A48
+#define DAY_SPIRE_LIT   0x48B060
+#define DAY_SOAR        0x4A3858
+#define DAY_CLOUD       0xF0D8C0
+
+/* Night — cool desert */
+#define NGT_SKY_TOP     0x081828
+#define NGT_SKY_MID     0x102848
+#define NGT_SKY_LOW     0x183858
+#define NGT_SAND        0x3A4860
+#define NGT_SAND_DARK   0x2A3850
+#define NGT_GROUND      0x1A2838
+#define NGT_LINE        0x607088
+#define NGT_RUNNER      0xE8E0C8
+#define NGT_RUNNER_EYE  0x203040
+#define NGT_SPIRE       0x58C070
+#define NGT_SPIRE_LIT   0x88F0A0
+#define NGT_SOAR        0xC0A8D0
+#define NGT_STAR        0xF0F0D0
+
 #define PX_DEAD_TINT    0x681818
 
 #define UI_TITLE        0xC87848
@@ -58,6 +77,7 @@ typedef enum {
     ST_PLAY,
     ST_PAUSE,
     ST_OVER,
+    ST_SCORES,
 } state_t;
 
 typedef enum {
@@ -81,11 +101,13 @@ static state_t s_state;
 
 static int s_score;
 static int32_t s_best;
+static int32_t s_hi[HI_N];
 static int s_speed;             /* px per tick */
 static int s_dist_acc;          /* leftover for score ticks */
 static int s_spawn_cd;          /* ticks until next obstacle */
 static int s_anim;              /* run-cycle frame */
 static int s_ground_scroll;
+static bool s_night;
 
 static int s_y;                 /* runner feet Y (top of feet = GROUND_Y when grounded) */
 static int s_vy;
@@ -128,66 +150,82 @@ static void fill_rect(int x0, int y0, int w, int h, uint16_t c)
     }
 }
 
+static void sync_night(void)
+{
+    s_night = ((s_score / NIGHT_EVERY) % 2) == 1;
+}
+
 static void fill_sky(void)
 {
-    /* three-band dusk wash */
+    uint32_t sky_top = s_night ? NGT_SKY_TOP : DAY_SKY_TOP;
+    uint32_t sky_mid = s_night ? NGT_SKY_MID : DAY_SKY_MID;
+    uint32_t sky_low = s_night ? NGT_SKY_LOW : DAY_SKY_LOW;
+    uint32_t sand = s_night ? NGT_SAND : DAY_SAND;
+    uint32_t sand_d = s_night ? NGT_SAND_DARK : DAY_SAND_DARK;
+    uint32_t ground = s_night ? NGT_GROUND : DAY_GROUND;
+    uint32_t line = s_night ? NGT_LINE : DAY_LINE;
+
     int a = FIELD_H / 3;
     int b = (FIELD_H * 2) / 3;
-    fill_rect(0, 0, FIELD_W, a, color_u16(PX_SKY_TOP));
-    fill_rect(0, a, FIELD_W, b - a, color_u16(PX_SKY_MID));
-    fill_rect(0, b, FIELD_W, GROUND_Y - b, color_u16(PX_SKY_LOW));
-    fill_rect(0, GROUND_Y, FIELD_W, FIELD_H - GROUND_Y, color_u16(PX_GROUND));
+    fill_rect(0, 0, FIELD_W, a, color_u16(sky_top));
+    fill_rect(0, a, FIELD_W, b - a, color_u16(sky_mid));
+    fill_rect(0, b, FIELD_W, GROUND_Y - b, color_u16(sky_low));
+    fill_rect(0, GROUND_Y, FIELD_W, FIELD_H - GROUND_Y, color_u16(ground));
 
-    /* sand stripe just above ground */
-    fill_rect(0, GROUND_Y - 4, FIELD_W, 4, color_u16(PX_SAND));
-    fill_rect(0, GROUND_Y - 1, FIELD_W, 1, color_u16(PX_LINE));
+    fill_rect(0, GROUND_Y - 4, FIELD_W, 4, color_u16(sand));
+    fill_rect(0, GROUND_Y - 1, FIELD_W, 1, color_u16(line));
 
-    /* scrolling ground dashes */
-    uint16_t dash = color_u16(PX_SAND_DARK);
+    uint16_t dash = color_u16(sand_d);
     for (int x = -((s_ground_scroll) % 24); x < FIELD_W; x += 24) {
         fill_rect(x, GROUND_Y + 6, 10, 2, dash);
     }
 
-    /* soft cloud blobs (parallax-ish, slower) */
-    uint16_t cloud = color_u16(PX_CLOUD);
-    int cx = (FIELD_W - ((s_ground_scroll / 3) % (FIELD_W + 60))) - 40;
-    fill_rect(cx, 18, 28, 6, cloud);
-    fill_rect(cx + 8, 14, 18, 6, cloud);
-    fill_rect(cx + 90, 28, 22, 5, cloud);
+    if (s_night) {
+        uint16_t star = color_u16(NGT_STAR);
+        /* sparse twinkle field — deterministic from scroll */
+        for (int i = 0; i < 18; i++) {
+            int sx = (i * 53 + (s_ground_scroll / 4)) % FIELD_W;
+            int sy = 6 + (i * 17) % (GROUND_Y / 2);
+            put_px(sx, sy, star);
+            if ((i & 3) == 0) {
+                put_px(sx + 1, sy, star);
+            }
+        }
+    } else {
+        uint16_t cloud = color_u16(DAY_CLOUD);
+        int cx = (FIELD_W - ((s_ground_scroll / 3) % (FIELD_W + 60))) - 40;
+        fill_rect(cx, 18, 28, 6, cloud);
+        fill_rect(cx + 8, 14, 18, 6, cloud);
+        fill_rect(cx + 90, 28, 22, 5, cloud);
+    }
 }
 
 // ---- original sprites (procedural pixels; not Chrome art) -----------------
 
 static void draw_runner(int feet_x, int feet_y, bool duck, int frame)
 {
-    uint16_t body = color_u16(PX_RUNNER);
-    uint16_t eye = color_u16(PX_RUNNER_EYE);
+    uint16_t body = color_u16(s_night ? NGT_RUNNER : DAY_RUNNER);
+    uint16_t eye = color_u16(s_night ? NGT_RUNNER_EYE : DAY_RUNNER_EYE);
 
     if (duck) {
-        /* low silhouette: long body, tucked head */
-        int top = feet_y - 14;
-        fill_rect(feet_x, top + 4, 28, 10, body);
-        fill_rect(feet_x + 22, top, 10, 10, body);          /* head */
-        put_px(feet_x + 28, top + 3, eye);
-        /* stub legs */
+        /* low silhouette: long body, tucked head — matches duck hitbox */
+        int top = feet_y - 12;
+        fill_rect(feet_x, top + 3, 24, 9, body);
+        fill_rect(feet_x + 20, top, 10, 9, body);           /* head forward */
+        put_px(feet_x + 26, top + 2, eye);
         fill_rect(feet_x + 4, feet_y - 2, 4, 2, body);
-        fill_rect(feet_x + 14, feet_y - 2, 4, 2, body);
+        fill_rect(feet_x + 12, feet_y - 2, 4, 2, body);
         return;
     }
 
     int top = feet_y - 26;
-    /* torso */
     fill_rect(feet_x + 4, top + 8, 12, 14, body);
-    /* head + snout */
     fill_rect(feet_x + 10, top, 12, 10, body);
     fill_rect(feet_x + 20, top + 4, 6, 4, body);
     put_px(feet_x + 18, top + 3, eye);
-    /* small crest (not a Chrome silhouette) */
     fill_rect(feet_x + 12, top - 3, 3, 3, body);
     fill_rect(feet_x + 16, top - 2, 2, 2, body);
-    /* arm */
     fill_rect(feet_x + 2, top + 12, 4, 3, body);
-    /* legs — run cycle */
     if ((frame & 1) == 0) {
         fill_rect(feet_x + 6, feet_y - 6, 4, 6, body);
         fill_rect(feet_x + 14, feet_y - 4, 4, 4, body);
@@ -197,46 +235,38 @@ static void draw_runner(int feet_x, int feet_y, bool duck, int frame)
         fill_rect(feet_x + 2, feet_y - 2, 4, 2, body);
         fill_rect(feet_x + 14, feet_y - 6, 4, 6, body);
     }
-    /* thin tail */
     fill_rect(feet_x - 6, top + 14, 10, 3, body);
     fill_rect(feet_x - 10, top + 12, 4, 3, body);
 }
 
 static void draw_spire(const obs_t *o)
 {
-    uint16_t a = color_u16(PX_SPIRE);
-    uint16_t b = color_u16(PX_SPIRE_LIT);
+    uint16_t a = color_u16(s_night ? NGT_SPIRE : DAY_SPIRE);
+    uint16_t b = color_u16(s_night ? NGT_SPIRE_LIT : DAY_SPIRE_LIT);
     int x = o->x;
     int y = o->y;
     int w = o->w;
     int h = o->h;
 
-    /* main column */
     fill_rect(x + w / 3, y, w / 3 + 1, h, a);
-    /* left arm */
     if (h > 22) {
         fill_rect(x, y + h / 3, w / 3 + 1, 4, a);
         fill_rect(x, y + h / 3 - 10, 3, 10, a);
     }
-    /* right arm */
     if (h > 28) {
         fill_rect(x + 2 * w / 3, y + h / 2, w / 3 + 1, 4, a);
         fill_rect(x + w - 3, y + h / 2 - 8, 3, 8, a);
     }
-    /* lit edge */
     fill_rect(x + w / 3 + 1, y + 2, 1, h - 4, b);
 }
 
 static void draw_soar(const obs_t *o, int frame)
 {
-    uint16_t c = color_u16(PX_SOAR);
+    uint16_t c = color_u16(s_night ? NGT_SOAR : DAY_SOAR);
     int x = o->x;
     int y = o->y;
-    /* body */
     fill_rect(x + 6, y + 4, 14, 5, c);
-    /* beak */
     fill_rect(x + 20, y + 5, 5, 2, c);
-    /* wings flap */
     if ((frame & 1) == 0) {
         fill_rect(x, y, 10, 3, c);
         fill_rect(x + 16, y, 10, 3, c);
@@ -246,13 +276,19 @@ static void draw_soar(const obs_t *o, int frame)
     }
 }
 
+/*
+ * Duck hitbox polish: crouched AABB matches the low sprite (h=12 from feet),
+ * not the old upright-ish 14×30 box that left empty air above the body and a
+ * wide front that clipped high soarers unfairly. Standing stays 22×26.
+ * Callers apply a small shrink for fairness.
+ */
 static void runner_hitbox(int *x, int *y, int *w, int *h)
 {
     *x = RUNNER_X;
     if (s_ducking && s_on_ground) {
-        *y = s_y - 14;
-        *w = 30;
-        *h = 14;
+        *y = s_y - 12;
+        *w = 26;
+        *h = 12;
     } else {
         *y = s_y - 26;
         *w = 22;
@@ -260,15 +296,28 @@ static void runner_hitbox(int *x, int *y, int *w, int *h)
     }
 }
 
+static bool rects_overlap(int ax, int ay, int aw, int ah,
+                          int bx, int by, int bw, int bh)
+{
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+
 static bool hit_test(void)
 {
     int rx, ry, rw, rh;
     runner_hitbox(&rx, &ry, &rw, &rh);
-    /* shrink a little for fairness */
-    rx += 2;
-    ry += 2;
-    rw -= 4;
-    rh -= 3;
+    /* shrink for fairness — duck: more off the top (air above body) */
+    if (s_ducking && s_on_ground) {
+        rx += 2;
+        ry += 3;
+        rw -= 4;
+        rh -= 4;
+    } else {
+        rx += 2;
+        ry += 2;
+        rw -= 4;
+        rh -= 3;
+    }
     if (rw < 4 || rh < 4) {
         return false;
     }
@@ -277,19 +326,51 @@ static bool hit_test(void)
             continue;
         }
         obs_t *o = &s_obs[i];
-        if (rx < o->x + o->w && rx + rw > o->x &&
-            ry < o->y + o->h && ry + rh > o->y) {
+        if (rects_overlap(rx, ry, rw, rh, o->x, o->y, o->w, o->h)) {
             return true;
         }
     }
     return false;
 }
 
-// ---- NVS ------------------------------------------------------------------
+// ---- NVS / high-score board -----------------------------------------------
+
+static void hi_sort_desc(void)
+{
+    for (int i = 0; i < HI_N - 1; i++) {
+        for (int j = i + 1; j < HI_N; j++) {
+            if (s_hi[j] > s_hi[i]) {
+                int32_t t = s_hi[i];
+                s_hi[i] = s_hi[j];
+                s_hi[j] = t;
+            }
+        }
+    }
+}
+
+/* Insert score into top-N if it qualifies. Returns rank 1..HI_N or 0. */
+static int hi_insert(int32_t score)
+{
+    if (score <= 0) {
+        return 0;
+    }
+    if (score <= s_hi[HI_N - 1] && s_hi[HI_N - 1] > 0) {
+        return 0;
+    }
+    s_hi[HI_N - 1] = score;
+    hi_sort_desc();
+    for (int i = 0; i < HI_N; i++) {
+        if (s_hi[i] == score) {
+            return i + 1;
+        }
+    }
+    return 0;
+}
 
 static void prefs_load(void)
 {
     s_best = 0;
+    memset(s_hi, 0, sizeof(s_hi));
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         return;
@@ -298,22 +379,56 @@ static void prefs_load(void)
     if (nvs_get_i32(h, NVS_BEST, &v) == ESP_OK && v > 0) {
         s_best = v;
     }
+    for (int i = 0; i < HI_N; i++) {
+        char key[8];
+        snprintf(key, sizeof(key), "hs%d", i);
+        v = 0;
+        if (nvs_get_i32(h, key, &v) == ESP_OK && v > 0) {
+            s_hi[i] = v;
+        }
+    }
     nvs_close(h);
+    hi_sort_desc();
+    /* migrate: single best into board if board empty */
+    if (s_best > 0 && s_hi[0] == 0) {
+        s_hi[0] = s_best;
+    }
+    if (s_hi[0] > s_best) {
+        s_best = s_hi[0];
+    }
 }
 
-static void best_save(void)
+static void prefs_save(void)
 {
-    if (s_score <= s_best) {
-        return;
+    if (s_hi[0] > s_best) {
+        s_best = s_hi[0];
     }
-    s_best = s_score;
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
         return;
     }
     nvs_set_i32(h, NVS_BEST, s_best);
+    for (int i = 0; i < HI_N; i++) {
+        char key[8];
+        snprintf(key, sizeof(key), "hs%d", i);
+        nvs_set_i32(h, key, s_hi[i]);
+    }
     nvs_commit(h);
     nvs_close(h);
+}
+
+/* Pause→title: update BEST only (incomplete run is not a board entry). */
+static void best_only_save(void)
+{
+    if (s_score <= s_best) {
+        return;
+    }
+    s_best = s_score;
+    if (s_hi[0] < s_best) {
+        /* keep board #1 in sync with BEST without inventing mid-run ranks */
+        hi_insert(s_best);
+    }
+    prefs_save();
 }
 
 // ---- HUD / overlay --------------------------------------------------------
@@ -355,6 +470,31 @@ static void overlay_show(bool on, const char *title, const char *sub)
     }
 }
 
+static void scores_overlay(void)
+{
+    char body[96];
+    size_t n = 0;
+    body[0] = '\0';
+    for (int i = 0; i < HI_N; i++) {
+        if (s_hi[i] <= 0) {
+            n += (size_t)snprintf(body + n, sizeof(body) - n,
+                                  "%d.  --\n", i + 1);
+        } else {
+            n += (size_t)snprintf(body + n, sizeof(body) - n,
+                                  "%d.  %ld\n", i + 1, (long)s_hi[i]);
+        }
+        if (n >= sizeof(body)) {
+            break;
+        }
+    }
+    /* trim trailing newline for label */
+    if (n > 0 && body[n - 1] == '\n') {
+        body[n - 1] = '\0';
+    }
+    overlay_show(true, "TOP 5", body);
+    set_hint("SELECT play  CANCEL title");
+}
+
 // ---- draw -----------------------------------------------------------------
 
 static void redraw(void)
@@ -363,6 +503,7 @@ static void redraw(void)
         return;
     }
 
+    sync_night();
     fill_sky();
 
     for (int i = 0; i < MAX_OBS; i++) {
@@ -388,6 +529,11 @@ static void redraw(void)
 
     if (s_canvas) {
         lv_obj_invalidate(s_canvas);
+    }
+
+    if (s_root) {
+        uint32_t bg = s_night ? NGT_SKY_TOP : DAY_SKY_TOP;
+        lv_obj_set_style_bg_color(s_root, lv_color_hex(bg), 0);
     }
 }
 
@@ -438,28 +584,34 @@ static void spawn_obstacle(void)
         o->kind = OBS_SOAR;
         o->w = 26;
         o->h = 12;
-        /* high = duck under; mid/low = jump */
+        /*
+         * Bands vs polished hitboxes (after fairness shrink):
+         *   stand ≈ [GROUND_Y-24, GROUND_Y), duck ≈ [GROUND_Y-9, GROUND_Y).
+         * High occupies standing head-zone only → duck clears, stand hits.
+         * Mid/low reach into duck zone → must jump.
+         */
         int band = (int)((r >> 8) % 3);
         if (band == 0) {
-            o->y = GROUND_Y - 48;       /* high — duck */
+            o->y = GROUND_Y - 30;       /* high — duck under */
         } else if (band == 1) {
-            o->y = GROUND_Y - 36;       /* mid — jump */
+            o->y = GROUND_Y - 20;       /* mid — jump */
         } else {
-            o->y = GROUND_Y - 26;       /* low — jump */
+            o->y = GROUND_Y - 14;       /* low — jump */
         }
     }
 }
 
 static void idle_overlay(void)
 {
-    overlay_show(true, "DINO", "SELECT start");
-    set_hint("UP jump  DOWN duck  SELECT start  CANCEL exit");
+    overlay_show(true, "DINO", "SELECT start · LEFT scores");
+    set_hint("UP jump  DOWN duck  LEFT scores  CANCEL exit");
 }
 
 static void go_idle(void)
 {
     s_state = ST_IDLE;
     s_score = 0;
+    s_night = false;
     s_speed = SPEED_START;
     s_y = GROUND_Y;
     s_vy = 0;
@@ -468,7 +620,6 @@ static void go_idle(void)
     s_on_ground = true;
     s_anim = 0;
     clear_obs();
-    /* preview obstacles */
     obs_t *a = alloc_obs();
     if (a) {
         a->alive = true;
@@ -485,10 +636,17 @@ static void go_idle(void)
         b->w = 26;
         b->h = 12;
         b->x = 260;
-        b->y = GROUND_Y - 48;
+        b->y = GROUND_Y - 30;
     }
     refresh_hud();
     idle_overlay();
+    redraw();
+}
+
+static void go_scores(void)
+{
+    s_state = ST_SCORES;
+    scores_overlay();
     redraw();
 }
 
@@ -512,16 +670,22 @@ static void game_over(void)
 {
     s_state = ST_OVER;
     bool is_new = s_score > s_best;
-    best_save();
+    int rank = hi_insert((int32_t)s_score);
+    if (s_score > s_best) {
+        s_best = s_score;
+    }
+    prefs_save();
     refresh_hud();
-    char sub[48];
+    char sub[56];
     if (is_new) {
         snprintf(sub, sizeof(sub), "NEW BEST %d — SELECT", s_score);
+    } else if (rank > 0) {
+        snprintf(sub, sizeof(sub), "#%d board · %d — SELECT", rank, s_score);
     } else {
         snprintf(sub, sizeof(sub), "score %d — SELECT again", s_score);
     }
     overlay_show(true, "GAME OVER", sub);
-    set_hint("SELECT again  CANCEL exit");
+    set_hint("SELECT again  LEFT scores  CANCEL exit");
     os_toast("Game over — %d", s_score);
     redraw();
 }
@@ -529,6 +693,7 @@ static void game_over(void)
 static void start_game(void)
 {
     s_score = 0;
+    s_night = false;
     s_dist_acc = 0;
     s_speed = SPEED_START;
     s_spawn_cd = 18;
@@ -556,7 +721,6 @@ static void do_jump(void)
 
 static void update_speed(void)
 {
-    /* every 100 points, +1 speed */
     int sp = SPEED_START + s_score / 100;
     if (sp > SPEED_MAX) {
         sp = SPEED_MAX;
@@ -566,14 +730,12 @@ static void update_speed(void)
 
 static void step(void)
 {
-    /* no key-up events: duck while DOWN repeats arrive; drop after a quiet tick */
     if (!s_down_seen) {
         s_down_held = false;
     }
     s_down_seen = false;
     s_ducking = s_down_held && s_on_ground;
 
-    /* gravity */
     if (!s_on_ground) {
         s_y += s_vy;
         s_vy += GRAVITY;
@@ -587,16 +749,15 @@ static void step(void)
     s_ground_scroll += s_speed;
     s_anim++;
 
-    /* score from distance */
     s_dist_acc += s_speed;
     while (s_dist_acc >= 8) {
         s_dist_acc -= 8;
         s_score++;
     }
     update_speed();
+    sync_night();
     refresh_hud();
 
-    /* move obstacles */
     for (int i = 0; i < MAX_OBS; i++) {
         if (!s_obs[i].alive) {
             continue;
@@ -607,12 +768,10 @@ static void step(void)
         }
     }
 
-    /* spawn */
     if (s_spawn_cd > 0) {
         s_spawn_cd--;
     } else {
         spawn_obstacle();
-        /* gap shrinks slightly as speed rises */
         int gap = 28 - (s_speed - SPEED_START) * 2;
         if (gap < 16) {
             gap = 16;
@@ -635,6 +794,7 @@ static void enter(lv_obj_t *root)
     s_root = root;
     s_state = ST_IDLE;
     s_score = 0;
+    s_night = false;
     s_fb = NULL;
     s_canvas = NULL;
     s_overlay = NULL;
@@ -643,11 +803,10 @@ static void enter(lv_obj_t *root)
     prefs_load();
 
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(root, lv_color_hex(PX_SKY_TOP), 0);
+    lv_obj_set_style_bg_color(root, lv_color_hex(DAY_SKY_TOP), 0);
 
     s_title = ui_label(root, &sol_font_20, UI_TITLE, "Dino");
     lv_obj_set_pos(s_title, 8, 1);
-    /* true colour — bypass light-map remap */
     lv_obj_set_style_text_color(s_title, lv_color_hex(UI_TITLE), 0);
 
     s_score_lab = ui_label(root, &sol_mono_12, UI_SCORE, "");
@@ -685,10 +844,11 @@ static void enter(lv_obj_t *root)
     lv_image_set_src(s_canvas, &s_dsc);
     lv_obj_set_pos(s_canvas, 0, gy);
 
+    /* taller overlay for top-5 list */
     s_overlay = lv_obj_create(root);
     lv_obj_remove_style_all(s_overlay);
-    lv_obj_set_size(s_overlay, FIELD_W - 48, 52);
-    lv_obj_set_pos(s_overlay, 24, gy + (FIELD_H - 52) / 2);
+    lv_obj_set_size(s_overlay, FIELD_W - 48, 96);
+    lv_obj_set_pos(s_overlay, 24, gy + (FIELD_H - 96) / 2);
     lv_obj_set_style_bg_opa(s_overlay, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(s_overlay, lv_color_hex(UI_BOX_BG), 0);
     lv_obj_set_style_border_width(s_overlay, 3, 0);
@@ -699,12 +859,12 @@ static void enter(lv_obj_t *root)
     lv_obj_set_width(ot, FIELD_W - 48);
     lv_obj_set_style_text_align(ot, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(ot, lv_color_hex(UI_BOX_INK), 0);
-    lv_obj_align(ot, LV_ALIGN_TOP_MID, 0, 6);
+    lv_obj_align(ot, LV_ALIGN_TOP_MID, 0, 4);
     lv_obj_t *os = ui_label(s_overlay, &sol_mono_12, UI_BEST, "");
     lv_obj_set_width(os, FIELD_W - 48);
     lv_obj_set_style_text_align(os, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(os, lv_color_hex(UI_BEST), 0);
-    lv_obj_align(os, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_align(os, LV_ALIGN_BOTTOM_MID, 0, -4);
 
     s_hint = ui_hint(root, "");
     go_idle();
@@ -751,8 +911,27 @@ static bool on_key(os_key_t k, bool repeat)
             }
             return true;
         }
+        if (k == OS_KEY_LEFT) {
+            go_scores();
+            return true;
+        }
         if (k == OS_KEY_BACK) {
             return false;
+        }
+        return true;
+    }
+
+    if (s_state == ST_SCORES) {
+        if (k == OS_KEY_SELECT || k == OS_KEY_UP) {
+            start_game();
+            if (k == OS_KEY_UP) {
+                do_jump();
+            }
+            return true;
+        }
+        if (k == OS_KEY_BACK || k == OS_KEY_LEFT) {
+            go_idle();
+            return true;
         }
         return true;
     }
@@ -763,6 +942,10 @@ static bool on_key(os_key_t k, bool repeat)
             if (k == OS_KEY_UP) {
                 do_jump();
             }
+            return true;
+        }
+        if (k == OS_KEY_LEFT) {
+            go_scores();
             return true;
         }
         if (k == OS_KEY_BACK) {
@@ -777,7 +960,7 @@ static bool on_key(os_key_t k, bool repeat)
             return true;
         }
         if (k == OS_KEY_BACK) {
-            best_save();
+            best_only_save();
             go_idle();
             return true;
         }
