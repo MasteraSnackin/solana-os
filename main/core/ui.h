@@ -58,11 +58,15 @@ bool ui_list_key(ui_list_t *l, os_key_t key, bool repeat);  // Up/Down
 void ui_list_show(ui_list_t *l, bool show);
 
 // ---- On-screen keyboard (driven by the d-pad) ----
+// QWERTY + symbols, longer lines (up to 200), optional secret mask, seed text,
+// live char count, and the text field always shows the caret end.
 
 typedef enum { UI_KB_BUSY, UI_KB_DONE, UI_KB_CANCEL } ui_kb_result_t;
 typedef struct ui_kb ui_kb_t;
 
 ui_kb_t *ui_kb_create(lv_obj_t *parent, const char *title, size_t max_len);
+void ui_kb_set_secret(ui_kb_t *kb, bool secret);       // mask typed chars (tokens/passwords)
+void ui_kb_set_text(ui_kb_t *kb, const char *text);     // seed / edit existing value
 ui_kb_result_t ui_kb_key(ui_kb_t *kb, os_key_t key, bool repeat);
 const char *ui_kb_text(const ui_kb_t *kb);
 void ui_kb_delete(ui_kb_t *kb);
