@@ -1,6 +1,6 @@
 // Snake: classic grow-on-food for the BP26 badge (320×240).
-// D-pad steers; SELECT starts / restarts; CANCEL exits from idle / game over.
-// Wall death (and self-hit) — the playfield does not wrap. Offline; NVS best.
+// D-pad steers; SELECT starts / resumes; CANCEL pauses (play) or exits.
+// LEFT/RIGHT on title set Easy / Normal / Hard (NVS). Wall death + self-hit.
 // Visual theme: bright grass / fire / water palette + cream HUD (inspired by
 // classic handheld RPG battle UI — original colors only; no franchise art).
 
@@ -18,6 +18,7 @@
 
 #define NVS_NS          "snake"
 #define NVS_BEST        "best"
+#define NVS_DIFF        "diff"
 
 #define HUD_H           22
 #define GRID_COLS       20
@@ -28,8 +29,8 @@
 #define FRAME_PAD       2
 #define SNAKE_MAX       (GRID_COLS * GRID_ROWS)
 
-#define TICKS_START     3       /* move every N × OS_TICK_MS (100 ms) */
 #define TICKS_MIN       1
+#define DIFF_N          3
 
 /* Playfield palette — grass floor, water wall rim, fire food (type triad) */
 #define PX_CHECK_A      0x58A838        /* bright grass A */
@@ -55,8 +56,15 @@
 typedef enum {
     ST_IDLE = 0,
     ST_PLAY,
+    ST_PAUSE,
     ST_OVER,
 } state_t;
+
+typedef enum {
+    DIFF_EASY = 0,
+    DIFF_NORMAL = 1,
+    DIFF_HARD = 2,
+} diff_t;
 
 typedef struct {
     int8_t x, y;
@@ -67,6 +75,7 @@ static lv_obj_t *s_frame, *s_canvas, *s_overlay;
 static lv_image_dsc_t s_dsc;
 static uint16_t *s_fb;
 static state_t s_state;
+static diff_t s_diff;
 static cell_t s_body[SNAKE_MAX];
 static int s_len;
 static int8_t s_dx, s_dy;           /* current heading */
@@ -76,6 +85,15 @@ static int s_score;
 static int32_t s_best;
 static int s_wait;                  /* ticks until next step */
 static int s_step_period;
+
+static const char *diff_name(diff_t d)
+{
+    switch (d) {
+    case DIFF_EASY:   return "Easy";
+    case DIFF_HARD:   return "Hard";
+    default:          return "Normal";
+    }
+}
 
 // ---- colour helpers -------------------------------------------------------
 
@@ -142,9 +160,10 @@ static void paint_food(int cx, int cy)
 
 // ---- NVS ------------------------------------------------------------------
 
-static void best_load(void)
+static void prefs_load(void)
 {
     s_best = 0;
+    s_diff = DIFF_NORMAL;
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         return;
@@ -152,6 +171,10 @@ static void best_load(void)
     int32_t v = 0;
     if (nvs_get_i32(h, NVS_BEST, &v) == ESP_OK && v > 0) {
         s_best = v;
+    }
+    v = 0;
+    if (nvs_get_i32(h, NVS_DIFF, &v) == ESP_OK && v >= 0 && v < DIFF_N) {
+        s_diff = (diff_t)v;
     }
     nvs_close(h);
 }
@@ -171,10 +194,24 @@ static void best_save(void)
     nvs_close(h);
 }
 
+static void diff_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_i32(h, NVS_DIFF, (int32_t)s_diff);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
 // ---- HUD / overlay --------------------------------------------------------
 
 static void refresh_hud(void)
 {
+    if (s_title) {
+        lv_label_set_text_fmt(s_title, "Snake · %s", diff_name(s_diff));
+    }
     if (s_score_lab) {
         lv_label_set_text_fmt(s_score_lab, "SCORE  %d", s_score);
     }
@@ -319,18 +356,41 @@ static void place_food(void)
     s_food.y = -1;
 }
 
+/* Easy: start 5 ticks / accel every 7 pts. Normal: 3 / 5. Hard: 2 / 3. */
 static void update_speed(void)
 {
-    int p = TICKS_START - s_score / 5;
+    int start, every;
+    switch (s_diff) {
+    case DIFF_EASY:
+        start = 5;
+        every = 7;
+        break;
+    case DIFF_HARD:
+        start = 2;
+        every = 3;
+        break;
+    default:
+        start = 3;
+        every = 5;
+        break;
+    }
+    int p = start - s_score / every;
     s_step_period = p < TICKS_MIN ? TICKS_MIN : p;
+}
+
+static void idle_overlay(void)
+{
+    char sub[40];
+    snprintf(sub, sizeof(sub), "%s — SELECT start", diff_name(s_diff));
+    overlay_show(true, "SNAKE", sub);
+    set_hint("L/R difficulty  SELECT start  CANCEL exit");
 }
 
 static void go_idle(void)
 {
     s_state = ST_IDLE;
     refresh_hud();
-    overlay_show(true, "SNAKE", "SELECT start");
-    set_hint("SELECT start  D-pad steer  CANCEL exit");
+    idle_overlay();
     /* preview snake */
     s_len = 4;
     s_body[0] = (cell_t){ 9, 6 };
@@ -343,12 +403,28 @@ static void go_idle(void)
     redraw();
 }
 
+static void go_pause(void)
+{
+    s_state = ST_PAUSE;
+    overlay_show(true, "PAUSED", "SELECT resume");
+    set_hint("SELECT resume  CANCEL title");
+    redraw();
+}
+
+static void resume_play(void)
+{
+    s_state = ST_PLAY;
+    overlay_show(false, NULL, NULL);
+    set_hint("D-pad steer  CANCEL pause");
+    redraw();
+}
+
 static void game_over(void)
 {
     s_state = ST_OVER;
     best_save();
     refresh_hud();
-    char sub[32];
+    char sub[40];
     snprintf(sub, sizeof(sub), "score %d — SELECT again", s_score);
     overlay_show(true, "GAME OVER", sub);
     set_hint("SELECT again  CANCEL exit");
@@ -375,6 +451,19 @@ static void start_game(void)
     overlay_show(false, NULL, NULL);
     set_hint("D-pad steer  CANCEL pause");
     redraw();
+}
+
+static void cycle_diff(int dir)
+{
+    int d = (int)s_diff + dir;
+    if (d < 0) {
+        d = DIFF_N - 1;
+    } else if (d >= DIFF_N) {
+        d = 0;
+    }
+    s_diff = (diff_t)d;
+    diff_save();
+    idle_overlay();
 }
 
 static void step(void)
@@ -460,7 +549,7 @@ static void enter(lv_obj_t *root)
     s_overlay = NULL;
     s_frame = NULL;
 
-    best_load();
+    prefs_load();
 
     /* compact top HUD — grass title / fire SCORE / water BEST */
     s_title = ui_label(root, &sol_font_20, UI_TITLE, "Snake");
@@ -588,7 +677,26 @@ static bool on_key(os_key_t k, bool repeat)
         return true;
     }
 
-    if (s_state == ST_IDLE || s_state == ST_OVER) {
+    if (s_state == ST_IDLE) {
+        if (k == OS_KEY_SELECT) {
+            start_game();
+            return true;
+        }
+        if (k == OS_KEY_LEFT) {
+            cycle_diff(-1);
+            return true;
+        }
+        if (k == OS_KEY_RIGHT) {
+            cycle_diff(1);
+            return true;
+        }
+        if (k == OS_KEY_BACK) {
+            return false; /* exit */
+        }
+        return true;
+    }
+
+    if (s_state == ST_OVER) {
         if (k == OS_KEY_SELECT) {
             start_game();
             return true;
@@ -599,10 +707,22 @@ static bool on_key(os_key_t k, bool repeat)
         return true;
     }
 
-    if (s_state == ST_PLAY) {
+    if (s_state == ST_PAUSE) {
+        if (k == OS_KEY_SELECT) {
+            resume_play();
+            return true;
+        }
         if (k == OS_KEY_BACK) {
             best_save();
             go_idle();
+            return true;
+        }
+        return true;
+    }
+
+    if (s_state == ST_PLAY) {
+        if (k == OS_KEY_BACK) {
+            go_pause();
             return true;
         }
         if (k == OS_KEY_UP) {
