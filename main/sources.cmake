@@ -33,6 +33,7 @@ set(SOLANA_OS_SRCS
     apps/about/about_app.c
     apps/contact/contact_app.c
     apps/hermes/hermes_app.c
+    apps/weather/weather_app.c
     apps/filebrowser/filebrowser_app.c
     apps/store/store_app.c
     apps/apps/apps_app.c
