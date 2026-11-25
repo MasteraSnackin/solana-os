@@ -6,7 +6,7 @@
 
 static const char *TAG = "os_cmd";
 
-#define CMD_MAX 16
+#define CMD_MAX 20
 
 static os_cmd_t s_cmds[CMD_MAX];
 static int s_n;
