@@ -41,6 +41,7 @@ set(SOLANA_OS_SRCS
     apps/nesemu/nesemu_app.c
     apps/ebook/ebook_app.c
     apps/ebook/ebook_zip.c
+    apps/gutenberg/gutenberg_app.c
     apps/doom/doom_app.c
     apps/dopewars/dopewars_app.c
     apps/memory/memory_app.c
