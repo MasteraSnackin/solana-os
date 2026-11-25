@@ -21,6 +21,7 @@ set(SOLANA_OS_SRCS
     apps/wifi/wifi_app.c
     apps/scanner/scanner_app.c
     apps/wifispeed/wifispeed_app.c
+    apps/browser/browser_app.c
     apps/paint/paint_app.c
     apps/badge/badge_app.c
     apps/ledbadge/ledbadge_app.c
