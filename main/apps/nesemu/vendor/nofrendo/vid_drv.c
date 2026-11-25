@@ -370,7 +370,10 @@ int vid_setmode(int width, int height)
 //   if (NULL != back_buffer)
 //      bmp_destroy(&back_buffer);
 
-   primary_buffer = bmp_create(width, height, 0); /* no overdraw */
+   /* 8 px side overdraw: ppu_renderbg does vidbuf - tile_xofs and paints
+    * 33 tiles (up to 7 px before the visible line). Overdraw 0 corrupts the
+    * heap and TLSF asserts on vid_shutdown / free. */
+   primary_buffer = bmp_create(width, height, 8);
    if (NULL == primary_buffer)
       return -1;
 

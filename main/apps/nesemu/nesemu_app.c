@@ -515,6 +515,8 @@ static void emu_task(void *arg)
     }
     nes_core_save(s_sav_path, false);
 out:
+    // Stop DMA blit before freeing the core's primary_buffer / ROM blob.
+    blit_stop();
     nes_core_halt();
     xSemaphoreGive(s_done);
     if (s_back_to_list) {
