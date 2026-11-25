@@ -1,6 +1,8 @@
 // Snake: classic grow-on-food for the BP26 badge (320×240).
 // D-pad steers; SELECT starts / restarts; CANCEL exits from idle / game over.
 // Wall death (and self-hit) — the playfield does not wrap. Offline; NVS best.
+// Visual theme: bright grass / fire / water palette + cream HUD (inspired by
+// classic handheld RPG battle UI — original colors only; no franchise art).
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,18 +31,26 @@
 #define TICKS_START     3       /* move every N × OS_TICK_MS (100 ms) */
 #define TICKS_MIN       1
 
-/* Playfield palette — tuned for contrast on the 320×240 panel */
-#define PX_CHECK_A      0x0C0C12
-#define PX_CHECK_B      0x101018
-#define PX_GRID         0x1E1E2A
-#define PX_WALL         0x9945FF        /* Solana purple — wall death reminder */
-#define PX_BODY         0x14F195        /* Solana green */
-#define PX_BODY_DIM     0x0E8F5C        /* deeper green for segments */
-#define PX_HEAD         0x80ECFF        /* aqua — pops vs body */
-#define PX_HEAD_EYE     0xFFFFFF
-#define PX_FOOD         0xFF754A        /* orange */
-#define PX_FOOD_CORE    0xE8F180        /* yellow core */
-#define PX_DEAD_TINT    0x2A1520        /* soft red wash on game over */
+/* Playfield palette — grass floor, water wall rim, fire food (type triad) */
+#define PX_CHECK_A      0x58A838        /* bright grass A */
+#define PX_CHECK_B      0x70C048        /* bright grass B */
+#define PX_GRID         0x3D7A28        /* leaf veins */
+#define PX_WALL         0x3B6FD8        /* water blue — wall death cue */
+#define PX_BODY         0x38B030        /* grass body */
+#define PX_BODY_DIM     0x248028        /* deeper leaf segments */
+#define PX_HEAD         0xC8F040        /* sunny lime head */
+#define PX_HEAD_EYE     0x1A2840        /* dark pupils on bright head */
+#define PX_FOOD         0xF07028        /* fire orange */
+#define PX_FOOD_CORE    0xF8D030        /* warm yellow core */
+#define PX_DEAD_TINT    0x682018        /* fire-red wash on game over */
+
+/* HUD / overlay — cream battle-box feel (original colours) */
+#define UI_TITLE        0x38B030        /* grass */
+#define UI_SCORE        0xE84828        /* fire */
+#define UI_BEST         0x3B6FD8        /* water */
+#define UI_BOX_BG       0xF8F0D8        /* parchment cream */
+#define UI_BOX_INK      0x203060        /* navy dialogue ink */
+#define UI_BOX_EDGE     0x2A58B0        /* water rim on message box */
 
 typedef enum {
     ST_IDLE = 0,
@@ -125,7 +135,7 @@ static void paint_head(int cx, int cy)
 
 static void paint_food(int cx, int cy)
 {
-    /* bright orange pad + yellow core — readable against green body */
+    /* fire-type orb: orange pad + yellow core — pops on grass floor */
     paint_cell(cx, cy, PX_FOOD, 1);
     paint_cell(cx, cy, PX_FOOD_CORE, 4);
 }
@@ -452,16 +462,39 @@ static void enter(lv_obj_t *root)
 
     best_load();
 
-    /* compact top HUD — fits 320×240 under the status bar */
-    s_title = ui_label(root, &sol_font_20, COL_GREEN, "Snake");
+    /* compact top HUD — grass title / fire SCORE / water BEST */
+    s_title = ui_label(root, &sol_font_20, UI_TITLE, "Snake");
     lv_obj_set_pos(s_title, 8, 2);
 
-    s_score_lab = ui_label(root, &sol_mono_12, COL_TEXT, "");
+    s_score_lab = ui_label(root, &sol_mono_12, UI_SCORE, "");
     lv_obj_set_pos(s_score_lab, 100, 6);
 
-    s_best_lab = ui_label(root, &sol_mono_12, COL_DIM, "");
+    s_best_lab = ui_label(root, &sol_mono_12, UI_BEST, "");
     lv_obj_set_pos(s_best_lab, 210, 6);
     refresh_hud();
+
+    /* thin type triad stripe under HUD (grass → fire → water) */
+    {
+        const int sy = HUD_H - 3;
+        lv_obj_t *g = lv_obj_create(root);
+        lv_obj_remove_style_all(g);
+        lv_obj_set_size(g, 100, 3);
+        lv_obj_set_pos(g, 8, sy);
+        lv_obj_set_style_bg_opa(g, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(g, lv_color_hex(UI_TITLE), 0);
+        lv_obj_t *f = lv_obj_create(root);
+        lv_obj_remove_style_all(f);
+        lv_obj_set_size(f, 100, 3);
+        lv_obj_set_pos(f, 110, sy);
+        lv_obj_set_style_bg_opa(f, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(f, lv_color_hex(UI_SCORE), 0);
+        lv_obj_t *w = lv_obj_create(root);
+        lv_obj_remove_style_all(w);
+        lv_obj_set_size(w, 100, 3);
+        lv_obj_set_pos(w, 212, sy);
+        lv_obj_set_style_bg_opa(w, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(w, lv_color_hex(UI_BEST), 0);
+    }
 
     size_t bytes = (size_t)GRID_PX_W * GRID_PX_H * 2;
     s_fb = heap_caps_malloc(bytes, os_mem_bulk_caps());
@@ -496,20 +529,22 @@ static void enter(lv_obj_t *root)
     lv_image_set_src(s_canvas, &s_dsc);
     lv_obj_set_pos(s_canvas, gx, gy);
 
-    /* title / game-over overlay centered on the playfield */
+    /* cream message box overlay (handheld RPG dialogue vibe) */
     s_overlay = lv_obj_create(root);
     lv_obj_remove_style_all(s_overlay);
     lv_obj_set_size(s_overlay, GRID_PX_W - 16, 52);
     lv_obj_set_pos(s_overlay, gx + 8, gy + (GRID_PX_H - 52) / 2);
-    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_80, 0);
-    lv_obj_set_style_bg_color(s_overlay, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_radius(s_overlay, 4, 0);
+    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_overlay, lv_color_hex(UI_BOX_BG), 0);
+    lv_obj_set_style_border_width(s_overlay, 3, 0);
+    lv_obj_set_style_border_color(s_overlay, lv_color_hex(UI_BOX_EDGE), 0);
+    lv_obj_set_style_radius(s_overlay, 6, 0);
     lv_obj_set_scrollable(s_overlay, false);
-    lv_obj_t *ot = ui_label(s_overlay, &sol_font_20, COL_GREEN, "");
+    lv_obj_t *ot = ui_label(s_overlay, &sol_font_20, UI_BOX_INK, "");
     lv_obj_set_width(ot, GRID_PX_W - 16);
     lv_obj_set_style_text_align(ot, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(ot, LV_ALIGN_TOP_MID, 0, 6);
-    lv_obj_t *os = ui_label(s_overlay, &sol_mono_12, COL_TEXT, "");
+    lv_obj_t *os = ui_label(s_overlay, &sol_mono_12, UI_BEST, "");
     lv_obj_set_width(os, GRID_PX_W - 16);
     lv_obj_set_style_text_align(os, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(os, LV_ALIGN_BOTTOM_MID, 0, -6);
@@ -589,7 +624,7 @@ const os_app_t app_snake = {
     .id = "snake",
     .name = "Snake",
     .symbol = LV_SYMBOL_PLAY,
-    .accent = COL_GREEN,
+    .accent = COL_LIME,
     .on_enter = enter,
     .on_exit = leave,
     .on_key = on_key,
