@@ -1,6 +1,9 @@
 // Calculator: four-function (+ − × ÷) pad for the BP26 ILI9341 (320×240).
 // D-pad moves the highlight, SELECT presses a key, CANCEL backspaces (or
 // exits when the entry is already clear), HOME leaves via the OS.
+//
+// Look: bright primary red / yellow / blue, rounded panel chrome, high-
+// contrast digits. Original art only — no licensed sprites or names.
 
 #include <math.h>
 #include <stdio.h>
@@ -13,16 +16,27 @@
 #define ENTRY_MAX       14
 #define DISP_MAX        16
 
+// Toy-handheld primaries (true colours — bypass light/dark remapping).
+#define TOY_RED         0xE3350D
+#define TOY_YELLOW      0xFFCB05
+#define TOY_BLUE        0x3B4CCA
+#define TOY_FACE        0x1A2B6B    /* deep blue faceplate */
+#define TOY_CREAM       0xFFF8DC    /* readout field */
+#define TOY_INK         0x141428    /* near-black digits */
+#define TOY_KEY         0xFFF4E0    /* digit key face */
+#define TOY_HINT        0xA8C4FF    /* soft blue hint text */
+
 // 320×218 app root (status bar is outside): roomy display, even 4×5 pad.
 #define DISP_X          4
 #define DISP_Y          2
 #define DISP_H          50
+#define DISP_RADIUS     12
 #define GRID_X          5
 #define GRID_Y          (DISP_H + 6)
 #define COLS            4
 #define ROWS            5
 #define KEY_GAP         3
-#define KEY_RADIUS      8
+#define KEY_RADIUS      10
 #define KEY_W           ((OS_ROOT_W - 2 * GRID_X - (COLS - 1) * KEY_GAP) / COLS)
 #define KEY_H           ((OS_ROOT_H - GRID_Y - UI_HINT_H - 2 - (ROWS - 1) * KEY_GAP) / ROWS)
 
@@ -37,22 +51,23 @@ typedef struct {
     uint32_t accent;    /* 0 = digit/neutral */
 } key_t;
 
+// Accent roles: red = clear/bs, yellow = operators, blue = equals.
 // C ⌫ / x
 // 7 8 9 -
 // 4 5 6 +
 // 1 2 3 =
 // 0 . =   (K_NONE placeholder under wide "0"; skipped when navigating)
 static const key_t k_keys[ROWS][COLS] = {
-    { { K_CLR,   "C",  COL_ORANGE }, { K_BS,    LV_SYMBOL_BACKSPACE, COL_ORANGE },
-      { K_DIV,   "/",  COL_PURPLE }, { K_MUL,   "x",  COL_PURPLE } },
+    { { K_CLR,   "C",  TOY_RED }, { K_BS,    LV_SYMBOL_BACKSPACE, TOY_RED },
+      { K_DIV,   "/",  TOY_YELLOW }, { K_MUL,   "x",  TOY_YELLOW } },
     { { K_7,     "7",  0 },          { K_8,     "8",  0 },
-      { K_9,     "9",  0 },          { K_MINUS, "-",  COL_PURPLE } },
+      { K_9,     "9",  0 },          { K_MINUS, "-",  TOY_YELLOW } },
     { { K_4,     "4",  0 },          { K_5,     "5",  0 },
-      { K_6,     "6",  0 },          { K_PLUS,  "+",  COL_PURPLE } },
+      { K_6,     "6",  0 },          { K_PLUS,  "+",  TOY_YELLOW } },
     { { K_1,     "1",  0 },          { K_2,     "2",  0 },
-      { K_3,     "3",  0 },          { K_EQ,    "=",  COL_GREEN } },
+      { K_3,     "3",  0 },          { K_EQ,    "=",  TOY_BLUE } },
     { { K_0,     "0",  0 },          { K_NONE,  "",   0 },
-      { K_DOT,   ".",  0 },          { K_EQ,    "=",  COL_GREEN } },
+      { K_DOT,   ".",  0 },          { K_EQ,    "=",  TOY_BLUE } },
 };
 
 static lv_obj_t *s_root, *s_disp, *s_expr, *s_hint, *s_disp_panel;
@@ -110,10 +125,10 @@ static void refresh_disp(void)
     }
     if (s_error) {
         lv_label_set_text(s_disp, "Error");
-        lv_obj_set_style_text_color(s_disp, ui_col(COL_ERR), 0);
+        lv_obj_set_style_text_color(s_disp, lv_color_hex(TOY_RED), 0);
     } else {
         lv_label_set_text(s_disp, s_entry[0] ? s_entry : "0");
-        lv_obj_set_style_text_color(s_disp, ui_col(COL_TEXT), 0);
+        lv_obj_set_style_text_color(s_disp, lv_color_hex(TOY_INK), 0);
     }
 
     if (s_expr) {
@@ -122,15 +137,15 @@ static void refresh_disp(void)
             format_number(s_acc, acc, sizeof(acc));
             char opch = s_op == '*' ? 'x' : s_op;
             lv_label_set_text_fmt(s_expr, "%s %c", acc, opch);
+            lv_obj_set_style_text_color(s_expr, lv_color_hex(TOY_BLUE), 0);
         } else {
             lv_label_set_text(s_expr, "");
         }
     }
 }
 
-// Focus matches the launcher / on-screen keyboard: solid Solana Green (or the
-// key's accent) with COL_BG glyphs. Unfocused digits sit on COL_PANEL_HI for
-// contrast against the black root; operators keep a coloured 2 px rim.
+// Focus = yellow fill + red rim (always visible, even on yellow ops). Digits
+// sit on cream with a blue rim; ops / clear / = are solid primaries.
 static void paint_keys(void)
 {
     for (int r = 0; r < ROWS; r++) {
@@ -143,26 +158,36 @@ static void paint_keys(void)
             uint32_t bg, fg, border;
             int border_w;
             if (hi) {
-                bg = accent ? accent : COL_GREEN;
-                fg = COL_BG;
-                border = bg;
-                border_w = 0;
-            } else if (accent) {
-                bg = COL_PANEL_HI;
-                fg = accent;
-                border = accent;
+                bg = TOY_YELLOW;
+                fg = TOY_INK;
+                border = TOY_RED;
                 border_w = 2;
+            } else if (accent == TOY_YELLOW) {
+                bg = TOY_YELLOW;
+                fg = TOY_INK;
+                border = TOY_YELLOW;
+                border_w = 0;
+            } else if (accent == TOY_RED) {
+                bg = TOY_RED;
+                fg = TOY_CREAM;
+                border = TOY_RED;
+                border_w = 0;
+            } else if (accent == TOY_BLUE) {
+                bg = TOY_BLUE;
+                fg = TOY_CREAM;
+                border = TOY_BLUE;
+                border_w = 0;
             } else {
-                bg = COL_PANEL_HI;
-                fg = COL_TEXT;
-                border = COL_BORDER;
+                bg = TOY_KEY;
+                fg = TOY_INK;
+                border = TOY_BLUE;
                 border_w = 1;
             }
-            lv_obj_set_style_bg_color(s_btn[r][c], ui_col(bg), 0);
-            lv_obj_set_style_border_color(s_btn[r][c], ui_col(border), 0);
+            lv_obj_set_style_bg_color(s_btn[r][c], lv_color_hex(bg), 0);
+            lv_obj_set_style_border_color(s_btn[r][c], lv_color_hex(border), 0);
             lv_obj_set_style_border_width(s_btn[r][c], border_w, 0);
             if (s_btn_lbl[r][c]) {
-                lv_obj_set_style_text_color(s_btn_lbl[r][c], ui_col(fg), 0);
+                lv_obj_set_style_text_color(s_btn_lbl[r][c], lv_color_hex(fg), 0);
             }
         }
     }
@@ -415,6 +440,7 @@ static void build_keys(lv_obj_t *root)
             lv_obj_set_scrollable(b, false);
 
             lv_obj_t *lbl = ui_label(b, &sol_font_20, COL_TEXT, k_keys[r][c].label);
+            lv_obj_set_style_text_color(lbl, lv_color_hex(TOY_INK), 0);
             lv_obj_center(lbl);
 
             s_btn[r][c] = b;
@@ -430,24 +456,38 @@ static void enter(lv_obj_t *root)
     s_row = 1;
     s_col = 0;  /* start on "7" */
 
-    // Display: raised panel + purple rim (same cue as the OS keyboard field)
-    // and a brand gradient under the readout for hierarchy on 320×240.
+    // Deep-blue faceplate behind the pad (true colour, not theme-remapped).
+    lv_obj_set_style_bg_color(root, lv_color_hex(TOY_FACE), 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+
+    // Readout: cream field in a thick red rounded bezel — high-contrast ink.
     s_disp_panel = ui_panel(root, DISP_X, DISP_Y, OS_ROOT_W - 2 * DISP_X, DISP_H - 4);
-    lv_obj_set_style_bg_color(s_disp_panel, ui_col(COL_PANEL_HI), 0);
-    lv_obj_set_style_border_color(s_disp_panel, ui_col(COL_PURPLE), 0);
-    lv_obj_set_style_border_width(s_disp_panel, 2, 0);
+    lv_obj_set_style_bg_color(s_disp_panel, lv_color_hex(TOY_CREAM), 0);
+    lv_obj_set_style_border_color(s_disp_panel, lv_color_hex(TOY_RED), 0);
+    lv_obj_set_style_border_width(s_disp_panel, 3, 0);
+    lv_obj_set_style_radius(s_disp_panel, DISP_RADIUS, 0);
     lv_obj_set_style_pad_all(s_disp_panel, 4, 0);
 
     s_expr = ui_label(s_disp_panel, &sol_mono_12, COL_DIM, "");
+    lv_obj_set_style_text_color(s_expr, lv_color_hex(TOY_BLUE), 0);
     lv_obj_align(s_expr, LV_ALIGN_TOP_RIGHT, -2, 0);
 
     s_disp = ui_label(s_disp_panel, &sol_font_32, COL_TEXT, "0");
+    lv_obj_set_style_text_color(s_disp, lv_color_hex(TOY_INK), 0);
     lv_obj_set_style_text_align(s_disp, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_width(s_disp, OS_ROOT_W - 2 * DISP_X - 20);
     lv_obj_align(s_disp, LV_ALIGN_BOTTOM_RIGHT, -2, -2);
     lv_label_set_long_mode(s_disp, LV_LABEL_LONG_CLIP);
 
-    ui_gradient_bar(root, DISP_X + 2, DISP_Y + DISP_H - 5, OS_ROOT_W - 2 * DISP_X - 4, 2);
+    // Yellow accent strip under the bezel (replaces Solana brand gradient).
+    lv_obj_t *strip = lv_obj_create(root);
+    lv_obj_remove_style_all(strip);
+    lv_obj_set_pos(strip, DISP_X + 4, DISP_Y + DISP_H - 5);
+    lv_obj_set_size(strip, OS_ROOT_W - 2 * DISP_X - 8, 3);
+    lv_obj_set_style_bg_opa(strip, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(strip, lv_color_hex(TOY_YELLOW), 0);
+    lv_obj_set_style_radius(strip, 2, 0);
+    lv_obj_set_scrollable(strip, false);
 
     build_keys(root);
     paint_keys();
@@ -455,6 +495,9 @@ static void enter(lv_obj_t *root)
 
     s_hint = ui_hint(root, LV_SYMBOL_UP LV_SYMBOL_DOWN LV_SYMBOL_LEFT LV_SYMBOL_RIGHT
                      " move  SELECT key  CANCEL bs/exit");
+    if (s_hint) {
+        lv_obj_set_style_text_color(s_hint, lv_color_hex(TOY_HINT), 0);
+    }
 }
 
 static void leave(void)
@@ -510,7 +553,7 @@ const os_app_t app_calc = {
     .id = "calc",
     .name = "Calculator",
     .symbol = LV_SYMBOL_EDIT,
-    .accent = COL_AQUA,
+    .accent = TOY_RED,
     .on_enter = enter,
     .on_exit = leave,
     .on_key = on_key,
