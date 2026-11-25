@@ -324,12 +324,15 @@ void ui_list_show(ui_list_t *l, bool show)
 
 // ---------------------------------------------------------------------------
 // Keyboard: four 10-key character rows plus a 5-key function row.
+// Longer lines (KB_MAX), secret mask, seed text, live count, caret-end view,
+// wider space key, and clamped column when moving between char/fn rows.
 
 #define KB_COLS     10
 #define KB_ROWS     4
 #define KB_FN_ROW   KB_ROWS
 #define KB_FN_COUNT 5
-#define KB_MAX      64
+#define KB_MAX      200
+#define KB_SHOW_MAX 36              // visible glyphs in the one-line field
 
 enum { FN_CASE, FN_MODE, FN_SPACE, FN_DEL, FN_OK };
 
@@ -340,13 +343,32 @@ static const char *const kb_sets[3][KB_ROWS] = {
 };
 
 struct ui_kb {
-    lv_obj_t *box, *text, *btnm;
+    lv_obj_t *box, *title, *text, *count, *btnm, *hint;
     char key_text[KB_ROWS * KB_COLS][2];
     const char *map[KB_ROWS * (KB_COLS + 1) + KB_FN_COUNT + 1];
     int mode, row, col;
     size_t max_len;
+    bool secret;
     char buf[KB_MAX + 1];
 };
+
+static void kb_clamp_col(ui_kb_t *kb)
+{
+    int cols = kb->row == KB_FN_ROW ? KB_FN_COUNT : KB_COLS;
+    if (kb->col < 0) {
+        kb->col = 0;
+    }
+    if (kb->col >= cols) {
+        kb->col = cols - 1;
+    }
+}
+
+static void kb_apply_widths(ui_kb_t *kb)
+{
+    // Char grid is 10 equal keys; function row: abc | #+= | space×2 | del | OK.
+    int space_id = KB_ROWS * KB_COLS + FN_SPACE;
+    lv_buttonmatrix_set_button_width(kb->btnm, space_id, 2);
+}
 
 static void kb_build_map(ui_kb_t *kb)
 {
@@ -367,13 +389,49 @@ static void kb_build_map(ui_kb_t *kb)
     kb->map[m++] = LV_SYMBOL_OK;
     kb->map[m] = "";
     lv_buttonmatrix_set_map(kb->btnm, kb->map);
+    kb_apply_widths(kb);
 }
 
 static void kb_render(ui_kb_t *kb)
 {
+    kb_clamp_col(kb);
     int id = kb->row == KB_FN_ROW ? KB_ROWS * KB_COLS + kb->col : kb->row * KB_COLS + kb->col;
     lv_buttonmatrix_set_selected_button(kb->btnm, id);
-    lv_label_set_text_fmt(kb->text, "%s_", kb->buf);
+
+    size_t n = strlen(kb->buf);
+    char shown[KB_SHOW_MAX + 4];
+    if (kb->secret) {
+        size_t show = n > KB_SHOW_MAX ? KB_SHOW_MAX : n;
+        size_t start = n > KB_SHOW_MAX ? n - KB_SHOW_MAX : 0;
+        size_t j = 0;
+        if (start > 0) {
+            shown[j++] = '.';
+            shown[j++] = '.';
+            shown[j++] = '.';
+        }
+        for (size_t i = 0; i < show; i++) {
+            shown[j++] = '*';
+        }
+        shown[j] = 0;
+    } else if (n <= KB_SHOW_MAX) {
+        memcpy(shown, kb->buf, n + 1);
+    } else {
+        // Keep the caret end visible on the 320px field.
+        shown[0] = shown[1] = shown[2] = '.';
+        memcpy(shown + 3, kb->buf + (n - (KB_SHOW_MAX - 3)), KB_SHOW_MAX - 3);
+        shown[KB_SHOW_MAX] = 0;
+    }
+    lv_label_set_text_fmt(kb->text, "%s_", shown);
+    if (kb->count) {
+        lv_label_set_text_fmt(kb->count, "%u/%u", (unsigned)n, (unsigned)kb->max_len);
+        lv_obj_set_style_text_color(kb->count,
+                                    n >= kb->max_len ? ui_col(COL_ORANGE) : ui_col(COL_DIM), 0);
+    }
+    if (kb->hint) {
+        lv_label_set_text(kb->hint, n
+                          ? "SELECT type   CANCEL backspace"
+                          : "SELECT type   CANCEL close");
+    }
 }
 
 static void kb_deleted(lv_event_t *e)
@@ -395,8 +453,16 @@ ui_kb_t *ui_kb_create(lv_obj_t *parent, const char *title, size_t max_len)
     lv_obj_set_scrollable(kb->box, false);
     lv_obj_add_event_cb(kb->box, kb_deleted, LV_EVENT_DELETE, kb);
 
-    lv_obj_t *t = ui_label(kb->box, &sol_mono_12, COL_DIM, title);
-    lv_obj_set_pos(t, 8, 3);
+    kb->title = ui_label(kb->box, &sol_mono_12, COL_DIM, title ? title : "");
+    lv_obj_set_pos(kb->title, 8, 3);
+    lv_obj_set_width(kb->title, OS_ROOT_W - 72);
+    lv_label_set_long_mode(kb->title, LV_LABEL_LONG_MODE_DOTS);
+
+    kb->count = ui_label(kb->box, &sol_mono_12, COL_DIM, "");
+    lv_obj_set_pos(kb->count, OS_ROOT_W - 56, 3);
+    lv_obj_set_width(kb->count, 50);
+    lv_obj_set_style_text_align(kb->count, LV_TEXT_ALIGN_RIGHT, 0);
+
     lv_obj_t *field = ui_panel(kb->box, 6, 19, OS_ROOT_W - 12, 28);
     lv_obj_set_style_border_color(field, ui_col(COL_PURPLE), 0);
     lv_obj_set_style_pad_ver(field, 4, 0);
@@ -425,10 +491,31 @@ ui_kb_t *ui_kb_create(lv_obj_t *parent, const char *title, size_t max_len)
     lv_obj_add_state(kb->btnm, LV_STATE_FOCUSED);
     kb_build_map(kb);
 
-    lv_obj_t *hint = ui_hint(kb->box, "SELECT type   CANCEL delete / close");
-    (void)hint;
+    kb->hint = ui_hint(kb->box, "SELECT type   CANCEL close");
     kb_render(kb);
     return kb;
+}
+
+void ui_kb_set_secret(ui_kb_t *kb, bool secret)
+{
+    if (!kb) {
+        return;
+    }
+    kb->secret = secret;
+    kb_render(kb);
+}
+
+void ui_kb_set_text(ui_kb_t *kb, const char *text)
+{
+    if (!kb) {
+        return;
+    }
+    if (!text) {
+        kb->buf[0] = 0;
+    } else {
+        strlcpy(kb->buf, text, kb->max_len + 1);
+    }
+    kb_render(kb);
 }
 
 static void kb_type(ui_kb_t *kb, char c)
@@ -452,20 +539,25 @@ ui_kb_result_t ui_kb_key(ui_kb_t *kb, os_key_t key, bool repeat)
         break;
     case OS_KEY_UP:
         if (kb->row == KB_FN_ROW) {
-            kb->col *= 2;
+            // Map 5 fn keys onto the 10-wide char grid (space covers two).
+            static const int fn_to_char[KB_FN_COUNT] = { 0, 2, 4, 7, 9 };
+            kb->col = fn_to_char[kb->col];
         }
         kb->row = (kb->row + KB_ROWS) % (KB_ROWS + 1);
         if (kb->row == KB_FN_ROW) {
-            kb->col /= 2;
+            static const int char_to_fn[KB_COLS] = { 0, 0, 1, 1, 2, 2, 2, 3, 3, 4 };
+            kb->col = char_to_fn[kb->col];
         }
         break;
     case OS_KEY_DOWN:
         if (kb->row == KB_FN_ROW) {
-            kb->col *= 2;
+            static const int fn_to_char[KB_FN_COUNT] = { 0, 2, 4, 7, 9 };
+            kb->col = fn_to_char[kb->col];
         }
         kb->row = (kb->row + 1) % (KB_ROWS + 1);
         if (kb->row == KB_FN_ROW) {
-            kb->col /= 2;
+            static const int char_to_fn[KB_COLS] = { 0, 0, 1, 1, 2, 2, 2, 3, 3, 4 };
+            kb->col = char_to_fn[kb->col];
         }
         break;
     case OS_KEY_BACK: {

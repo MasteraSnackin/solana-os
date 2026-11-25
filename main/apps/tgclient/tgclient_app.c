@@ -50,12 +50,20 @@ typedef enum {
     JOB_NONE = 0,
     JOB_POLL,
     JOB_SEND,
+    JOB_DISCOVER,                       // getUpdates → pick a chat id for the wizard
 } job_t;
+
+typedef enum {
+    WIZ_NONE = 0,
+    WIZ_TOKEN,                          // type BotFather token on-device
+    WIZ_CHAT,                           // type chat id / @user (or discover)
+} wiz_t;
 
 static lv_obj_t *s_root, *s_status, *s_scroll, *s_body, *s_offline, *s_hint;
 static ui_kb_t *s_kb;
 static bool s_busy;
 static job_t s_job;
+static wiz_t s_wiz;
 static char s_log[LOG_MAX];
 static int s_poll_ticks;
 
@@ -64,6 +72,11 @@ static char s_token[TOKEN_MAX];
 static char s_chat[CHAT_MAX];
 static char s_draft[MSG_MAX];
 static int64_t s_offset;                // next getUpdates offset (update_id+1)
+
+static void open_wizard(wiz_t step);
+static void update_hint(void);
+static bool config_ready(void);
+static bool start_job(job_t job);
 
 // ---- config ---------------------------------------------------------------
 
@@ -204,6 +217,25 @@ static bool wifi_ready(void)
     return os_wifi_state() == OS_WIFI_CONNECTED;
 }
 
+static bool config_ready(void)
+{
+    return s_token[0] && s_chat[0];
+}
+
+static void update_hint(void)
+{
+    if (!s_hint) {
+        return;
+    }
+    if (!s_token[0]) {
+        lv_label_set_text(s_hint, "SELECT setup token  LEFT reset");
+    } else if (!s_chat[0]) {
+        lv_label_set_text(s_hint, "SELECT set chat  RIGHT find chat  LEFT reset");
+    } else {
+        lv_label_set_text(s_hint, "SELECT type  RIGHT refresh  UP/DOWN scroll  LEFT clear/setup");
+    }
+}
+
 // Build https://host/bot<token>/<method>[?query]. Never log the result.
 static bool bot_url(char *out, size_t cap, const char *method, const char *query)
 {
@@ -223,11 +255,29 @@ static void render_log(void)
     if (!s_body) {
         return;
     }
-    lv_label_set_text(s_body, s_log[0] ? s_log :
-                      "Bot API thin client (not full Telegram).\n"
-                      "SELECT type  RIGHT refresh\n"
-                      "Config: `tg token` / `tg chat`\n"
-                      "or /sdcard/tg.token + tg.chat");
+    if (s_log[0]) {
+        lv_label_set_text(s_body, s_log);
+    } else if (!s_token[0]) {
+        lv_label_set_text(s_body,
+                          "Telegram Bot API (not full Telegram).\n\n"
+                          "SELECT → enter bot token\n"
+                          "(from @BotFather).\n\n"
+                          "Or UART: tg token …\n"
+                          "Or /sdcard/tg.token");
+    } else if (!s_chat[0]) {
+        lv_label_set_text(s_body,
+                          "Token saved.\n\n"
+                          "SELECT → type chat id\n"
+                          "RIGHT → find chat from\n"
+                          "recent bot messages.\n\n"
+                          "Message the bot first,\n"
+                          "then find or type the id.");
+    } else {
+        lv_label_set_text(s_body,
+                          "Ready. SELECT to type.\n"
+                          "RIGHT refresh. LEFT clears\n"
+                          "the log (empty LEFT = setup).");
+    }
     lv_obj_update_layout(s_scroll);
     lv_coord_t bottom = lv_obj_get_scroll_bottom(s_scroll);
     if (bottom > 0) {
@@ -263,9 +313,13 @@ static void render_status(const char *override_msg)
         return;
     }
     if (s_busy) {
-        lv_label_set_text(s_status, s_job == JOB_SEND
-                          ? LV_SYMBOL_REFRESH "  sending..."
-                          : LV_SYMBOL_REFRESH "  fetching...");
+        const char *msg = LV_SYMBOL_REFRESH "  fetching...";
+        if (s_job == JOB_SEND) {
+            msg = LV_SYMBOL_REFRESH "  sending...";
+        } else if (s_job == JOB_DISCOVER) {
+            msg = LV_SYMBOL_REFRESH "  finding chat...";
+        }
+        lv_label_set_text(s_status, msg);
         lv_obj_set_style_text_color(s_status, ui_col(COL_YELLOW), 0);
         return;
     }
@@ -275,12 +329,12 @@ static void render_status(const char *override_msg)
         return;
     }
     if (!s_token[0]) {
-        lv_label_set_text(s_status, "set bot token (tg token …)");
+        lv_label_set_text(s_status, "SELECT → enter bot token");
         lv_obj_set_style_text_color(s_status, ui_col(COL_ORANGE), 0);
         return;
     }
     if (!s_chat[0]) {
-        lv_label_set_text(s_status, "set chat id (tg chat …)");
+        lv_label_set_text(s_status, "SELECT → chat id   RIGHT find");
         lv_obj_set_style_text_color(s_status, ui_col(COL_ORANGE), 0);
         return;
     }
@@ -298,6 +352,7 @@ static void render_status(const char *override_msg)
 
 typedef struct {
     char *added;                        // heap: new transcript lines, or NULL
+    char discovered[CHAT_MAX];          // JOB_DISCOVER chat id, or empty
     char err[96];
     bool sent_ok;
 } result_t;
@@ -305,11 +360,46 @@ typedef struct {
 static void apply_result(void *arg)
 {
     result_t *r = arg;
+    job_t done = s_job;
     s_busy = false;
     s_job = JOB_NONE;
     if (!s_root) {
         free(r->added);
         free(r);
+        return;
+    }
+    if (done == JOB_DISCOVER) {
+        if (r->discovered[0]) {
+            if (nvs_set("chat", r->discovered)) {
+                strlcpy(s_chat, r->discovered, sizeof(s_chat));
+                os_toast("Chat %s", s_chat);
+                render_log();
+                render_status(NULL);
+                update_hint();
+                if (wifi_ready() && config_ready()) {
+                    // Fall through into a normal poll after discover.
+                    free(r->added);
+                    free(r);
+                    start_job(JOB_POLL);
+                    return;
+                }
+            } else {
+                os_toast("nvs write failed");
+            }
+        } else if (r->err[0]) {
+            render_status(r->err);
+            os_toast("%s", r->err);
+        } else {
+            os_toast("No chats yet — message the bot");
+            render_status(NULL);
+            open_wizard(WIZ_CHAT);
+            free(r->added);
+            free(r);
+            return;
+        }
+        free(r->added);
+        free(r);
+        update_hint();
         return;
     }
     if (r->added && r->added[0]) {
@@ -335,9 +425,7 @@ static void apply_result(void *arg)
     }
     free(r->added);
     free(r);
-    if (s_hint) {
-        lv_label_set_text(s_hint, "SELECT type  RIGHT refresh  UP/DOWN scroll  LEFT clear");
-    }
+    update_hint();
 }
 
 static bool chat_matches(const cJSON *chat)
@@ -464,6 +552,62 @@ static bool parse_updates(const char *json, char **lines_out, char *err, size_t 
     return true;
 }
 
+// Pick the newest chat id from getUpdates (wizard "find chat"). Does not advance offset.
+static bool parse_discover_chat(const char *json, char *out, size_t out_cap, char *err, size_t err_cap)
+{
+    out[0] = 0;
+    cJSON *root = cJSON_Parse(json);
+    if (!root) {
+        snprintf(err, err_cap, "bad JSON");
+        return false;
+    }
+    if (!cJSON_IsTrue(cJSON_GetObjectItem(root, "ok"))) {
+        const char *desc = cJSON_GetStringValue(cJSON_GetObjectItem(root, "description"));
+        snprintf(err, err_cap, "%s", desc && desc[0] ? desc : "API not ok");
+        cJSON_Delete(root);
+        return false;
+    }
+    cJSON *result = cJSON_GetObjectItem(root, "result");
+    if (!cJSON_IsArray(result)) {
+        cJSON_Delete(root);
+        return true;
+    }
+    int64_t best_uid = -1;
+    char best[CHAT_MAX] = "";
+    cJSON *upd;
+    cJSON_ArrayForEach(upd, result) {
+        cJSON *uid = cJSON_GetObjectItem(upd, "update_id");
+        int64_t idn = cJSON_IsNumber(uid) ? (int64_t)uid->valuedouble : -1;
+        cJSON *msg = cJSON_GetObjectItem(upd, "message");
+        if (!msg) {
+            msg = cJSON_GetObjectItem(upd, "edited_message");
+        }
+        if (!msg) {
+            continue;
+        }
+        cJSON *chat = cJSON_GetObjectItem(msg, "chat");
+        cJSON *cid = chat ? cJSON_GetObjectItem(chat, "id") : NULL;
+        char buf[CHAT_MAX] = "";
+        if (cJSON_IsNumber(cid)) {
+            snprintf(buf, sizeof(buf), "%.0f", cid->valuedouble);
+        } else if (cJSON_IsString(cid) && cid->valuestring) {
+            strlcpy(buf, cid->valuestring, sizeof(buf));
+        }
+        if (!buf[0]) {
+            continue;
+        }
+        if (idn >= best_uid) {
+            best_uid = idn;
+            strlcpy(best, buf, sizeof(best));
+        }
+    }
+    cJSON_Delete(root);
+    if (best[0]) {
+        strlcpy(out, best, out_cap);
+    }
+    return true;
+}
+
 static void worker(void *arg)
 {
     (void)arg;
@@ -478,8 +622,14 @@ static void worker(void *arg)
     }
 
     load_config();
-    if (!s_token[0] || !s_chat[0]) {
-        snprintf(r->err, sizeof(r->err), "token/chat missing");
+    if (!s_token[0]) {
+        snprintf(r->err, sizeof(r->err), "token missing");
+        os_post(apply_result, r);
+        vTaskDelete(NULL);
+        return;
+    }
+    if (job != JOB_DISCOVER && !s_chat[0]) {
+        snprintf(r->err, sizeof(r->err), "chat missing");
         os_post(apply_result, r);
         vTaskDelete(NULL);
         return;
@@ -560,10 +710,12 @@ static void worker(void *arg)
         return;
     }
 
-    // JOB_POLL
+    // JOB_POLL or JOB_DISCOVER — both use getUpdates.
     char query[64];
+    // Discover needs the backlog: offset=0 so old messages still reveal a chat.
+    int64_t off = (job == JOB_DISCOVER) ? 0 : s_offset;
     snprintf(query, sizeof(query), "offset=%lld&limit=%d&timeout=0",
-             (long long)s_offset, FETCH_LIMIT);
+             (long long)off, FETCH_LIMIT);
     if (!bot_url(url, sizeof(url), "getUpdates", query)) {
         snprintf(r->err, sizeof(r->err), "bad API URL");
         free(resp);
@@ -590,6 +742,20 @@ static void worker(void *arg)
         return;
     }
 
+    if (job == JOB_DISCOVER) {
+        if (!parse_discover_chat(resp, r->discovered, sizeof(r->discovered), r->err, sizeof(r->err))) {
+            free(resp);
+            os_post(apply_result, r);
+            vTaskDelete(NULL);
+            return;
+        }
+        free(resp);
+        ESP_LOGI(TAG, "discover chat %s", r->discovered[0] ? "(found)" : "(none)");
+        os_post(apply_result, r);
+        vTaskDelete(NULL);
+        return;
+    }
+
     if (!parse_updates(resp, &r->added, r->err, sizeof(r->err))) {
         free(resp);
         os_post(apply_result, r);
@@ -610,12 +776,12 @@ static bool start_job(job_t job)
     }
     load_config();
     if (!s_token[0]) {
-        os_toast("Set tg token first");
+        os_toast("Set bot token first");
         render_status(NULL);
         return false;
     }
-    if (!s_chat[0]) {
-        os_toast("Set tg chat first");
+    if (job != JOB_DISCOVER && !s_chat[0]) {
+        os_toast("Set chat id first");
         render_status(NULL);
         return false;
     }
@@ -652,6 +818,110 @@ static void send_message(const char *text)
     if (!start_job(JOB_SEND)) {
         // Keep the optimistic "You:" line; status already shows why.
     }
+}
+
+static void open_wizard(wiz_t step)
+{
+    if (!s_root || s_kb || s_busy) {
+        return;
+    }
+    if (step == WIZ_NONE) {
+        s_wiz = WIZ_NONE;
+        return;
+    }
+    if (step == WIZ_TOKEN) {
+        s_wiz = WIZ_TOKEN;
+        s_kb = ui_kb_create(s_root, "Bot token (BotFather)", TOKEN_MAX - 1);
+        ui_kb_set_secret(s_kb, true);
+        return;
+    }
+    s_wiz = WIZ_CHAT;
+    s_kb = ui_kb_create(s_root, "Chat id or @username", CHAT_MAX - 1);
+    if (s_chat[0]) {
+        ui_kb_set_text(s_kb, s_chat);
+    }
+}
+
+static void wizard_finish(ui_kb_result_t r)
+{
+    wiz_t step = s_wiz;
+    char typed[TOKEN_MAX];
+    typed[0] = 0;
+    if (r == UI_KB_DONE) {
+        strlcpy(typed, ui_kb_text(s_kb), sizeof(typed));
+        trim_inplace(typed);
+    }
+    ui_kb_delete(s_kb);
+    s_kb = NULL;
+    s_wiz = WIZ_NONE;
+
+    if (r != UI_KB_DONE || !typed[0]) {
+        render_log();
+        render_status(NULL);
+        update_hint();
+        return;
+    }
+
+    if (step == WIZ_TOKEN) {
+        if (strlen(typed) >= TOKEN_MAX) {
+            os_toast("token too long");
+            open_wizard(WIZ_TOKEN);
+            return;
+        }
+        if (!nvs_set("token", typed)) {
+            os_toast("nvs write failed");
+            render_status(NULL);
+            update_hint();
+            return;
+        }
+        strlcpy(s_token, typed, sizeof(s_token));
+        memset(typed, 0, sizeof(typed));
+        os_toast("Token saved");
+        render_log();
+        render_status(NULL);
+        update_hint();
+        if (!s_chat[0]) {
+            open_wizard(WIZ_CHAT);
+        }
+        return;
+    }
+
+    if (step == WIZ_CHAT) {
+        if (!nvs_set("chat", typed)) {
+            os_toast("nvs write failed");
+            render_status(NULL);
+            update_hint();
+            return;
+        }
+        strlcpy(s_chat, typed, sizeof(s_chat));
+        os_toast("Chat saved");
+        render_log();
+        render_status(NULL);
+        update_hint();
+        if (wifi_ready() && config_ready()) {
+            start_job(JOB_POLL);
+        }
+    }
+}
+
+static void reset_setup(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, "token");
+        nvs_erase_key(h, "chat");
+        nvs_erase_key(h, "offset");
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    s_token[0] = s_chat[0] = 0;
+    s_offset = 0;
+    s_log[0] = 0;
+    os_toast("Setup reset");
+    render_log();
+    render_status(NULL);
+    update_hint();
+    open_wizard(WIZ_TOKEN);
 }
 
 // ---- console --------------------------------------------------------------
@@ -767,6 +1037,7 @@ static void enter(lv_obj_t *root)
     s_kb = NULL;
     s_busy = false;
     s_job = JOB_NONE;
+    s_wiz = WIZ_NONE;
     s_poll_ticks = 0;
     load_config();
 
@@ -791,9 +1062,13 @@ static void enter(lv_obj_t *root)
     s_offline = ui_offline_create(root, 22, CONTENT_H - 22, false);
     render_log();
     render_status(NULL);
-    s_hint = ui_hint(root, "SELECT type  RIGHT refresh  UP/DOWN scroll  LEFT clear");
+    s_hint = ui_hint(root, "");
+    update_hint();
 
-    if (wifi_ready() && s_token[0] && s_chat[0]) {
+    if (!config_ready()) {
+        // On-device wizard — no UART required for first-time setup.
+        open_wizard(!s_token[0] ? WIZ_TOKEN : WIZ_CHAT);
+    } else if (wifi_ready()) {
         start_job(JOB_POLL);
     }
 }
@@ -804,6 +1079,7 @@ static void leave(void)
         ui_kb_delete(s_kb);
         s_kb = NULL;
     }
+    s_wiz = WIZ_NONE;
     s_root = s_status = s_scroll = s_body = s_offline = s_hint = NULL;
 }
 
@@ -812,15 +1088,19 @@ static bool key(os_key_t k, bool repeat)
     if (s_kb) {
         ui_kb_result_t r = ui_kb_key(s_kb, k, repeat);
         if (r != UI_KB_BUSY) {
-            if (r == UI_KB_DONE) {
-                strlcpy(s_draft, ui_kb_text(s_kb), sizeof(s_draft));
-                trim_inplace(s_draft);
-            }
-            ui_kb_delete(s_kb);
-            s_kb = NULL;
-            if (r == UI_KB_DONE && s_draft[0]) {
-                send_message(s_draft);
-                s_draft[0] = 0;
+            if (s_wiz != WIZ_NONE) {
+                wizard_finish(r);
+            } else {
+                if (r == UI_KB_DONE) {
+                    strlcpy(s_draft, ui_kb_text(s_kb), sizeof(s_draft));
+                    trim_inplace(s_draft);
+                }
+                ui_kb_delete(s_kb);
+                s_kb = NULL;
+                if (r == UI_KB_DONE && s_draft[0]) {
+                    send_message(s_draft);
+                    s_draft[0] = 0;
+                }
             }
         }
         return true;
@@ -836,10 +1116,29 @@ static bool key(os_key_t k, bool repeat)
             os_toast("Busy...");
             return true;
         }
-        s_kb = ui_kb_create(s_root, "Message (Bot API)", sizeof(s_draft) - 1);
+        if (!s_token[0]) {
+            open_wizard(WIZ_TOKEN);
+            return true;
+        }
+        if (!s_chat[0]) {
+            open_wizard(WIZ_CHAT);
+            return true;
+        }
+        s_wiz = WIZ_NONE;
+        s_kb = ui_kb_create(s_root, "Message", sizeof(s_draft) - 1);
         return true;
     }
     if (k == OS_KEY_RIGHT && !repeat) {
+        if (!s_token[0]) {
+            os_toast("Set bot token first");
+            open_wizard(WIZ_TOKEN);
+            return true;
+        }
+        if (!s_chat[0]) {
+            // Find chat from recent bot updates (message the bot first).
+            start_job(JOB_DISCOVER);
+            return true;
+        }
         start_job(JOB_POLL);
         return true;
     }
@@ -848,9 +1147,15 @@ static bool key(os_key_t k, bool repeat)
         return true;
     }
     if (k == OS_KEY_LEFT && !repeat) {
-        s_log[0] = 0;
-        render_log();
-        os_toast("Cleared");
+        if (s_log[0]) {
+            s_log[0] = 0;
+            render_log();
+            os_toast("Cleared");
+            update_hint();
+        } else {
+            // Empty log + LEFT → re-run on-device setup wizard.
+            reset_setup();
+        }
         return true;
     }
     return false;
@@ -868,7 +1173,7 @@ static void tick(void)
     }
     if (!s_busy && ++s_poll_ticks >= POLL_TICKS) {
         s_poll_ticks = 0;
-        if (wifi_ready() && s_token[0] && s_chat[0]) {
+        if (wifi_ready() && config_ready()) {
             start_job(JOB_POLL);
         } else {
             render_status(NULL);
