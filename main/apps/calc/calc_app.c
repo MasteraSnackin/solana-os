@@ -13,12 +13,16 @@
 #define ENTRY_MAX       14
 #define DISP_MAX        16
 
-#define DISP_H          52
-#define GRID_X          4
+// 320×218 app root (status bar is outside): roomy display, even 4×5 pad.
+#define DISP_X          4
+#define DISP_Y          2
+#define DISP_H          50
+#define GRID_X          5
 #define GRID_Y          (DISP_H + 6)
 #define COLS            4
 #define ROWS            5
 #define KEY_GAP         3
+#define KEY_RADIUS      8
 #define KEY_W           ((OS_ROOT_W - 2 * GRID_X - (COLS - 1) * KEY_GAP) / COLS)
 #define KEY_H           ((OS_ROOT_H - GRID_Y - UI_HINT_H - 2 - (ROWS - 1) * KEY_GAP) / ROWS)
 
@@ -51,7 +55,7 @@ static const key_t k_keys[ROWS][COLS] = {
       { K_DOT,   ".",  0 },          { K_EQ,    "=",  COL_GREEN } },
 };
 
-static lv_obj_t *s_root, *s_disp, *s_expr, *s_hint;
+static lv_obj_t *s_root, *s_disp, *s_expr, *s_hint, *s_disp_panel;
 static lv_obj_t *s_btn[ROWS][COLS];
 static lv_obj_t *s_btn_lbl[ROWS][COLS];
 
@@ -106,8 +110,10 @@ static void refresh_disp(void)
     }
     if (s_error) {
         lv_label_set_text(s_disp, "Error");
+        lv_obj_set_style_text_color(s_disp, ui_col(COL_ERR), 0);
     } else {
         lv_label_set_text(s_disp, s_entry[0] ? s_entry : "0");
+        lv_obj_set_style_text_color(s_disp, ui_col(COL_TEXT), 0);
     }
 
     if (s_expr) {
@@ -122,6 +128,9 @@ static void refresh_disp(void)
     }
 }
 
+// Focus matches the launcher / on-screen keyboard: solid Solana Green (or the
+// key's accent) with COL_BG glyphs. Unfocused digits sit on COL_PANEL_HI for
+// contrast against the black root; operators keep a coloured 2 px rim.
 static void paint_keys(void)
 {
     for (int r = 0; r < ROWS; r++) {
@@ -132,21 +141,26 @@ static void paint_keys(void)
             bool hi = (r == s_row && c == s_col);
             uint32_t accent = k_keys[r][c].accent;
             uint32_t bg, fg, border;
+            int border_w;
             if (hi) {
                 bg = accent ? accent : COL_GREEN;
                 fg = COL_BG;
                 border = bg;
+                border_w = 0;
             } else if (accent) {
                 bg = COL_PANEL_HI;
                 fg = accent;
                 border = accent;
+                border_w = 2;
             } else {
-                bg = COL_PANEL;
+                bg = COL_PANEL_HI;
                 fg = COL_TEXT;
                 border = COL_BORDER;
+                border_w = 1;
             }
             lv_obj_set_style_bg_color(s_btn[r][c], ui_col(bg), 0);
             lv_obj_set_style_border_color(s_btn[r][c], ui_col(border), 0);
+            lv_obj_set_style_border_width(s_btn[r][c], border_w, 0);
             if (s_btn_lbl[r][c]) {
                 lv_obj_set_style_text_color(s_btn_lbl[r][c], ui_col(fg), 0);
             }
@@ -396,12 +410,11 @@ static void build_keys(lv_obj_t *root)
             lv_obj_set_pos(b, x, y);
             lv_obj_set_size(b, w, KEY_H);
             lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-            lv_obj_set_style_border_width(b, 2, 0);
-            lv_obj_set_style_radius(b, 6, 0);
+            lv_obj_set_style_border_width(b, 1, 0);
+            lv_obj_set_style_radius(b, KEY_RADIUS, 0);
             lv_obj_set_scrollable(b, false);
 
-            const lv_font_t *font = &sol_font_20;
-            lv_obj_t *lbl = ui_label(b, font, COL_TEXT, k_keys[r][c].label);
+            lv_obj_t *lbl = ui_label(b, &sol_font_20, COL_TEXT, k_keys[r][c].label);
             lv_obj_center(lbl);
 
             s_btn[r][c] = b;
@@ -417,17 +430,24 @@ static void enter(lv_obj_t *root)
     s_row = 1;
     s_col = 0;  /* start on "7" */
 
-    lv_obj_t *panel = ui_panel(root, 4, 2, OS_ROOT_W - 8, DISP_H - 4);
-    lv_obj_set_style_pad_all(panel, 4, 0);
+    // Display: raised panel + purple rim (same cue as the OS keyboard field)
+    // and a brand gradient under the readout for hierarchy on 320×240.
+    s_disp_panel = ui_panel(root, DISP_X, DISP_Y, OS_ROOT_W - 2 * DISP_X, DISP_H - 4);
+    lv_obj_set_style_bg_color(s_disp_panel, ui_col(COL_PANEL_HI), 0);
+    lv_obj_set_style_border_color(s_disp_panel, ui_col(COL_PURPLE), 0);
+    lv_obj_set_style_border_width(s_disp_panel, 2, 0);
+    lv_obj_set_style_pad_all(s_disp_panel, 4, 0);
 
-    s_expr = ui_label(panel, &sol_mono_12, COL_DIM, "");
+    s_expr = ui_label(s_disp_panel, &sol_mono_12, COL_DIM, "");
     lv_obj_align(s_expr, LV_ALIGN_TOP_RIGHT, -2, 0);
 
-    s_disp = ui_label(panel, &sol_font_32, COL_TEXT, "0");
+    s_disp = ui_label(s_disp_panel, &sol_font_32, COL_TEXT, "0");
     lv_obj_set_style_text_align(s_disp, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_width(s_disp, OS_ROOT_W - 24);
+    lv_obj_set_width(s_disp, OS_ROOT_W - 2 * DISP_X - 20);
     lv_obj_align(s_disp, LV_ALIGN_BOTTOM_RIGHT, -2, -2);
     lv_label_set_long_mode(s_disp, LV_LABEL_LONG_CLIP);
+
+    ui_gradient_bar(root, DISP_X + 2, DISP_Y + DISP_H - 5, OS_ROOT_W - 2 * DISP_X - 4, 2);
 
     build_keys(root);
     paint_keys();
@@ -439,7 +459,7 @@ static void enter(lv_obj_t *root)
 
 static void leave(void)
 {
-    s_root = s_disp = s_expr = s_hint = NULL;
+    s_root = s_disp = s_expr = s_hint = s_disp_panel = NULL;
     memset(s_btn, 0, sizeof(s_btn));
     memset(s_btn_lbl, 0, sizeof(s_btn_lbl));
 }
