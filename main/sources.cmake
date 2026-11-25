@@ -32,14 +32,20 @@ set(SOLANA_OS_SRCS
     apps/update/update_app.c
     apps/about/about_app.c
     apps/contact/contact_app.c
+    apps/nameplate/nameplate_app.c
     apps/hermes/hermes_app.c
+    apps/weather/weather_app.c
     apps/filebrowser/filebrowser_app.c
     apps/store/store_app.c
     apps/apps/apps_app.c
     apps/timer/timer_app.c
     apps/calc/calc_app.c
+    apps/level/level_app.c
     apps/snake/snake_app.c
     apps/tetris/tetris_app.c
+    apps/dino/dino_app.c
+    apps/breakout/breakout_app.c
+    apps/pong/pong_app.c
     apps/gbemu/gbemu_app.c
     apps/gbemu/walnut_cgb_cpu.c
     apps/gbaemu/gbaemu_app.c
