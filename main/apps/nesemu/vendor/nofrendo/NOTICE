@@ -1,0 +1,8 @@
+Nofrendo NES emulator core
+Copyright (c) 1998-2000 Matthew Conte (matt@conte.com)
+
+Licensed under the GNU Library General Public License, version 2
+(see headers in each source file). AUTHORS lists contributors.
+
+ESP32 adaptations in this tree descend from Espressif's esp32-nesemu
+proof-of-concept (Apache-2.0 host glue elsewhere; core remains LGPLv2).

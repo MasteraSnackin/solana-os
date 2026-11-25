@@ -15,7 +15,13 @@
 // receives (its buffer holds ~30 ms at 115200 baud). Tools pair it with
 // sums to send only what changed. The console task's stack is small: big
 // buffers are allocated.
+//
+//   sdrecv <path> <bytes> <sha256>
+//
+// The same stream protocol for any file on the card, <path> relative to it
+// ("roms/game.gb", for the Game Boy app). tools/sd_put.py sends one.
 
+#include <ctype.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -292,24 +298,11 @@ static const char *read_block(char *buf, size_t n)
     return NULL;
 }
 
-static const char *receive(const char *id, const char *file, long bytes, const uint8_t want[32])
+// Receives `bytes` bytes of base64 from the console stream into the file
+// `part`, block by block (see the top of this file), and checks the size and
+// the SHA-256. NULL, or why it couldn't; `part` may be left behind on error.
+static const char *recv_stream(const char *part, long bytes, const uint8_t want[32])
 {
-    char rel[128], path[160], part[176];
-    size_t max;
-    lua_pkg_file_rel(rel, sizeof(rel), id, file, &max);
-    if (bytes > (long)max) {
-        return "too big";
-    }
-    const char *why = refusal(id);
-    if (why) {
-        return why;
-    }
-    if (console_stream_read(part, 0, 0) < 0) {
-        return "this console takes no stream";
-    }
-    os_data_mkdirs(rel);
-    os_data_path(path, sizeof(path), rel);
-    snprintf(part, sizeof(part), "%s.put", path);
     char *b64 = malloc(RECV_BLOCK);
     unsigned char *bin = malloc(RECV_BLOCK / 4 * 3);
     FILE *f = b64 && bin ? fopen(part, "wb") : NULL;
@@ -318,6 +311,7 @@ static const char *receive(const char *id, const char *file, long bytes, const u
         free(bin);
         return b64 && bin ? "can't write to the card" : "not enough memory";
     }
+    const char *why = NULL;
     psa_hash_operation_t sha = PSA_HASH_OPERATION_INIT;
     psa_hash_setup(&sha, PSA_ALG_SHA_256);
     size_t total = (bytes + 2) / 3 * 4, done = 0;
@@ -358,6 +352,28 @@ static const char *receive(const char *id, const char *file, long bytes, const u
     if (!why && memcmp(got, want, 32)) {
         why = "the SHA-256 doesn't match";
     }
+    return why;
+}
+
+static const char *receive(const char *id, const char *file, long bytes, const uint8_t want[32])
+{
+    char rel[128], path[160], part[176];
+    size_t max;
+    lua_pkg_file_rel(rel, sizeof(rel), id, file, &max);
+    if (bytes > (long)max) {
+        return "too big";
+    }
+    const char *why = refusal(id);
+    if (why) {
+        return why;
+    }
+    if (console_stream_read(part, 0, 0) < 0) {
+        return "this console takes no stream";
+    }
+    os_data_mkdirs(rel);
+    os_data_path(path, sizeof(path), rel);
+    snprintf(part, sizeof(part), "%s.put", path);
+    why = recv_stream(part, bytes, want);
     if (!why) {
         why = finish_file(id, file, part, path);
     }
@@ -379,6 +395,71 @@ static int cmd_recv(const char *id, const char *file, const char *bytes, const c
     }
     const char *why = receive(id, file, n, want);
     if (why) {
+        printf("recv: error %s\n", why);
+        return 1;
+    }
+    printf("recv: ok %ld\n", n);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sdrecv: any file onto the card, without a card reader.
+
+#define SD_RECV_MAX     (16L << 20)
+
+// Relative, no "..", only characters every tool and FAT agree on.
+static bool sd_rel_ok(const char *rel)
+{
+    size_t n = strlen(rel);
+    if (!n || n > 120 || rel[0] == '/' || rel[n - 1] == '/' || strstr(rel, "..")) {
+        return false;
+    }
+    for (const char *p = rel; *p; p++) {
+        if (!isalnum((unsigned char)*p) && !strchr("._-/", *p)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int cmd_sdrecv(int argc, char **argv)
+{
+    uint8_t want[32];
+    char *end = NULL;
+    long n = argc == 4 ? strtol(argv[2], &end, 10) : -1;
+    if (argc != 4 || end == argv[2] || *end || n < 0 || !sd_rel_ok(argv[1]) || !parse_sha(argv[3], want)) {
+        printf("usage: sdrecv <path on the card, e.g. roms/game.gb> <bytes> <sha256>\n");
+        return 1;
+    }
+    char path[160], part[176];
+    snprintf(path, sizeof(path), BSP_SD_MOUNT "/%s", argv[1]);
+    snprintf(part, sizeof(part), "%s.put", path);
+    const char *why = NULL;
+    bsp_sd_info_t in;
+    bsp_sd_get_info(&in);
+    if (in.state != BSP_SD_MOUNTED) {
+        why = "no microSD card";
+    } else if (n > SD_RECV_MAX) {
+        why = "too big";
+    } else if (console_stream_read(part, 0, 0) < 0) {
+        why = "this console takes no stream";
+    }
+    if (!why) {
+        for (char *s = path + strlen(BSP_SD_MOUNT) + 1; (s = strchr(s, '/')); s++) {    // mkdir -p
+            *s = 0;
+            mkdir(path, 0775);
+            *s = '/';
+        }
+        why = recv_stream(part, n, want);
+    }
+    if (!why) {
+        unlink(path);                       // FAT's rename doesn't replace a file
+        if (rename(part, path) != 0) {
+            why = "can't write to the card";
+        }
+    }
+    if (why) {
+        unlink(part);
         printf("recv: error %s\n", why);
         return 1;
     }
@@ -502,4 +583,5 @@ void lh_cmd_register(void)
 {
     os_cmd_register("lua", "lua [list|run|rm <id> [file]|mem|sums|install <id>|put <id> <file> ...|recv <id> <file> <bytes> <sha256>]",
                     cmd_lua);
+    os_cmd_register("sdrecv", "sdrecv <path> <bytes> <sha256> - copy a file onto the card (tools/sd_put.py)", cmd_sdrecv);
 }

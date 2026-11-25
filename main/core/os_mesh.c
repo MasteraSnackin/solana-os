@@ -35,6 +35,7 @@
 #include "os_wifi.h"
 
 static const char *TAG = "os_mesh";
+static volatile bool s_play_pause;
 
 #define HDR_LEN         16
 #define FRAG_DATA       232             // HDR_LEN + FRAG_DATA <= OS_RADIO_FRAME_MAX
@@ -1620,20 +1621,51 @@ static void drain_bridged(void)
     }
 }
 
+void os_mesh_pause(void)
+{
+    s_play_pause = true;
+    if (s_task) {
+        xTaskNotifyGive(s_task);
+    }
+    rx_t wake = { .len = 0 };
+    if (s_rxq) {
+        xQueueSend(s_rxq, &wake, 0);
+    }
+}
+
+void os_mesh_unpause(void)
+{
+    s_play_pause = false;
+    if (s_task) {
+        xTaskNotifyGive(s_task);
+    }
+    rx_t wake = { .len = 0 };
+    if (s_rxq) {
+        xQueueSend(s_rxq, &wake, 0);
+    }
+}
+
 static void mesh_task(void *arg)
 {
     static rx_t rx;                     // 260 B: keep it off the task stack
     int64_t next_hello = now_ms() + HELLO_MS, next_maintain = 0, next_sync = 0;
     for (;;) {
+        if (s_play_pause) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
         int64_t now = now_ms();
         int64_t wait = (next_hello < next_maintain ? next_hello : next_maintain) - now;
         if (wait < 0) {
             wait = 0;
         }
         if (xQueueReceive(s_rxq, &rx, pdMS_TO_TICKS(wait))) {
-            if (rx.len && !paused()) {
+            if (rx.len && !paused() && !s_play_pause) {
                 on_frame(&rx);
             }
+        }
+        if (s_play_pause) {
+            continue;
         }
         drain_bridged();
         ulTaskNotifyTake(pdTRUE, 0);    // acquire nudges us to take the channel now
