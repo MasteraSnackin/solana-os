@@ -14,7 +14,6 @@
 #include "core/os_mesh.h"
 #include "core/os_ota.h"
 #include "core/console.h"
-#include "lua/lua_host.h"
 #include "game/game.h"
 
 static const char *TAG = "solana_os";
@@ -70,7 +69,6 @@ void app_main(void)
     os_wifi_boot();     // after the mesh: the radio parks on its channel
     game_init();
     boot_sweep();
-    lua_host_init();
     os_ble_init();      // the "ble" console command; Bluetooth stays off
 
     os_start();
