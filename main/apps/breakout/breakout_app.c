@@ -473,12 +473,7 @@ static void resolve_brick_hits(void)
     };
     for (int i = 0; i < 5; i++) {
         if (hit_brick_at(pts[i][0], pts[i][1])) {
-            /* prefer vertical bounce; flip X if hitting near side */
-            int bx = pts[i][0];
-            int by = pts[i][1];
-            /* rough side vs top/bottom: compare penetration direction */
-            (void)bx;
-            (void)by;
+            /* simple vertical bounce keeps the ball moving through the wall */
             s_vy = -s_vy;
             if (s_bricks_left <= 0) {
                 level_clear();
