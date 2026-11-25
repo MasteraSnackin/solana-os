@@ -60,6 +60,8 @@ esp_err_t bsp_lcd_blit_rgb565(int x, int y, int w, int h, const uint16_t *src, i
 // Pause LVGL's display refresh timer while something else owns the panel
 // (gbaemu direct blit). Status-bar updates should call lv_refr_now() under the
 // LVGL lock while paused. OS task / app callbacks (lock already held).
+// (vidplayer / emu direct blit). Status-bar updates should call lv_refr_now()
+// under the LVGL lock while paused. OS task / app callbacks (lock already held).
 void bsp_display_pause_lvgl(bool pause);
 bool bsp_display_lvgl_paused(void);
 
