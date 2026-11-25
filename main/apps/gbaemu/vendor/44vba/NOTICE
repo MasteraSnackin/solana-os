@@ -1,0 +1,8 @@
+44VBA (https://github.com/44670/44vba), a vba-next fork, vendored at
+commit e98726a90afd52fb52c0b760eea3783785064c93.
+
+Upstream: https://github.com/libretro/vba-next
+License: GNU GPL v3 (see LICENSE). VisualBoyAdvance / VBA-M also under GPL.
+
+Local patch: CPUSetRomMask() in gba.cpp / gba.h so a ROM smaller than 32 MB
+maps without a 32 MB buffer. B0..B3 #undef in gba.h for ESP-IDF termios.h.

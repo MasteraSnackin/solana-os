@@ -51,3 +51,7 @@ bool lua_host_active(const char *id);
 
 // Registers the "lua" console command. Call before console_start().
 void lua_host_init(void);
+
+// If a Lua task is still alive, park it (no on_tick / LVGL) until unpause.
+void lua_host_pause(void);
+void lua_host_unpause(void);

@@ -53,6 +53,15 @@ uint8_t bsp_backlight_get_level(void);
 // Any task but the LVGL task's flush path.
 void bsp_display_invert(bool on);
 bool bsp_display_inverted(void);
+// Direct RGB565 blit, bypassing LVGL. `src` is native-endian RGB565, `stride`
+// is pixels per row. Panel coords are landscape 320x240. Holds the shared SPI
+// bus (bsp_bus.h). Any task except the LVGL flush callback.
+esp_err_t bsp_lcd_blit_rgb565(int x, int y, int w, int h, const uint16_t *src, int stride);
+// Pause LVGL's display refresh timer while something else owns the panel
+// (gbaemu direct blit). Status-bar updates should call lv_refr_now() under the
+// LVGL lock while paused. OS task / app callbacks (lock already held).
+void bsp_display_pause_lvgl(bool pause);
+bool bsp_display_lvgl_paused(void);
 
 // ---- Buttons ----
 #define BSP_BTN_PB(n)   (1u << ((n) - 1))   // n = 1..6

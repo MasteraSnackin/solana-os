@@ -24,6 +24,10 @@
 // After os_mesh_init(), before console_start().
 void game_init(void);
 
+// Stop / restart the 250 ms service tick while a ROM is playing. Nested no-ops.
+void game_pause(void);
+void game_unpause(void);
+
 int64_t game_now_ms(void);              // esp_timer ms
 
 // This badge's id ("" until the first hello) and whether it can take part in

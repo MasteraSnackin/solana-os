@@ -69,6 +69,7 @@ static const char *TAG = "os_cloud";
 #define BIT_REFRESH     (1u << 0)       // hello now
 #define BIT_WORK        (1u << 1)       // API request or outbox entry queued
 #define BIT_RESET       (1u << 2)       // factory reset
+#define BIT_PAUSE       (1u << 3)       // wake from play-pause park
 
 extern const os_app_t app_wifi, app_badge;
 
@@ -81,6 +82,7 @@ static char s_owner_tag[9];             // last owner's tag, kept while unclaime
 static int64_t s_next_ms = -1;          // next hello, -1 = not scheduled
 static int64_t s_time_off;              // server unix ms - esp_timer ms, 0 = never synced
 static int s_poll_s;                    // last `poll` from the server, 0 = none yet
+static volatile bool s_play_pause;
 
 static int64_t now_ms(void)
 {
@@ -603,6 +605,13 @@ static void cloud_task(void *arg)
 
     for (;;) {
         uint32_t bits = 0;
+        if (s_play_pause) {
+            xTaskNotifyWait(0, UINT32_MAX, &bits, portMAX_DELAY);
+            if (bits & BIT_RESET) {
+                factory_reset();
+            }
+            continue;
+        }
         lock();
         strlcpy(server, s_info.server, sizeof(server));
         strlcpy(secret, s_secret, sizeof(secret));
@@ -745,6 +754,22 @@ void os_cloud_get_info(os_cloud_info_t *out)
     *out = s_info;
     out->retry_s = s_next_ms < 0 ? -1 : s_next_ms <= now_ms() ? 0 : (int)((s_next_ms - now_ms() + 999) / 1000);
     unlock();
+}
+
+void os_cloud_pause(void)
+{
+    s_play_pause = true;
+    if (s_task) {
+        xTaskNotify(s_task, BIT_PAUSE, eSetBits);
+    }
+}
+
+void os_cloud_unpause(void)
+{
+    s_play_pause = false;
+    if (s_task) {
+        xTaskNotify(s_task, BIT_PAUSE, eSetBits);
+    }
 }
 
 void os_cloud_refresh(void)

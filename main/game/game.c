@@ -18,6 +18,7 @@ static const char *TAG = "game";
 
 static esp_timer_handle_t s_tick_timer, s_led_timer;
 static volatile bool s_tick_queued;
+static bool s_play_pause;
 static char s_id[OS_MESH_ID_LEN + 1];
 static bool s_claimed;
 
@@ -192,6 +193,28 @@ void game_init(void)
     const esp_timer_create_args_t args = { .callback = tick_timer, .name = "game" };
     ESP_ERROR_CHECK(esp_timer_create(&args, &s_tick_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(s_tick_timer, GAME_TICK_MS * 1000));
+}
+
+void game_pause(void)
+{
+    if (s_play_pause) {
+        return;
+    }
+    s_play_pause = true;
+    if (s_tick_timer) {
+        esp_timer_stop(s_tick_timer);
+    }
+}
+
+void game_unpause(void)
+{
+    if (!s_play_pause) {
+        return;
+    }
+    s_play_pause = false;
+    if (s_tick_timer) {
+        esp_timer_start_periodic(s_tick_timer, GAME_TICK_MS * 1000);
+    }
 }
 
 // ---------------------------------------------------------------------------

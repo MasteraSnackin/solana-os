@@ -19,7 +19,10 @@ set(SOLANA_OS_SRCS
     game/game.c game/xdex.c game/trade.c game/quests.c game/beacon.c
     apps/registry.c
     apps/wifi/wifi_app.c
+    apps/scanner/scanner_app.c
+    apps/paint/paint_app.c
     apps/badge/badge_app.c
+    apps/ledbadge/ledbadge_app.c
     apps/guide/guide_app.c apps/xdex/xdex_app.c apps/trade/trade_app.c apps/quests/quests_app.c
     apps/beacon/beacon_app.c
     apps/espnow/espnow_app.c
@@ -33,6 +36,10 @@ set(SOLANA_OS_SRCS
     apps/calc/calc_app.c
     apps/snake/snake_app.c
     apps/tetris/tetris_app.c
+    apps/gbemu/gbemu_app.c
+    apps/gbemu/walnut_cgb_cpu.c
+    apps/gbaemu/gbaemu_app.c
+    apps/snesemu/snesemu_app.c
     lua/lua_host.c lua/lua_ui.c lua/lua_sys.c lua/lua_net.c lua/lua_json.c lua/lua_pkg.c lua/lua_cmd.c
     lua/lua_fs.c lua/lua_install.c lua/lua_code.c lua/lua_ws.c lua/lua_img.c lua/lua_png.c lua/lua_gif.c lua/lua_meet.c
     lua/lua_ble.c lua/lua_crypto.c
