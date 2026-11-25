@@ -1,6 +1,7 @@
 // Classic Tetris for the BP26 badge (320×240, Solana OS).
 // Seven tetrominoes, rotate, soft drop, line clear, score / level speed-up.
-// Offline — no Wi-Fi, mesh, or SD. Best score kept in NVS.
+// CANCEL pauses; LEFT/RIGHT on title set Easy / Normal / Hard (NVS).
+// Offline — no Wi-Fi, mesh, or SD. Best + difficulty kept in NVS.
 // Visual theme: handheld-RPG battle-menu palette (original colours; no
 // copyrighted creature sprites or trade names in art or strings).
 
@@ -15,6 +16,8 @@
 
 #define NVS_NS          "tetris"
 #define NVS_BEST        "best"
+#define NVS_DIFF        "diff"
+#define DIFF_N          3
 
 #define COLS            10
 #define ROWS            20
@@ -60,6 +63,12 @@ typedef enum {
     ST_PAUSE,
     ST_OVER,
 } state_t;
+
+typedef enum {
+    DIFF_EASY = 0,
+    DIFF_NORMAL = 1,
+    DIFF_HARD = 2,
+} diff_t;
 
 // Each rotation is 4 cells as (dx,dy) within a 4×4 box (origin top-left).
 typedef struct {
@@ -145,20 +154,32 @@ static lv_obj_t *s_next_cell[4][4];
 static lv_obj_t *s_overlay, *s_ov_title, *s_ov_sub, *s_ov_score;
 
 static state_t s_state;
+static diff_t s_diff;
 static uint8_t s_grid[ROWS][COLS];          /* 0 empty, 1..7 piece id */
 static int s_px, s_py, s_prot, s_pid;       /* active piece */
 static int s_next;
 static int s_bag[BAG_N], s_bag_i;
 static int32_t s_score_v, s_best;
 static int s_level_v, s_lines_v;
+static int s_start_level;                   /* from difficulty */
 static int s_fall;                          /* ticks until gravity */
 static bool s_new_best;                     /* set on game over when best beaten */
 
+static const char *diff_name(diff_t d)
+{
+    switch (d) {
+    case DIFF_EASY:   return "Easy";
+    case DIFF_HARD:   return "Hard";
+    default:          return "Normal";
+    }
+}
+
 // ---- NVS ------------------------------------------------------------------
 
-static void best_load(void)
+static void prefs_load(void)
 {
     s_best = 0;
+    s_diff = DIFF_NORMAL;
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         return;
@@ -166,6 +187,10 @@ static void best_load(void)
     int32_t v = 0;
     if (nvs_get_i32(h, NVS_BEST, &v) == ESP_OK && v > 0) {
         s_best = v;
+    }
+    v = 0;
+    if (nvs_get_i32(h, NVS_DIFF, &v) == ESP_OK && v >= 0 && v < DIFF_N) {
+        s_diff = (diff_t)v;
     }
     nvs_close(h);
 }
@@ -183,6 +208,29 @@ static void best_save(void)
     nvs_set_i32(h, NVS_BEST, s_best);
     nvs_commit(h);
     nvs_close(h);
+}
+
+static void diff_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_i32(h, NVS_DIFF, (int32_t)s_diff);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static int start_level_for_diff(diff_t d)
+{
+    switch (d) {
+    case DIFF_HARD:
+        return 5;
+    case DIFF_EASY:
+    case DIFF_NORMAL:
+    default:
+        return 1;
+    }
 }
 
 // ---- bag / RNG ------------------------------------------------------------
@@ -293,7 +341,7 @@ static void add_score(int cleared)
     }
     s_score_v += (int32_t)k_pts[cleared] * (int32_t)s_level_v;
     s_lines_v += cleared;
-    int new_level = 1 + s_lines_v / 10;
+    int new_level = s_start_level + s_lines_v / 10;
     if (new_level > 15) {
         new_level = 15;
     }
@@ -303,9 +351,11 @@ static void add_score(int cleared)
 }
 
 // Gravity interval in on_tick counts (OS_TICK_MS = 100).
+// Easy is +2 ticks slower than Normal at the same level.
 static int fall_ticks(void)
 {
-    int t = 11 - s_level_v;     /* L1=10 → 1.0s, L10=1 → 0.1s */
+    int base = (s_diff == DIFF_EASY) ? 13 : 11;
+    int t = base - s_level_v;   /* Normal L1=10 → 1.0s; Easy L1=12 → 1.2s */
     if (t < 1) {
         t = 1;
     }
@@ -513,12 +563,21 @@ static void game_reset_board(void)
 {
     memset(s_grid, 0, sizeof(s_grid));
     s_score_v = 0;
-    s_level_v = 1;
+    s_start_level = start_level_for_diff(s_diff);
+    s_level_v = s_start_level;
     s_lines_v = 0;
     s_new_best = false;
     bag_refill();
     s_next = bag_next();
     spawn_piece();
+}
+
+static void title_overlay(void)
+{
+    char sub[40];
+    snprintf(sub, sizeof(sub), "%s — SELECT start", diff_name(s_diff));
+    overlay_show(true, "TETRIS", sub, NULL);
+    set_hint("L/R difficulty  SELECT start  CANCEL exit");
 }
 
 static void go_title(void)
@@ -528,15 +587,14 @@ static void go_title(void)
     paint_board();
     paint_next();
     refresh_hud();
-    overlay_show(true, "TETRIS", "SELECT to start", NULL);
-    set_hint("SELECT start   CANCEL exit");
+    title_overlay();
 }
 
 static void go_play(void)
 {
     s_state = ST_PLAY;
     overlay_show(false, NULL, NULL, NULL);
-    set_hint("L/R move  UP/SEL rot  DOWN drop");
+    set_hint("L/R move  UP/SEL rot  DOWN drop  CANCEL pause");
     paint_board();
     paint_next();
     refresh_hud();
@@ -548,6 +606,19 @@ static void go_pause(void)
     overlay_show(true, "PAUSED", "SELECT resume", NULL);
     set_hint("SELECT resume   CANCEL title");
     paint_board();
+}
+
+static void cycle_diff(int dir)
+{
+    int d = (int)s_diff + dir;
+    if (d < 0) {
+        d = DIFF_N - 1;
+    } else if (d >= DIFF_N) {
+        d = 0;
+    }
+    s_diff = (diff_t)d;
+    diff_save();
+    title_overlay();
 }
 
 static void go_over(void)
@@ -688,7 +759,7 @@ static lv_obj_t *hud_card(lv_obj_t *parent, int x, int y, int w, int h)
 static void enter(lv_obj_t *root)
 {
     s_root = root;
-    best_load();
+    prefs_load();
 
     /* Soft field wash behind the well (reads as grass, not Solana black). */
     lv_obj_t *field = ui_panel(root, 0, 0, OS_ROOT_W, OS_ROOT_H - UI_HINT_H);
@@ -822,6 +893,14 @@ static bool on_key(os_key_t k, bool repeat)
     if (s_state == ST_TITLE) {
         if (k == OS_KEY_SELECT && !repeat) {
             start_game();
+            return true;
+        }
+        if (k == OS_KEY_LEFT && !repeat) {
+            cycle_diff(-1);
+            return true;
+        }
+        if (k == OS_KEY_RIGHT && !repeat) {
+            cycle_diff(1);
             return true;
         }
         if (k == OS_KEY_BACK && !repeat) {
