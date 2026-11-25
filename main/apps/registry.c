@@ -9,6 +9,7 @@ extern const os_app_t app_wifi, app_badge, app_espnow, app_debug, app_settings, 
 extern const os_app_t app_guide, app_xdex, app_trade, app_quests, app_beacon, app_store, app_apps;
 extern const os_app_t app_timer;
 extern const os_app_t app_calc;
+extern const os_app_t app_snake;
 
 const os_app_t *const os_apps[] = {
     &app_wifi,
@@ -22,6 +23,7 @@ const os_app_t *const os_apps[] = {
     &app_apps,
     &app_timer,
     &app_calc,
+    &app_snake,
     &app_espnow,
     &app_debug,
     &app_settings,
