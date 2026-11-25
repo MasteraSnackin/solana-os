@@ -1,5 +1,9 @@
 // App browser: paged 3x2 grid of every registered app (but those whose
 // visible() says no, e.g. Beacon on a badge that isn't one).
+//
+// Visual theme: pocket-battle inspired (bright primaries, playful high-
+// contrast tiles, simple panel chrome). Original palette — no copyrighted
+// creature art, logos, or character names.
 
 #include <string.h>
 #include "os.h"
@@ -12,9 +16,29 @@
 #define TILE_H      80
 #define GAP         8
 #define X0          ((OS_ROOT_W - COLS * TILE_W - (COLS - 1) * GAP) / 2)
-#define Y0          8
+#define Y0          10
+#define STRIPE_H    6
 
-static lv_obj_t *s_root, *s_tiles[PER_PAGE], *s_icons[PER_PAGE], *s_names[PER_PAGE], *s_dots, *s_hint;
+/* Pocket-battle palette (original hexes; not remapped by ui_col light map). */
+#define T_SKY           0x5EC8F0
+#define T_NAVY          0x1A2A6C
+#define T_CREAM         0xFFF8E0
+#define T_FACE          0xFFFDF5
+#define T_INK           0x1A1A2E
+#define T_RED           0xE63946
+#define T_YELLOW        0xFFD60A
+#define T_BLUE          0x3A86FF
+#define T_TEAL          0x2EC4B6
+#define T_ORANGE        0xFF9F1C
+
+/* Per-slot accent stripe on unfocused tiles (cycles bright primaries). */
+static const uint32_t s_slot_accent[PER_PAGE] = {
+    T_RED, T_YELLOW, T_BLUE, T_TEAL, T_ORANGE, T_BLUE
+};
+
+static lv_obj_t *s_root, *s_tiles[PER_PAGE], *s_stripes[PER_PAGE];
+static lv_obj_t *s_icons[PER_PAGE], *s_names[PER_PAGE];
+static lv_obj_t *s_dots, *s_hint_bar, *s_hint;
 static int s_sel, s_page = -1;
 static const os_app_t *s_list[32];          // the apps shown, in registry order
 static int s_count;
@@ -52,17 +76,29 @@ static bool collect(void)
 static void style_tile(int slot, const os_app_t *app, bool focused)
 {
     lv_obj_t *t = s_tiles[slot];
-    // The focused tile is solid Solana Green, like the web's primary buttons.
-    lv_obj_set_style_bg_color(t, ui_col(focused ? COL_GREEN : COL_PANEL), 0);
-    lv_obj_set_style_border_width(t, focused ? 0 : 1, 0);
-    lv_obj_set_style_text_color(s_names[slot], ui_col(focused ? COL_BG : COL_TEXT), 0);
+    uint32_t accent = s_slot_accent[slot];
+    uint32_t fill = focused ? T_YELLOW : T_FACE;
+    uint32_t border = focused ? T_RED : T_NAVY;
+    uint32_t ink = focused ? T_INK : T_NAVY;
+    uint32_t icon_col = focused ? T_INK : accent;
+
+    lv_obj_set_style_bg_color(t, lv_color_hex(fill), 0);
+    lv_obj_set_style_border_width(t, focused ? 3 : 2, 0);
+    lv_obj_set_style_border_color(t, lv_color_hex(border), 0);
+
+    if (s_stripes[slot]) {
+        lv_obj_set_style_bg_color(s_stripes[slot],
+                                  lv_color_hex(focused ? T_RED : accent), 0);
+    }
+
+    lv_obj_set_style_text_color(s_names[slot], lv_color_hex(ink), 0);
     if (app->symbol) {
-        lv_obj_set_style_text_color(s_icons[slot], ui_col(focused ? COL_BG : app->accent), 0);
+        lv_obj_set_style_text_color(s_icons[slot], lv_color_hex(icon_col), 0);
     } else {
-        // A colour logo on the green tile is low contrast; show it as the
-        // brand's solid black variant instead.
-        lv_obj_set_style_image_recolor(s_icons[slot], ui_col(COL_BG), 0);
-        lv_obj_set_style_image_recolor_opa(s_icons[slot], focused ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        /* Recolor image logos to ink when focused for contrast on yellow. */
+        lv_obj_set_style_image_recolor(s_icons[slot], lv_color_hex(T_INK), 0);
+        lv_obj_set_style_image_recolor_opa(s_icons[slot],
+                                           focused ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
     }
 }
 
@@ -86,12 +122,14 @@ static void render(void)
                 lv_obj_delete(s_icons[i]);
             }
             if (app->symbol) {
-                s_icons[i] = ui_label(t, &lv_font_montserrat_20, app->accent, app->symbol);
+                s_icons[i] = lv_label_create(t);
+                lv_obj_set_style_text_font(s_icons[i], &lv_font_montserrat_20, 0);
+                lv_label_set_text(s_icons[i], app->symbol);
             } else {
                 s_icons[i] = lv_image_create(t);
                 lv_image_set_src(s_icons[i], app->icon);
             }
-            lv_obj_align(s_icons[i], LV_ALIGN_CENTER, 0, -12);
+            lv_obj_align(s_icons[i], LV_ALIGN_CENTER, 0, -8);
         }
         int pages = (s_count + PER_PAGE - 1) / PER_PAGE;
         lv_obj_clean(s_dots);
@@ -102,7 +140,12 @@ static void render(void)
             lv_obj_set_size(d, p == page ? 16 : 6, 6);
             lv_obj_set_style_radius(d, 3, 0);
             lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
-            lv_obj_set_style_bg_color(d, ui_col(p == page ? COL_GREEN : COL_BORDER), 0);
+            lv_obj_set_style_bg_color(d,
+                                     lv_color_hex(p == page ? T_YELLOW : T_NAVY), 0);
+            if (p == page) {
+                lv_obj_set_style_border_width(d, 1, 0);
+                lv_obj_set_style_border_color(d, lv_color_hex(T_RED), 0);
+            }
         }
     }
     for (int i = 0; i < PER_PAGE; i++) {
@@ -121,25 +164,81 @@ static void enter(lv_obj_t *root)
     if (s_sel >= s_count) {
         s_sel = 0;
     }
+
+    /* Sky stage behind the grid. */
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(root, lv_color_hex(T_SKY), 0);
+
     for (int i = 0; i < PER_PAGE; i++) {
-        lv_obj_t *t = ui_panel(root, X0 + (i % COLS) * (TILE_W + GAP), Y0 + (i / COLS) * (TILE_H + GAP), TILE_W, TILE_H);
+        int x = X0 + (i % COLS) * (TILE_W + GAP);
+        int y = Y0 + (i / COLS) * (TILE_H + GAP);
+
+        /* Thick navy chrome panel. */
+        lv_obj_t *t = lv_obj_create(root);
+        lv_obj_remove_style_all(t);
+        lv_obj_set_pos(t, x, y);
+        lv_obj_set_size(t, TILE_W, TILE_H);
+        lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(t, lv_color_hex(T_FACE), 0);
+        lv_obj_set_style_border_width(t, 2, 0);
+        lv_obj_set_style_border_color(t, lv_color_hex(T_NAVY), 0);
         lv_obj_set_style_radius(t, 10, 0);
+        lv_obj_set_style_pad_all(t, 0, 0);
+        lv_obj_set_scrollable(t, false);
         s_tiles[i] = t;
+
+        /* Coloured header stripe (slot accent). */
+        lv_obj_t *stripe = lv_obj_create(t);
+        lv_obj_remove_style_all(stripe);
+        lv_obj_set_pos(stripe, 0, 0);
+        lv_obj_set_size(stripe, TILE_W, STRIPE_H);
+        lv_obj_set_style_bg_opa(stripe, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(stripe, lv_color_hex(s_slot_accent[i]), 0);
+        lv_obj_set_scrollable(stripe, false);
+        s_stripes[i] = stripe;
+
         s_icons[i] = NULL;
-        s_names[i] = ui_label(t, &sol_font_14, COL_TEXT, "");
-        lv_obj_set_width(s_names[i], TILE_W - 8);
-        lv_obj_set_style_text_align(s_names[i], LV_TEXT_ALIGN_CENTER, 0);
-        lv_label_set_long_mode(s_names[i], LV_LABEL_LONG_MODE_DOTS);
-        lv_obj_align(s_names[i], LV_ALIGN_BOTTOM_MID, 0, -2);
+
+        lv_obj_t *name = lv_label_create(t);
+        lv_obj_set_style_text_font(name, &sol_font_14, 0);
+        lv_obj_set_style_text_color(name, lv_color_hex(T_NAVY), 0);
+        lv_label_set_text(name, "");
+        lv_obj_set_width(name, TILE_W - 8);
+        lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_align(name, LV_ALIGN_BOTTOM_MID, 0, -4);
+        s_names[i] = name;
     }
+
     s_dots = lv_obj_create(root);
     lv_obj_remove_style_all(s_dots);
     lv_obj_set_size(s_dots, 120, 8);
     lv_obj_align(s_dots, LV_ALIGN_BOTTOM_MID, 0, -UI_HINT_H - 6);
     lv_obj_set_flex_flow(s_dots, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(s_dots, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(s_dots, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(s_dots, 4, 0);
-    s_hint = ui_hint(root, LV_SYMBOL_UP LV_SYMBOL_DOWN LV_SYMBOL_LEFT LV_SYMBOL_RIGHT " move   SELECT open   BOOT home");
+
+    /* Cream hint bar with navy top rule. */
+    s_hint_bar = lv_obj_create(root);
+    lv_obj_remove_style_all(s_hint_bar);
+    lv_obj_set_size(s_hint_bar, OS_ROOT_W, UI_HINT_H);
+    lv_obj_align(s_hint_bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_opa(s_hint_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_hint_bar, lv_color_hex(T_CREAM), 0);
+    lv_obj_set_style_border_side(s_hint_bar, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_border_width(s_hint_bar, 2, 0);
+    lv_obj_set_style_border_color(s_hint_bar, lv_color_hex(T_NAVY), 0);
+    lv_obj_set_scrollable(s_hint_bar, false);
+
+    s_hint = lv_label_create(s_hint_bar);
+    lv_obj_set_style_text_font(s_hint, &sol_mono_12, 0);
+    lv_obj_set_style_text_color(s_hint, lv_color_hex(T_NAVY), 0);
+    lv_label_set_text(s_hint,
+                      LV_SYMBOL_UP LV_SYMBOL_DOWN LV_SYMBOL_LEFT LV_SYMBOL_RIGHT
+                      " move   SELECT open   BOOT home");
+    lv_obj_align(s_hint, LV_ALIGN_LEFT_MID, 6, 0);
+
     render();
 }
 
