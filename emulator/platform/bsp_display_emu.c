@@ -118,6 +118,7 @@ bool bsp_display_inverted(void)
     return s_inverted;
 }
 
+
 esp_err_t bsp_lcd_blit_rgb565(int x, int y, int w, int h, const uint16_t *src, int stride)
 {
     if (!src || w <= 0 || h <= 0) {

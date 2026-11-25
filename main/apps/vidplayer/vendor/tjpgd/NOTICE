@@ -1,0 +1,9 @@
+TJpgDec - Tiny JPEG Decompressor R0.03 (C)ChaN, 2021
+
+Vendored from Espressif idf-extra-components esp_jpeg (Apache-2.0 wrapper;
+TJpgDec itself is ChaN's free software — see copyright header in tjpgd.c).
+
+* The TJpgDec module is a free software and there is NO WARRANTY.
+* No restriction on use. You can use, modify and redistribute it for
+  personal, non-profit or commercial products UNDER YOUR RESPONSIBILITY.
+* Redistributions of source code must retain the above copyright notice.
