@@ -19,11 +19,18 @@
 #define CELL            10
 #define BOARD_W         (COLS * CELL)
 #define BOARD_H         (ROWS * CELL)
-#define BOARD_X         8
-#define BOARD_Y         2
+#define BOARD_X         6
+#define BOARD_Y         0
 
 #define PIECE_N         7
 #define BAG_N           7
+
+/* Right-hand HUD column (fits OS_ROOT_W = 320). */
+#define HUD_X           (BOARD_X + BOARD_W + 12)
+#define HUD_W           (OS_ROOT_W - HUD_X - 6)
+#define NEXT_CELL       11
+#define NEXT_GAP        12
+#define NEXT_BOX        (4 * NEXT_GAP)
 
 typedef enum {
     ST_TITLE = 0,
@@ -42,7 +49,7 @@ typedef struct {
     uint32_t color;
 } piece_def_t;
 
-// I J L O S T Z — classic orientations (0 = spawn).
+// I J L O S T Z — classic Guideline colours on the Solana palette.
 static const piece_def_t k_pieces[PIECE_N] = {
     { /* I — cyan */
         {
@@ -98,7 +105,7 @@ static const piece_def_t k_pieces[PIECE_N] = {
         },
         COL_PURPLE,
     },
-    { /* Z — pink/red */
+    { /* Z — pink (Solana stand-in for classic red) */
         {
             {{0, 0}, {1, 0}, {1, 1}, {2, 1}},
             {{2, 0}, {1, 1}, {2, 1}, {1, 2}},
@@ -111,9 +118,9 @@ static const piece_def_t k_pieces[PIECE_N] = {
 
 static lv_obj_t *s_root, *s_board_bg, *s_hint;
 static lv_obj_t *s_cell[ROWS][COLS];
-static lv_obj_t *s_score, *s_level, *s_lines, *s_best_lab, *s_status;
+static lv_obj_t *s_score_val, *s_level_val, *s_lines_val, *s_best_val;
 static lv_obj_t *s_next_cell[4][4];
-static lv_obj_t *s_overlay;
+static lv_obj_t *s_overlay, *s_ov_title, *s_ov_sub, *s_ov_score;
 
 static state_t s_state;
 static uint8_t s_grid[ROWS][COLS];          /* 0 empty, 1..7 piece id */
@@ -123,6 +130,7 @@ static int s_bag[BAG_N], s_bag_i;
 static int32_t s_score_v, s_best;
 static int s_level_v, s_lines_v;
 static int s_fall;                          /* ticks until gravity */
+static bool s_new_best;                     /* set on game over when best beaten */
 
 // ---- NVS ------------------------------------------------------------------
 
@@ -217,6 +225,15 @@ static void lock_piece(void)
     }
 }
 
+static int ghost_y(void)
+{
+    int y = s_py;
+    while (fits(s_pid, s_prot, s_px, y + 1)) {
+        y++;
+    }
+    return y;
+}
+
 // ---- lines / score --------------------------------------------------------
 
 static int clear_lines(void)
@@ -282,9 +299,6 @@ static void spawn_piece(void)
     s_prot = 0;
     s_px = 3;
     s_py = -1;      /* I/J/L/T sit with row 1 on the top */
-    if (s_pid == 0) {
-        s_py = -1;  /* I */
-    }
     s_fall = fall_ticks();
 }
 
@@ -303,34 +317,67 @@ static uint32_t color_for(uint8_t id)
     return k_pieces[id - 1].color;
 }
 
-static void paint_cell(lv_obj_t *obj, uint32_t c, bool empty)
+/* Darken a 24-bit RGB colour for cell bevel / ghost outline. */
+static uint32_t shade_rgb(uint32_t c, int num, int den)
+{
+    uint32_t r = ((c >> 16) & 0xFF) * (uint32_t)num / (uint32_t)den;
+    uint32_t g = ((c >> 8) & 0xFF) * (uint32_t)num / (uint32_t)den;
+    uint32_t b = (c & 0xFF) * (uint32_t)num / (uint32_t)den;
+    return (r << 16) | (g << 8) | b;
+}
+
+typedef enum {
+    CELL_EMPTY = 0,
+    CELL_SOLID,
+    CELL_GHOST,
+} cell_look_t;
+
+static void paint_cell(lv_obj_t *obj, uint32_t c, cell_look_t look)
 {
     if (!obj) {
         return;
     }
-    if (empty) {
-        lv_obj_set_style_bg_color(obj, ui_col(COL_BG), 0);
+    if (look == CELL_EMPTY) {
+        lv_obj_set_style_bg_color(obj, ui_col(COL_PANEL), 0);
         lv_obj_set_style_border_color(obj, ui_col(COL_BORDER), 0);
         lv_obj_set_style_border_width(obj, 1, 0);
+        lv_obj_set_style_radius(obj, 1, 0);
+    } else if (look == CELL_GHOST) {
+        lv_obj_set_style_bg_color(obj, ui_col(COL_PANEL), 0);
+        lv_obj_set_style_border_color(obj, lv_color_hex(shade_rgb(c, 2, 3)), 0);
+        lv_obj_set_style_border_width(obj, 2, 0);
+        lv_obj_set_style_radius(obj, 1, 0);
     } else {
         lv_obj_set_style_bg_color(obj, lv_color_hex(c), 0);
-        lv_obj_set_style_border_color(obj, lv_color_hex(c), 0);
-        lv_obj_set_style_border_width(obj, 0, 0);
+        lv_obj_set_style_border_color(obj, lv_color_hex(shade_rgb(c, 1, 2)), 0);
+        lv_obj_set_style_border_width(obj, 1, 0);
+        lv_obj_set_style_radius(obj, 2, 0);
     }
 }
 
 static void paint_board(void)
 {
     uint8_t view[ROWS][COLS];
+    uint8_t ghost[ROWS][COLS];
     memcpy(view, s_grid, sizeof(view));
+    memset(ghost, 0, sizeof(ghost));
 
     if (s_state == ST_PLAY || s_state == ST_PAUSE) {
         const piece_def_t *p = &k_pieces[s_pid];
+        int gy = ghost_y();
+        for (int i = 0; i < 4; i++) {
+            int x = s_px + p->rot[s_prot][i].x;
+            int y = gy + p->rot[s_prot][i].y;
+            if (y >= 0 && y < ROWS && x >= 0 && x < COLS && !view[y][x]) {
+                ghost[y][x] = (uint8_t)(s_pid + 1);
+            }
+        }
         for (int i = 0; i < 4; i++) {
             int x = s_px + p->rot[s_prot][i].x;
             int y = s_py + p->rot[s_prot][i].y;
             if (y >= 0 && y < ROWS && x >= 0 && x < COLS) {
                 view[y][x] = (uint8_t)(s_pid + 1);
+                ghost[y][x] = 0;
             }
         }
     }
@@ -338,7 +385,13 @@ static void paint_board(void)
     for (int y = 0; y < ROWS; y++) {
         for (int x = 0; x < COLS; x++) {
             uint8_t id = view[y][x];
-            paint_cell(s_cell[y][x], color_for(id), id == 0);
+            if (id) {
+                paint_cell(s_cell[y][x], color_for(id), CELL_SOLID);
+            } else if (ghost[y][x]) {
+                paint_cell(s_cell[y][x], color_for(ghost[y][x]), CELL_GHOST);
+            } else {
+                paint_cell(s_cell[y][x], COL_PANEL, CELL_EMPTY);
+            }
         }
     }
 }
@@ -347,42 +400,54 @@ static void paint_next(void)
 {
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {
-            paint_cell(s_next_cell[y][x], COL_PANEL, true);
+            paint_cell(s_next_cell[y][x], COL_PANEL, CELL_EMPTY);
         }
     }
     if (s_state == ST_TITLE) {
         return;
     }
     const piece_def_t *p = &k_pieces[s_next];
+    int min_x = 3, max_x = 0, min_y = 3, max_y = 0;
     for (int i = 0; i < 4; i++) {
         int x = p->rot[0][i].x;
         int y = p->rot[0][i].y;
+        if (x < min_x) {
+            min_x = x;
+        }
+        if (x > max_x) {
+            max_x = x;
+        }
+        if (y < min_y) {
+            min_y = y;
+        }
+        if (y > max_y) {
+            max_y = y;
+        }
+    }
+    int ox = (4 - (max_x - min_x + 1)) / 2 - min_x;
+    int oy = (4 - (max_y - min_y + 1)) / 2 - min_y;
+    for (int i = 0; i < 4; i++) {
+        int x = p->rot[0][i].x + ox;
+        int y = p->rot[0][i].y + oy;
         if (x >= 0 && x < 4 && y >= 0 && y < 4) {
-            paint_cell(s_next_cell[y][x], p->color, false);
+            paint_cell(s_next_cell[y][x], p->color, CELL_SOLID);
         }
     }
 }
 
 static void refresh_hud(void)
 {
-    if (s_score) {
-        lv_label_set_text_fmt(s_score, "SCORE  %ld", (long)s_score_v);
+    if (s_score_val) {
+        lv_label_set_text_fmt(s_score_val, "%ld", (long)s_score_v);
     }
-    if (s_level) {
-        lv_label_set_text_fmt(s_level, "LEVEL  %d", s_level_v);
+    if (s_level_val) {
+        lv_label_set_text_fmt(s_level_val, "%d", s_level_v);
     }
-    if (s_lines) {
-        lv_label_set_text_fmt(s_lines, "LINES  %d", s_lines_v);
+    if (s_lines_val) {
+        lv_label_set_text_fmt(s_lines_val, "%d", s_lines_v);
     }
-    if (s_best_lab) {
-        lv_label_set_text_fmt(s_best_lab, "BEST   %ld", (long)s_best);
-    }
-}
-
-static void set_status(const char *msg)
-{
-    if (s_status) {
-        lv_label_set_text(s_status, msg ? msg : "");
+    if (s_best_val) {
+        lv_label_set_text_fmt(s_best_val, "%ld", (long)s_best);
     }
 }
 
@@ -393,7 +458,7 @@ static void set_hint(const char *msg)
     }
 }
 
-static void overlay_show(bool on, const char *title, const char *sub)
+static void overlay_show(bool on, const char *title, const char *sub, const char *score_line)
 {
     if (!s_overlay) {
         return;
@@ -403,13 +468,20 @@ static void overlay_show(bool on, const char *title, const char *sub)
         return;
     }
     lv_obj_set_hidden(s_overlay, false);
-    lv_obj_t *t = lv_obj_get_child(s_overlay, 0);
-    lv_obj_t *s = lv_obj_get_child(s_overlay, 1);
-    if (t) {
-        lv_label_set_text(t, title ? title : "");
+    if (s_ov_title) {
+        lv_label_set_text(s_ov_title, title ? title : "");
     }
-    if (s) {
-        lv_label_set_text(s, sub ? sub : "");
+    if (s_ov_sub) {
+        lv_label_set_text(s_ov_sub, sub ? sub : "");
+    }
+    if (s_ov_score) {
+        if (score_line && score_line[0]) {
+            lv_obj_set_hidden(s_ov_score, false);
+            lv_label_set_text(s_ov_score, score_line);
+        } else {
+            lv_obj_set_hidden(s_ov_score, true);
+            lv_label_set_text(s_ov_score, "");
+        }
     }
 }
 
@@ -421,6 +493,7 @@ static void game_reset_board(void)
     s_score_v = 0;
     s_level_v = 1;
     s_lines_v = 0;
+    s_new_best = false;
     bag_refill();
     s_next = bag_next();
     spawn_piece();
@@ -433,17 +506,15 @@ static void go_title(void)
     paint_board();
     paint_next();
     refresh_hud();
-    set_status("");
-    overlay_show(true, "TETRIS", "SELECT start");
-    set_hint("SELECT start  CANCEL exit");
+    overlay_show(true, "TETRIS", "SELECT to start", NULL);
+    set_hint("SELECT start   CANCEL exit");
 }
 
 static void go_play(void)
 {
     s_state = ST_PLAY;
-    overlay_show(false, NULL, NULL);
-    set_status("");
-    set_hint("L/R move  UP/SELECT rot  DOWN drop");
+    overlay_show(false, NULL, NULL, NULL);
+    set_hint("L/R move  UP/SEL rot  DOWN drop");
     paint_board();
     paint_next();
     refresh_hud();
@@ -452,18 +523,28 @@ static void go_play(void)
 static void go_pause(void)
 {
     s_state = ST_PAUSE;
-    overlay_show(true, "PAUSED", "SELECT resume");
-    set_hint("SELECT resume  CANCEL title");
+    overlay_show(true, "PAUSED", "SELECT resume", NULL);
+    set_hint("SELECT resume   CANCEL title");
+    paint_board();
 }
 
 static void go_over(void)
 {
     s_state = ST_OVER;
+    if (s_score_v > s_best) {
+        s_new_best = true;
+    }
     best_save();
     refresh_hud();
-    overlay_show(true, "GAME OVER", "SELECT again");
-    set_hint("SELECT again  CANCEL title");
-    os_toast("Game over — %ld", (long)s_score_v);
+    char line[40];
+    if (s_new_best) {
+        snprintf(line, sizeof(line), "NEW BEST  %ld", (long)s_score_v);
+    } else {
+        snprintf(line, sizeof(line), "SCORE  %ld", (long)s_score_v);
+    }
+    overlay_show(true, "GAME OVER", "SELECT play again", line);
+    set_hint("SELECT again   CANCEL title");
+    os_toast(s_new_best ? "New best — %ld" : "Game over — %ld", (long)s_score_v);
 }
 
 static void start_game(void)
@@ -549,8 +630,24 @@ static lv_obj_t *make_cell(lv_obj_t *parent, int x, int y, int size)
     lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(c, 1, 0);
     lv_obj_set_scrollable(c, false);
-    paint_cell(c, COL_BG, true);
+    paint_cell(c, COL_PANEL, CELL_EMPTY);
     return c;
+}
+
+static lv_obj_t *hud_caption(lv_obj_t *parent, int x, int y, const char *text)
+{
+    lv_obj_t *l = ui_label(parent, &sol_mono_12, COL_DIM, text);
+    lv_obj_set_pos(l, x, y);
+    lv_obj_set_width(l, HUD_W);
+    return l;
+}
+
+static lv_obj_t *hud_value(lv_obj_t *parent, int x, int y, const lv_font_t *font, uint32_t color)
+{
+    lv_obj_t *l = ui_label(parent, font, color, "0");
+    lv_obj_set_pos(l, x, y);
+    lv_obj_set_width(l, HUD_W);
+    return l;
 }
 
 static void enter(lv_obj_t *root)
@@ -558,69 +655,82 @@ static void enter(lv_obj_t *root)
     s_root = root;
     best_load();
 
-    s_board_bg = ui_panel(root, BOARD_X - 2, BOARD_Y - 2, BOARD_W + 4, BOARD_H + 4);
+    /* Playfield well — dark inset framed by brand border. */
+    s_board_bg = ui_panel(root, BOARD_X - 3, BOARD_Y, BOARD_W + 6, BOARD_H + 4);
     lv_obj_set_style_pad_all(s_board_bg, 0, 0);
-    lv_obj_set_style_bg_color(s_board_bg, ui_col(COL_BORDER), 0);
+    lv_obj_set_style_radius(s_board_bg, 4, 0);
+    lv_obj_set_style_bg_color(s_board_bg, ui_col(COL_BG), 0);
+    lv_obj_set_style_border_color(s_board_bg, ui_col(COL_BORDER), 0);
+    lv_obj_set_style_border_width(s_board_bg, 2, 0);
 
     for (int y = 0; y < ROWS; y++) {
         for (int x = 0; x < COLS; x++) {
-            s_cell[y][x] = make_cell(root, BOARD_X + x * CELL, BOARD_Y + y * CELL, CELL - 1);
+            s_cell[y][x] = make_cell(root,
+                                     BOARD_X + x * CELL,
+                                     BOARD_Y + 2 + y * CELL,
+                                     CELL - 1);
         }
     }
 
-    int hx = BOARD_X + BOARD_W + 14;
-    lv_obj_t *hud = ui_label(root, &sol_font_20, COL_GREEN, "Tetris");
-    lv_obj_set_pos(hud, hx, 4);
+    int hx = HUD_X;
 
-    s_score = ui_label(root, &sol_mono_12, COL_TEXT, "");
-    lv_obj_set_pos(s_score, hx, 32);
-    lv_obj_set_width(s_score, OS_ROOT_W - hx - 8);
+    /* HUD must clear the bottom hint bar (OS_ROOT_H - UI_HINT_H ≈ 202). */
+    lv_obj_t *title = ui_label(root, &sol_font_20, COL_AQUA, "Tetris");
+    lv_obj_set_pos(title, hx, 0);
+    ui_gradient_bar(root, hx, 22, HUD_W > 100 ? 100 : HUD_W, 3);
 
-    s_level = ui_label(root, &sol_mono_12, COL_TEXT, "");
-    lv_obj_set_pos(s_level, hx, 50);
-    lv_obj_set_width(s_level, OS_ROOT_W - hx - 8);
+    hud_caption(root, hx, 30, "SCORE");
+    s_score_val = hud_value(root, hx, 44, &sol_font_20, COL_GREEN);
 
-    s_lines = ui_label(root, &sol_mono_12, COL_TEXT, "");
-    lv_obj_set_pos(s_lines, hx, 68);
-    lv_obj_set_width(s_lines, OS_ROOT_W - hx - 8);
+    hud_caption(root, hx, 68, "LEVEL");
+    s_level_val = hud_value(root, hx, 82, &sol_font_14, COL_TEXT);
 
-    s_best_lab = ui_label(root, &sol_mono_12, COL_DIM, "");
-    lv_obj_set_pos(s_best_lab, hx, 90);
-    lv_obj_set_width(s_best_lab, OS_ROOT_W - hx - 8);
+    hud_caption(root, hx + HUD_W / 2, 68, "LINES");
+    s_lines_val = hud_value(root, hx + HUD_W / 2, 82, &sol_font_14, COL_TEXT);
 
-    lv_obj_t *next_lab = ui_label(root, &sol_mono_12, COL_DIM, "NEXT");
-    lv_obj_set_pos(next_lab, hx, 118);
+    hud_caption(root, hx, 104, "BEST");
+    s_best_val = hud_value(root, hx, 118, &sol_mono_12, COL_DIM);
+
+    hud_caption(root, hx, 136, "NEXT");
 
     int nx = hx;
-    int ny = 136;
-    lv_obj_t *next_bg = ui_panel(root, nx - 2, ny - 2, 4 * 12 + 4, 4 * 12 + 4);
+    int ny = 150;
+    lv_obj_t *next_bg = ui_panel(root, nx - 2, ny - 2, NEXT_BOX + 4, NEXT_BOX + 4);
     lv_obj_set_style_pad_all(next_bg, 0, 0);
+    lv_obj_set_style_radius(next_bg, 4, 0);
+    lv_obj_set_style_bg_color(next_bg, ui_col(COL_BG), 0);
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {
-            s_next_cell[y][x] = make_cell(root, nx + x * 12, ny + y * 12, 11);
+            s_next_cell[y][x] = make_cell(root, nx + x * NEXT_GAP, ny + y * NEXT_GAP, NEXT_CELL);
         }
     }
 
-    s_status = ui_label(root, &sol_mono_12, COL_YELLOW, "");
-    lv_obj_set_pos(s_status, hx, BOARD_Y + BOARD_H - 14);
-    lv_obj_set_width(s_status, OS_ROOT_W - hx - 8);
-
-    /* centered overlay for title / pause / game over */
+    /* Overlay card centred on the playfield. */
     s_overlay = lv_obj_create(root);
     lv_obj_remove_style_all(s_overlay);
-    lv_obj_set_size(s_overlay, BOARD_W, 56);
-    lv_obj_set_pos(s_overlay, BOARD_X, BOARD_Y + (BOARD_H - 56) / 2);
-    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_80, 0);
+    lv_obj_set_size(s_overlay, BOARD_W - 4, 78);
+    lv_obj_set_pos(s_overlay, BOARD_X + 2, BOARD_Y + 2 + (BOARD_H - 78) / 2);
+    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_90, 0);
     lv_obj_set_style_bg_color(s_overlay, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_border_width(s_overlay, 1, 0);
+    lv_obj_set_style_border_color(s_overlay, ui_col(COL_BORDER), 0);
+    lv_obj_set_style_radius(s_overlay, 6, 0);
     lv_obj_set_scrollable(s_overlay, false);
-    lv_obj_t *ot = ui_label(s_overlay, &sol_font_20, COL_GREEN, "");
-    lv_obj_set_width(ot, BOARD_W);
-    lv_obj_set_style_text_align(ot, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(ot, LV_ALIGN_TOP_MID, 0, 6);
-    lv_obj_t *os = ui_label(s_overlay, &sol_mono_12, COL_TEXT, "");
-    lv_obj_set_width(os, BOARD_W);
-    lv_obj_set_style_text_align(os, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(os, LV_ALIGN_BOTTOM_MID, 0, -6);
+
+    s_ov_title = ui_label(s_overlay, &sol_font_20, COL_AQUA, "");
+    lv_obj_set_width(s_ov_title, BOARD_W - 12);
+    lv_obj_set_style_text_align(s_ov_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_ov_title, LV_ALIGN_TOP_MID, 0, 8);
+
+    s_ov_score = ui_label(s_overlay, &sol_mono_12, COL_GREEN, "");
+    lv_obj_set_width(s_ov_score, BOARD_W - 12);
+    lv_obj_set_style_text_align(s_ov_score, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_ov_score, LV_ALIGN_CENTER, 0, 4);
+
+    s_ov_sub = ui_label(s_overlay, &sol_mono_12, COL_TEXT, "");
+    lv_obj_set_width(s_ov_sub, BOARD_W - 12);
+    lv_obj_set_style_text_align(s_ov_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_ov_sub, LV_ALIGN_BOTTOM_MID, 0, -8);
 
     s_hint = ui_hint(root, "");
     go_title();
@@ -630,8 +740,8 @@ static void leave(void)
 {
     best_save();
     s_root = s_board_bg = s_hint = NULL;
-    s_score = s_level = s_lines = s_best_lab = s_status = NULL;
-    s_overlay = NULL;
+    s_score_val = s_level_val = s_lines_val = s_best_val = NULL;
+    s_overlay = s_ov_title = s_ov_sub = s_ov_score = NULL;
     memset(s_cell, 0, sizeof(s_cell));
     memset(s_next_cell, 0, sizeof(s_next_cell));
 }
