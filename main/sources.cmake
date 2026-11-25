@@ -40,6 +40,7 @@ set(SOLANA_OS_SRCS
     apps/calc/calc_app.c
     apps/snake/snake_app.c
     apps/tetris/tetris_app.c
+    apps/breakout/breakout_app.c
     apps/gbemu/gbemu_app.c
     apps/gbemu/walnut_cgb_cpu.c
     apps/gbaemu/gbaemu_app.c
