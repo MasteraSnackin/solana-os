@@ -14,6 +14,7 @@
 
 #include "core/os.h"
 #include "core/os_mem.h"
+#include "core/theme_battle.h"
 #include "core/ui.h"
 
 #define NVS_NS          "dino"
@@ -65,12 +66,13 @@
 
 #define PX_DEAD_TINT    0x681818
 
-#define UI_TITLE        0xC87848
-#define UI_SCORE        0xE84828
-#define UI_BEST         0x3A6FA8
-#define UI_BOX_BG       0xF8F0D8
-#define UI_BOX_INK      0x203060
-#define UI_BOX_EDGE     0x8A6840
+/* HUD / overlay — pocket-battle cream dialogue (day/night playfield unchanged) */
+#define UI_TITLE        T_ORANGE
+#define UI_SCORE        T_RED
+#define UI_BEST         T_BLUE
+#define UI_BOX_BG       T_CREAM
+#define UI_BOX_INK      T_INK
+#define UI_BOX_EDGE     T_NAVY
 
 typedef enum {
     ST_IDLE = 0,
@@ -445,9 +447,7 @@ static void refresh_hud(void)
 
 static void set_hint(const char *msg)
 {
-    if (s_hint) {
-        lv_label_set_text(s_hint, msg);
-    }
+    battle_set_hint(s_hint, msg);
 }
 
 static void overlay_show(bool on, const char *title, const char *sub)
@@ -802,21 +802,39 @@ static void enter(lv_obj_t *root)
 
     prefs_load();
 
-    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(root, lv_color_hex(DAY_SKY_TOP), 0);
+    battle_paint_stage(root);
 
-    s_title = ui_label(root, &sol_font_20, UI_TITLE, "Dino");
+    s_title = battle_label(root, &sol_font_20, UI_TITLE, "Dino");
     lv_obj_set_pos(s_title, 8, 1);
-    lv_obj_set_style_text_color(s_title, lv_color_hex(UI_TITLE), 0);
 
-    s_score_lab = ui_label(root, &sol_mono_12, UI_SCORE, "");
+    s_score_lab = battle_label(root, &sol_mono_12, UI_SCORE, "");
     lv_obj_set_pos(s_score_lab, 100, 5);
-    lv_obj_set_style_text_color(s_score_lab, lv_color_hex(UI_SCORE), 0);
 
-    s_best_lab = ui_label(root, &sol_mono_12, UI_BEST, "");
+    s_best_lab = battle_label(root, &sol_mono_12, UI_BEST, "");
     lv_obj_set_pos(s_best_lab, 210, 5);
-    lv_obj_set_style_text_color(s_best_lab, lv_color_hex(UI_BEST), 0);
     refresh_hud();
+
+    {
+        const int sy = HUD_H - 3;
+        lv_obj_t *a = lv_obj_create(root);
+        lv_obj_remove_style_all(a);
+        lv_obj_set_size(a, 100, 3);
+        lv_obj_set_pos(a, 8, sy);
+        lv_obj_set_style_bg_opa(a, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(a, lv_color_hex(UI_TITLE), 0);
+        lv_obj_t *b = lv_obj_create(root);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, 100, 3);
+        lv_obj_set_pos(b, 110, sy);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(b, lv_color_hex(UI_SCORE), 0);
+        lv_obj_t *c = lv_obj_create(root);
+        lv_obj_remove_style_all(c);
+        lv_obj_set_size(c, 100, 3);
+        lv_obj_set_pos(c, 212, sy);
+        lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(c, lv_color_hex(UI_BEST), 0);
+    }
 
     size_t bytes = (size_t)FIELD_W * FIELD_H * 2;
     s_fb = heap_caps_malloc(bytes, os_mem_bulk_caps());
@@ -824,8 +842,8 @@ static void enter(lv_obj_t *root)
         s_fb = malloc(bytes);
     }
     if (!s_fb) {
-        ui_label(root, &sol_font_14, COL_ERR, "Not enough memory");
-        s_hint = ui_hint(root, "CANCEL exit");
+        battle_label(root, &sol_font_14, T_RED, "Not enough memory");
+        s_hint = battle_hint(root, "CANCEL exit");
         return;
     }
 
@@ -855,18 +873,16 @@ static void enter(lv_obj_t *root)
     lv_obj_set_style_border_color(s_overlay, lv_color_hex(UI_BOX_EDGE), 0);
     lv_obj_set_style_radius(s_overlay, 6, 0);
     lv_obj_set_scrollable(s_overlay, false);
-    lv_obj_t *ot = ui_label(s_overlay, &sol_font_20, UI_BOX_INK, "");
+    lv_obj_t *ot = battle_label(s_overlay, &sol_font_20, UI_BOX_INK, "");
     lv_obj_set_width(ot, FIELD_W - 48);
     lv_obj_set_style_text_align(ot, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(ot, lv_color_hex(UI_BOX_INK), 0);
     lv_obj_align(ot, LV_ALIGN_TOP_MID, 0, 4);
-    lv_obj_t *os = ui_label(s_overlay, &sol_mono_12, UI_BEST, "");
+    lv_obj_t *os = battle_label(s_overlay, &sol_mono_12, UI_BEST, "");
     lv_obj_set_width(os, FIELD_W - 48);
     lv_obj_set_style_text_align(os, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(os, lv_color_hex(UI_BEST), 0);
     lv_obj_align(os, LV_ALIGN_BOTTOM_MID, 0, -4);
 
-    s_hint = ui_hint(root, "");
+    s_hint = battle_hint(root, "");
     go_idle();
 }
 
@@ -989,7 +1005,7 @@ const os_app_t app_dino = {
     .id = "dino",
     .name = "Dino",
     .symbol = LV_SYMBOL_PLAY,
-    .accent = COL_ORANGE,
+    .accent = T_ORANGE,
     .on_enter = enter,
     .on_exit = leave,
     .on_key = on_key,

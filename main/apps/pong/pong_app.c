@@ -14,6 +14,7 @@
 #include "board.h"
 #include "core/os.h"
 #include "core/os_mem.h"
+#include "core/theme_battle.h"
 #include "core/ui.h"
 
 #include "apps/pong/pong_spin.h"
@@ -41,20 +42,20 @@
 #define WIN_SCORE       7
 #define PADDLE_STEP     10
 
-/* Court colours — original arcade look (no franchise art). */
-#define PX_COURT        0x0B1A3A
+/* Court colours — pocket-battle arcade (no franchise art). */
+#define PX_COURT        T_NAVY
 #define PX_LINE         0x3A5080
-#define PX_P1           0x2EC4B6
-#define PX_P2           0xFF9F1C
-#define PX_BALL         0xFFF8E0
-#define PX_NET          0x5EC8F0
+#define PX_P1           T_TEAL
+#define PX_P2           T_ORANGE
+#define PX_BALL         T_CREAM
+#define PX_NET          T_SKY
 
-#define UI_TITLE        0x5EC8F0
-#define UI_SCORE        0xFFD60A
-#define UI_BEST         0x3A86FF
-#define UI_BOX_BG       0xFFF8E0
-#define UI_BOX_EDGE     0x1A2A6C
-#define UI_BOX_INK      0x1A1A2E
+#define UI_TITLE        T_SKY
+#define UI_SCORE        T_YELLOW
+#define UI_BEST         T_BLUE
+#define UI_BOX_BG       T_CREAM
+#define UI_BOX_EDGE     T_NAVY
+#define UI_BOX_INK      T_INK
 
 typedef enum {
     ST_IDLE = 0,
@@ -236,9 +237,7 @@ static void refresh_hud(void)
 
 static void set_hint(const char *msg)
 {
-    if (s_hint) {
-        lv_label_set_text(s_hint, msg);
-    }
+    battle_set_hint(s_hint, msg);
 }
 
 static void overlay_show(bool on, const char *title, const char *sub)
@@ -570,13 +569,15 @@ static void enter(lv_obj_t *root)
 
     prefs_load();
 
-    s_title = ui_label(root, &sol_font_20, UI_TITLE, "Pong");
+    battle_paint_stage(root);
+
+    s_title = battle_label(root, &sol_font_20, UI_TITLE, "Pong");
     lv_obj_set_pos(s_title, 8, 2);
 
-    s_score_lab = ui_label(root, &sol_mono_12, UI_SCORE, "");
+    s_score_lab = battle_label(root, &sol_mono_12, UI_SCORE, "");
     lv_obj_set_pos(s_score_lab, 150, 6);
 
-    s_best_lab = ui_label(root, &sol_mono_12, UI_BEST, "");
+    s_best_lab = battle_label(root, &sol_mono_12, UI_BEST, "");
     lv_obj_set_pos(s_best_lab, 230, 6);
     refresh_hud();
 
@@ -608,8 +609,8 @@ static void enter(lv_obj_t *root)
         s_fb = malloc(bytes);
     }
     if (!s_fb) {
-        ui_label(root, &sol_font_14, COL_ERR, "Not enough memory");
-        s_hint = ui_hint(root, "CANCEL exit");
+        battle_label(root, &sol_font_14, T_RED, "Not enough memory");
+        s_hint = battle_hint(root, "CANCEL exit");
         return;
     }
 
@@ -645,16 +646,16 @@ static void enter(lv_obj_t *root)
     lv_obj_set_style_border_color(s_overlay, lv_color_hex(UI_BOX_EDGE), 0);
     lv_obj_set_style_radius(s_overlay, 6, 0);
     lv_obj_set_scrollable(s_overlay, false);
-    lv_obj_t *ot = ui_label(s_overlay, &sol_font_20, UI_BOX_INK, "");
+    lv_obj_t *ot = battle_label(s_overlay, &sol_font_20, UI_BOX_INK, "");
     lv_obj_set_width(ot, COURT_W - 24);
     lv_obj_set_style_text_align(ot, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(ot, LV_ALIGN_TOP_MID, 0, 6);
-    lv_obj_t *os = ui_label(s_overlay, &sol_mono_12, UI_BEST, "");
+    lv_obj_t *os = battle_label(s_overlay, &sol_mono_12, UI_BEST, "");
     lv_obj_set_width(os, COURT_W - 24);
     lv_obj_set_style_text_align(os, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(os, LV_ALIGN_BOTTOM_MID, 0, -6);
 
-    s_hint = ui_hint(root, "");
+    s_hint = battle_hint(root, "");
     go_idle();
 }
 
@@ -760,7 +761,7 @@ const os_app_t app_pong = {
     .id = "pong",
     .name = "Pong",
     .symbol = LV_SYMBOL_PLAY,
-    .accent = COL_AQUA,
+    .accent = T_TEAL,
     .on_enter = enter,
     .on_exit = leave,
     .on_key = on_key,
