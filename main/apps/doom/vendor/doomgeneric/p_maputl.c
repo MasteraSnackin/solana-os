@@ -23,6 +23,7 @@
 
 
 #include <stdlib.h>
+#include "esp_attr.h"
 
 
 #include "m_bbox.h"
@@ -536,7 +537,7 @@ P_BlockThingsIterator
 //
 // INTERCEPT ROUTINES
 //
-intercept_t	intercepts[MAXINTERCEPTS];
+EXT_RAM_BSS_ATTR intercept_t	intercepts[MAXINTERCEPTS];
 intercept_t*	intercept_p;
 
 divline_t 	trace;

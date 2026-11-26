@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "esp_attr.h"
 
 #include "config.h"
 #include "deh_main.h"
@@ -126,8 +127,8 @@ doom_boolean         bfgedition;
 // If true, the main game loop has started.
 doom_boolean         main_loop_started = false;
 
-char		wadfile[1024];		// primary wad file
-char		mapdir[1024];           // directory of development maps
+EXT_RAM_BSS_ATTR char		wadfile[1024];		// primary wad file
+EXT_RAM_BSS_ATTR char		mapdir[1024];           // directory of development maps
 
 int             show_endoom = 1;
 

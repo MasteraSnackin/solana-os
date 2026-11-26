@@ -9,7 +9,7 @@ extern const os_app_t app_wifi, app_scanner, app_paint, app_badge, app_ledbadge,
 extern const os_app_t app_trade, app_quests, app_beacon, app_store, app_apps, app_timer, app_calc, app_snake;
 extern const os_app_t app_tetris, app_dino, app_breakout, app_pong, app_level, app_weather, app_nameplate, app_gbemu;
 extern const os_app_t app_gbaemu, app_snesemu, app_nesemu, app_vidplayer, app_contact, app_hermes, app_filebrowser, app_browser, app_gutenberg;
-extern const os_app_t app_ebook, app_wifispeed, app_dopewars, app_memory;
+extern const os_app_t app_ebook, app_wifispeed, app_doom, app_dopewars, app_memory;
 extern const os_app_t app_espnow, app_debug, app_settings, app_about;
 
 const os_app_t *const os_apps[] = {
@@ -48,6 +48,7 @@ const os_app_t *const os_apps[] = {
     &app_browser,
     &app_gutenberg,
     &app_ebook,
+    &app_doom,
     &app_dopewars,
     &app_memory,
     &app_espnow,

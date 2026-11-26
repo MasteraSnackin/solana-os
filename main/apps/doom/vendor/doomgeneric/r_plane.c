@@ -31,6 +31,7 @@
 
 #include "r_local.h"
 #include "r_sky.h"
+#include "esp_attr.h"
 
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
 #include <esp_heap_caps.h>
@@ -61,15 +62,15 @@ short*			lastopening;
 //  floorclip starts out SCREENHEIGHT
 //  ceilingclip starts out -1
 //
-short			floorclip[SCREENWIDTH];
-short			ceilingclip[SCREENWIDTH];
+EXT_RAM_BSS_ATTR short		floorclip[SCREENWIDTH];
+EXT_RAM_BSS_ATTR short		ceilingclip[SCREENWIDTH];
 
 //
 // spanstart holds the start of a plane span
 // initialized to 0 at start
 //
-int			spanstart[SCREENHEIGHT];
-int			spanstop[SCREENHEIGHT];
+EXT_RAM_BSS_ATTR int		spanstart[SCREENHEIGHT];
+EXT_RAM_BSS_ATTR int		spanstop[SCREENHEIGHT];
 
 //
 // texture mapping
@@ -77,15 +78,15 @@ int			spanstop[SCREENHEIGHT];
 lighttable_t**		planezlight;
 fixed_t			planeheight;
 
-fixed_t			yslope[SCREENHEIGHT];
-fixed_t			distscale[SCREENWIDTH];
+EXT_RAM_BSS_ATTR fixed_t		yslope[SCREENHEIGHT];
+EXT_RAM_BSS_ATTR fixed_t		distscale[SCREENWIDTH];
 fixed_t			basexscale;
 fixed_t			baseyscale;
 
-fixed_t			cachedheight[SCREENHEIGHT];
-fixed_t			cacheddistance[SCREENHEIGHT];
-fixed_t			cachedxstep[SCREENHEIGHT];
-fixed_t			cachedystep[SCREENHEIGHT];
+EXT_RAM_BSS_ATTR fixed_t		cachedheight[SCREENHEIGHT];
+EXT_RAM_BSS_ATTR fixed_t		cacheddistance[SCREENHEIGHT];
+EXT_RAM_BSS_ATTR fixed_t		cachedxstep[SCREENHEIGHT];
+EXT_RAM_BSS_ATTR fixed_t		cachedystep[SCREENHEIGHT];
 
 
 

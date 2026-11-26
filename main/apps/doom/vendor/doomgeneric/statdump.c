@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include "d_player.h"
+#include "esp_attr.h"
 #include "d_mode.h"
 #include "m_argv.h"
 
@@ -54,7 +55,7 @@ static const char *player_colors[] =
 // Array of end-of-level statistics that have been captured.
 
 #define MAX_CAPTURES 32
-static wbstartstruct_t captured_stats[MAX_CAPTURES];
+static EXT_RAM_BSS_ATTR wbstartstruct_t captured_stats[MAX_CAPTURES];
 static int num_captured_stats = 0;
 
 #if ORIGCODE

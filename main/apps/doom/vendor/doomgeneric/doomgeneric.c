@@ -16,6 +16,7 @@
 #include "r_data.h"
 #include "r_things.h"
 #include "r_draw.h"
+#include "info.h"
 
 pixel_t* DG_ScreenBuffer = NULL;
 
@@ -52,7 +53,7 @@ void doomgeneric_Create(int argc, char **argv)
 	#endif
 			
 	DG_Init();
-	
+	doom_info_psram_init();
 	D_DoomMain ();
 }
 

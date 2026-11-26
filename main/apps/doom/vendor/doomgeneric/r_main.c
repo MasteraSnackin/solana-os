@@ -96,10 +96,10 @@ EXT_RAM_BSS_ATTR int			viewangletox[FINEANGLES/2];
 // The xtoviewangleangle[] table maps a screen pixel
 // to the lowest viewangle that maps back to x ranges
 // from clipangle to -clipangle.
-angle_t			xtoviewangle[SCREENWIDTH+1];
+EXT_RAM_BSS_ATTR angle_t		xtoviewangle[SCREENWIDTH+1];
 
-lighttable_t*		scalelight[LIGHTLEVELS][MAXLIGHTSCALE];
-lighttable_t*		scalelightfixed[MAXLIGHTSCALE];
+EXT_RAM_BSS_ATTR lighttable_t*	scalelight[LIGHTLEVELS][MAXLIGHTSCALE];
+EXT_RAM_BSS_ATTR lighttable_t*	scalelightfixed[MAXLIGHTSCALE];
 EXT_RAM_BSS_ATTR lighttable_t*		zlight[LIGHTLEVELS][MAXLIGHTZ];
 
 // bumped light from gun blasts

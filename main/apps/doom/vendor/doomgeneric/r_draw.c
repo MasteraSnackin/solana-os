@@ -39,8 +39,9 @@
 
 
 // ?
-#define MAXWIDTH			1120
-#define MAXHEIGHT			832
+/* BP26 is 320x200; avoid oversized lookup tables. */
+#define MAXWIDTH			(SCREENWIDTH)
+#define MAXHEIGHT			(SCREENHEIGHT+1)
 
 // status bar height at bottom of screen
 #define SBARHEIGHT		32
@@ -68,7 +69,7 @@ EXT_RAM_BSS_ATTR int		columnofs[MAXWIDTH];
 //  translate a limited part to another
 //  (color ramps used for  suit colors).
 //
-byte		translations[3][256];	
+EXT_RAM_BSS_ATTR byte		translations[3][256];	
  
 // Backing buffer containing the bezel drawn around the screen and 
 // surrounding background.

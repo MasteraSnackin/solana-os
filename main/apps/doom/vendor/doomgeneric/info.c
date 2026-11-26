@@ -29,6 +29,11 @@
 
 #include "p_mobj.h"
 
+#include <string.h>
+#if defined(ESP_PLATFORM)
+#include "esp_attr.h"
+#endif
+
 char *sprnames[] = {
     "TROO","SHTG","PUNG","PISG","PISF","SHTF","SHT2","CHGG","CHGF","MISG",
     "MISF","SAWG","PLSG","PLSF","BFGG","BFGF","BLUD","PUFF","BAL1","BAL2",
@@ -124,7 +129,7 @@ void A_SpawnFly();
 void A_BrainExplode();
 
 
-state_t	states[NUMSTATES] = {
+static const state_t	states_init[NUMSTATES] = {
     {SPR_TROO,0,-1,{NULL},S_NULL,0,0},	// S_NULL
     {SPR_SHTG,4,0,{A_Light0},S_NULL,0,0},	// S_LIGHTDONE
     {SPR_PUNG,0,1,{A_WeaponReady},S_PUNCH,0,0},	// S_PUNCH
@@ -1095,7 +1100,7 @@ state_t	states[NUMSTATES] = {
 };
 
 
-mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
+static const mobjinfo_t mobjinfo_init[NUMMOBJTYPES] = {
 
     {		// MT_PLAYER
 	-1,		// doomednum
@@ -4660,3 +4665,25 @@ mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
     }
 };
 
+#if defined(ESP_PLATFORM)
+/* Keep-all DRAM is tight: these tables are ~40 KB of .data. Host them in
+ * PSRAM BSS and refresh from the flash copy on every Create (fast/nightmare
+ * mutate tics/speeds). */
+EXT_RAM_BSS_ATTR state_t states[NUMSTATES];
+EXT_RAM_BSS_ATTR mobjinfo_t mobjinfo[NUMMOBJTYPES];
+
+void doom_info_psram_init(void)
+{
+    memcpy(states, states_init, sizeof(states));
+    memcpy(mobjinfo, mobjinfo_init, sizeof(mobjinfo));
+}
+#else
+state_t states[NUMSTATES];
+mobjinfo_t mobjinfo[NUMMOBJTYPES];
+
+void doom_info_psram_init(void)
+{
+    memcpy(states, states_init, sizeof(states));
+    memcpy(mobjinfo, mobjinfo_init, sizeof(mobjinfo));
+}
+#endif

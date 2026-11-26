@@ -1328,4 +1328,6 @@ typedef struct
 
 extern mobjinfo_t mobjinfo[NUMMOBJTYPES];
 
+void doom_info_psram_init(void);
+
 #endif

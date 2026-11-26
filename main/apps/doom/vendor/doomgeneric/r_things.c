@@ -37,6 +37,7 @@
 
 #if defined(ARDUINO) || defined(ESP_PLATFORM)
 #include <esp_heap_caps.h>
+#include "esp_attr.h"
 #endif
 
 #define MINZ				(FRACUNIT*4)
@@ -74,8 +75,8 @@ lighttable_t**	spritelights;
 
 // constant arrays
 //  used for psprite clipping and initializing clipping
-short		negonearray[SCREENWIDTH];
-short		screenheightarray[SCREENWIDTH];
+EXT_RAM_BSS_ATTR short	negonearray[SCREENWIDTH];
+EXT_RAM_BSS_ATTR short	screenheightarray[SCREENWIDTH];
 
 
 //
@@ -867,8 +868,8 @@ void R_SortVisSprites (void)
 //
 // R_DrawSprite
 //
-static short		clipbot[SCREENWIDTH];
-static short		cliptop[SCREENWIDTH];
+static EXT_RAM_BSS_ATTR short	clipbot[SCREENWIDTH];
+static EXT_RAM_BSS_ATTR short	cliptop[SCREENWIDTH];
 void R_DrawSprite (vissprite_t* spr)
 {
     drawseg_t*		ds;
