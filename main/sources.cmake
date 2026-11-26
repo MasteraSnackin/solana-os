@@ -67,6 +67,7 @@ set(SOLANA_OS_SRCS
     apps/gbemu/walnut_cgb_cpu.c
     apps/gbaemu/gbaemu_app.c
     apps/snesemu/snesemu_app.c
+    apps/nesemu/nesemu_app.c
     apps/vidplayer/vidplayer_app.c
     apps/vidplayer/vidplayer_jpeg.c
     apps/vidplayer/vendor/tjpgd/tjpgd.c

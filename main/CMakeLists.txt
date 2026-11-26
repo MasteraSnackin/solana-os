@@ -9,6 +9,41 @@ set(SOLANA_OS_GBA_SRCS
     apps/gbaemu/vendor/44vba/sound.cpp
 )
 
+# Nofrendo NES core (Matthew Conte; Espressif esp32-nesemu port). ESP-IDF
+# only; nesemu_app.c stubs the core on the web emulator. Sound muted.
+set(SOLANA_OS_NES_VENDOR ${CMAKE_CURRENT_LIST_DIR}/apps/nesemu/vendor/nofrendo)
+set(SOLANA_OS_NES_SRCS
+    apps/nesemu/nesemu_host.c
+    ${SOLANA_OS_NES_VENDOR}/bitmap.c
+    ${SOLANA_OS_NES_VENDOR}/config.c
+    ${SOLANA_OS_NES_VENDOR}/cpu/nes6502.c
+    ${SOLANA_OS_NES_VENDOR}/event.c
+    ${SOLANA_OS_NES_VENDOR}/gui.c
+    ${SOLANA_OS_NES_VENDOR}/gui_elem.c
+    ${SOLANA_OS_NES_VENDOR}/intro.c
+    ${SOLANA_OS_NES_VENDOR}/libsnss/libsnss.c
+    ${SOLANA_OS_NES_VENDOR}/log.c
+    ${SOLANA_OS_NES_VENDOR}/memguard.c
+    ${SOLANA_OS_NES_VENDOR}/pcx.c
+    ${SOLANA_OS_NES_VENDOR}/vid_drv.c
+    ${SOLANA_OS_NES_VENDOR}/nes/mmclist.c
+    ${SOLANA_OS_NES_VENDOR}/nes/nes.c
+    ${SOLANA_OS_NES_VENDOR}/nes/nes_mmc.c
+    ${SOLANA_OS_NES_VENDOR}/nes/nes_pal.c
+    ${SOLANA_OS_NES_VENDOR}/nes/nes_ppu.c
+    ${SOLANA_OS_NES_VENDOR}/nes/nes_rom.c
+    ${SOLANA_OS_NES_VENDOR}/nes/nesinput.c
+    ${SOLANA_OS_NES_VENDOR}/nes/nesstate.c
+    ${SOLANA_OS_NES_VENDOR}/sndhrdw/fds_snd.c
+    ${SOLANA_OS_NES_VENDOR}/sndhrdw/mmc5_snd.c
+    ${SOLANA_OS_NES_VENDOR}/sndhrdw/nes_apu.c
+    ${SOLANA_OS_NES_VENDOR}/sndhrdw/vrcvisnd.c
+)
+foreach(_map 000 001 002 003 004 005 007 008 009 011 015 016 018 019 024 032 033 034 040 041 042 046 050 064 065 066 070 073 075 078 079 085 087 093 094 099 160 229 231)
+    list(APPEND SOLANA_OS_NES_SRCS ${SOLANA_OS_NES_VENDOR}/mappers/map${_map}.c)
+endforeach()
+list(APPEND SOLANA_OS_NES_SRCS ${SOLANA_OS_NES_VENDOR}/mappers/mapvrc.c)
+
 # snes9x2002 C interpreter (PocketSNES). ESP-IDF only; snesemu_app.c stubs
 # the core on the web emulator. No ARM asm / ASMCPU / ASM_SPC700.
 set(SOLANA_OS_SNES_VENDOR ${CMAKE_CURRENT_LIST_DIR}/apps/snesemu/vendor/snes9x2002)
@@ -43,7 +78,7 @@ set(SOLANA_OS_SNES_SRCS
 )
 
 idf_component_register(
-    SRCS ${SOLANA_OS_SRCS} ${SOLANA_OS_DEVICE_SRCS} ${SOLANA_OS_GBA_SRCS} ${SOLANA_OS_SNES_SRCS}
+    SRCS ${SOLANA_OS_SRCS} ${SOLANA_OS_DEVICE_SRCS} ${SOLANA_OS_GBA_SRCS} ${SOLANA_OS_SNES_SRCS} ${SOLANA_OS_NES_SRCS}
     INCLUDE_DIRS "."
     PRIV_REQUIRES bsp nvs_flash esp_wifi esp_netif esp_event console esp_timer mbedtls
                   esp_app_format app_update esp_partition spi_flash fatfs vfs esp_http_client esp-tls tcp_transport lwip esp_driver_uart bt)
@@ -72,6 +107,22 @@ set_property(SOURCE ${SOLANA_OS_SNES_SRCS} APPEND PROPERTY COMPILE_OPTIONS
     -Wno-pointer-sign -Wno-strict-aliasing -Wno-old-style-declaration
     -DHAVE_STRINGS_H -DHAVE_STDINT_H -DHAVE_INTTYPES_H
     -DUSE_SA1 -D__OLD_RASTER_FX__ -DRIGHTSHIFT_IS_SAR)
+
+set_property(SOURCE ${SOLANA_OS_NES_SRCS} APPEND PROPERTY INCLUDE_DIRECTORIES
+    ${CMAKE_CURRENT_LIST_DIR}/apps/nesemu
+    ${SOLANA_OS_NES_VENDOR}
+    ${SOLANA_OS_NES_VENDOR}/cpu
+    ${SOLANA_OS_NES_VENDOR}/nes
+    ${SOLANA_OS_NES_VENDOR}/sndhrdw
+    ${SOLANA_OS_NES_VENDOR}/libsnss
+    ${SOLANA_OS_NES_VENDOR}/mappers)
+set_property(SOURCE ${SOLANA_OS_NES_SRCS} APPEND PROPERTY COMPILE_OPTIONS
+    -O3 -Wno-error
+    -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
+    -Wno-sign-compare -Wno-implicit-fallthrough -Wno-maybe-uninitialized
+    -Wno-type-limits -Wno-missing-field-initializers -Wno-format
+    -Wno-pointer-sign -Wno-strict-aliasing -Wno-old-style-declaration
+    -Wno-char-subscripts -Wno-attributes)
 
 # Walnut-CGB CPU/PPU: -O3 + IRAM on 8-bit dispatch / draw_line (see
 # WALNUT_GB_CPU_IRAM). Dual-fetch interpreter stays in flash. gbemu_app.c
