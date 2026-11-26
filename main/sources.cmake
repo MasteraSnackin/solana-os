@@ -36,6 +36,7 @@ set(SOLANA_OS_SRCS
     apps/registry.c
     apps/wifi/wifi_app.c
     apps/scanner/scanner_app.c
+    apps/wifispeed/wifispeed_app.c
     apps/paint/paint_app.c
     apps/badge/badge_app.c
     apps/ledbadge/ledbadge_app.c
@@ -75,6 +76,11 @@ set(SOLANA_OS_SRCS
     apps/pong/pong_app.c
     apps/browser/browser_app.c
     apps/gutenberg/gutenberg_app.c
+    apps/ebook/ebook_app.c
+    apps/ebook/ebook_zip.c
+    apps/doom/doom_app.c
+    apps/dopewars/dopewars_app.c
+    apps/memory/memory_app.c
     lua/lua_host.c
     lua/lua_ui.c
     lua/lua_sys.c

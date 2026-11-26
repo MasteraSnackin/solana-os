@@ -1,0 +1,7 @@
+Doom engine sources in this directory are derived from:
+  - ozkl/doomgeneric (Chocolate Doom / doomgeneric), GPLv2
+  - rear16/ESP-DOOM (shutdown path, CMAP256, ESP-oriented fixes), GPLv2
+  - id Software Doom (GPLv2)
+
+Solana OS platform glue (doom_app.c, doom_host.c, doomgeneric_solana.c)
+is separate and not part of the Doom engine.

@@ -2,6 +2,9 @@
 // scroll on the 320×240 panel. URL entry uses the shared d-pad keyboard
 // (ui_kb). Needs Wi-Fi; reuses ui_offline when disconnected. Fetch runs on a
 // worker via os_http_request (not Chromium / not a full browser).
+//
+// Visual theme: shared pocket-battle chrome (sky stage, cream tiles, navy /
+// red accents). Original palette — no copyrighted creature art or names.
 
 #include <ctype.h>
 #include <stdio.h>
@@ -21,6 +24,7 @@
 #include "core/os_http.h"
 #include "core/os_mem.h"
 #include "core/os_wifi.h"
+#include "core/theme_battle.h"
 #include "core/ui.h"
 
 static const char *TAG = "browser";
@@ -46,7 +50,8 @@ typedef enum {
     FETCH_FAIL,
 } fetch_t;
 
-static lv_obj_t *s_root, *s_hint, *s_offline, *s_home_title, *s_home_url, *s_home_st;
+static lv_obj_t *s_root, *s_hint, *s_offline;
+static lv_obj_t *s_home_card, *s_home_title, *s_home_url, *s_home_st;
 static lv_obj_t *s_scroll, *s_title, *s_body;
 static ui_kb_t *s_kb;
 
@@ -475,26 +480,19 @@ static void clear_reader(void)
 
 static void clear_home(void)
 {
-    if (s_home_title) {
-        lv_obj_delete(s_home_title);
-        s_home_title = NULL;
+    if (s_home_card) {
+        lv_obj_delete(s_home_card);
+        s_home_card = NULL;
     }
-    if (s_home_url) {
-        lv_obj_delete(s_home_url);
-        s_home_url = NULL;
-    }
-    if (s_home_st) {
-        lv_obj_delete(s_home_st);
-        s_home_st = NULL;
-    }
+    s_home_title = s_home_url = s_home_st = NULL;
 }
 
 static void set_hint(const char *text)
 {
     if (!s_hint) {
-        s_hint = ui_hint(s_root, text);
+        s_hint = battle_hint(s_root, text);
     } else {
-        lv_label_set_text(s_hint, text);
+        battle_set_hint(s_hint, text);
     }
 }
 
@@ -504,28 +502,36 @@ static void show_home(void)
     clear_reader();
     clear_home();
 
-    s_home_title = ui_label(s_root, &sol_font_20, COL_TEXT, "Browser");
-    lv_obj_set_pos(s_home_title, 10, 10);
+    s_home_card = battle_card(s_root, 8, 8, OS_ROOT_W - 16, CONTENT_H - 16, T_BLUE);
+    s_home_title = battle_label(s_home_card, &sol_font_20, T_NAVY, "Browser");
+    lv_obj_set_pos(s_home_title, 12, BATTLE_STRIPE_H + 8);
 
-    s_home_url = ui_label(s_root, &sol_mono_12, COL_DIM, s_url[0] ? s_url : "(no URL yet)");
-    lv_obj_set_pos(s_home_url, 10, 48);
-    lv_obj_set_width(s_home_url, OS_ROOT_W - 20);
+    s_home_url = battle_label(s_home_card, &sol_mono_12, T_DIM,
+                              s_url[0] ? s_url : "(no URL yet)");
+    lv_obj_set_pos(s_home_url, 12, BATTLE_STRIPE_H + 40);
+    lv_obj_set_width(s_home_url, OS_ROOT_W - 40);
     lv_label_set_long_mode(s_home_url, LV_LABEL_LONG_MODE_WRAP);
 
     const char *st = "SELECT go   LEFT type URL   CANCEL exit";
+    uint32_t st_col = T_INK;
     if (s_fetch == FETCH_BUSY) {
         st = "Fetching…";
+        st_col = T_BLUE;
     } else if (s_fetch == FETCH_FAIL && s_err[0]) {
         st = s_err;
+        st_col = T_RED;
     }
-    s_home_st = ui_label(s_root, &sol_font_14, s_fetch == FETCH_FAIL ? COL_ORANGE : COL_TEXT, st);
-    lv_obj_set_pos(s_home_st, 10, 120);
-    lv_obj_set_width(s_home_st, OS_ROOT_W - 20);
+    s_home_st = battle_label(s_home_card, &sol_font_14, st_col, st);
+    lv_obj_set_pos(s_home_st, 12, BATTLE_STRIPE_H + 110);
+    lv_obj_set_width(s_home_st, OS_ROOT_W - 40);
     lv_label_set_long_mode(s_home_st, LV_LABEL_LONG_MODE_WRAP);
 
     set_hint("SELECT go  LEFT url  CANCEL exit");
     if (s_offline) {
         lv_obj_move_foreground(s_offline);
+    }
+    if (s_hint) {
+        lv_obj_move_foreground(lv_obj_get_parent(s_hint));
     }
 }
 
@@ -535,15 +541,15 @@ static void show_reader(void)
     clear_home();
     clear_reader();
 
-    s_scroll = lv_obj_create(s_root);
-    lv_obj_remove_style_all(s_scroll);
-    lv_obj_set_size(s_scroll, OS_ROOT_W, CONTENT_H);
+    s_scroll = battle_card(s_root, 4, 4, OS_ROOT_W - 8, CONTENT_H - 8, T_YELLOW);
     lv_obj_set_style_pad_hor(s_scroll, 10, 0);
-    lv_obj_set_style_pad_ver(s_scroll, 6, 0);
+    lv_obj_set_style_pad_top(s_scroll, BATTLE_STRIPE_H + 6, 0);
+    lv_obj_set_style_pad_bottom(s_scroll, 6, 0);
     lv_obj_set_flex_flow(s_scroll, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_scroll, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_scroll_dir(s_scroll, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_scroll, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_set_scrollable(s_scroll, true);
 
     char head[URL_MAX + 16];
     if (s_http_status > 0) {
@@ -551,17 +557,20 @@ static void show_reader(void)
     } else {
         strlcpy(head, s_url, sizeof(head));
     }
-    s_title = ui_label(s_scroll, &sol_mono_12, COL_DIM, head);
-    lv_obj_set_width(s_title, OS_ROOT_W - 20);
+    s_title = battle_label(s_scroll, &sol_mono_12, T_DIM, head);
+    lv_obj_set_width(s_title, OS_ROOT_W - 36);
     lv_label_set_long_mode(s_title, LV_LABEL_LONG_MODE_DOTS);
 
-    s_body = ui_label(s_scroll, &sol_font_14, COL_TEXT, s_text ? s_text : "");
-    lv_obj_set_width(s_body, OS_ROOT_W - 20);
+    s_body = battle_label(s_scroll, &sol_font_14, T_INK, s_text ? s_text : "");
+    lv_obj_set_width(s_body, OS_ROOT_W - 36);
     lv_label_set_long_mode(s_body, LV_LABEL_LONG_MODE_WRAP);
 
     set_hint(LV_SYMBOL_UP LV_SYMBOL_DOWN " scroll  SELECT url  CANCEL back");
     if (s_offline) {
         lv_obj_move_foreground(s_offline);
+    }
+    if (s_hint) {
+        lv_obj_move_foreground(lv_obj_get_parent(s_hint));
     }
 }
 
@@ -584,7 +593,7 @@ static void apply_pending(void)
             show_home();
         } else if (s_home_st) {
             lv_label_set_text(s_home_st, s_err[0] ? s_err : "Fetch failed");
-            lv_obj_set_style_text_color(s_home_st, ui_col(COL_ORANGE), 0);
+            lv_obj_set_style_text_color(s_home_st, lv_color_hex(T_RED), 0);
         }
         os_toast("%s", s_err[0] ? s_err : "Fetch failed");
         s_fetch = FETCH_IDLE;
@@ -691,7 +700,7 @@ static void enter(lv_obj_t *root)
     s_kb = NULL;
     s_hint = NULL;
     s_scroll = s_title = s_body = NULL;
-    s_home_title = s_home_url = s_home_st = NULL;
+    s_home_card = s_home_title = s_home_url = s_home_st = NULL;
     s_text = NULL;
     s_text_len = 0;
     s_pending_text = NULL;
@@ -702,6 +711,7 @@ static void enter(lv_obj_t *root)
     s_fetch = FETCH_IDLE;
     load_url();
 
+    battle_paint_stage(root);
     s_offline = ui_offline_create(root, 0, CONTENT_H, false);
     show_home();
 }
@@ -719,7 +729,7 @@ static void leave(void)
     s_pending_text = NULL;
     s_pending_len = 0;
     s_root = s_hint = s_offline = NULL;
-    s_home_title = s_home_url = s_home_st = NULL;
+    s_home_card = s_home_title = s_home_url = s_home_st = NULL;
     s_scroll = s_title = s_body = NULL;
 }
 
@@ -734,7 +744,7 @@ static void tick(void)
     }
     if (s_fetch == FETCH_BUSY && s_view == V_HOME && s_home_st) {
         lv_label_set_text(s_home_st, "Fetching…");
-        lv_obj_set_style_text_color(s_home_st, ui_col(COL_TEXT), 0);
+        lv_obj_set_style_text_color(s_home_st, lv_color_hex(T_BLUE), 0);
     }
     if (s_fetch == FETCH_OK || s_fetch == FETCH_FAIL) {
         apply_pending();
@@ -825,7 +835,7 @@ const os_app_t app_browser = {
     .id = "browser",
     .name = "Browser",
     .symbol = LV_SYMBOL_HOME,
-    .accent = COL_AQUA,
+    .accent = T_BLUE,
     .on_enter = enter,
     .on_exit = leave,
     .on_key = key,
