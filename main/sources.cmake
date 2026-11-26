@@ -13,10 +13,26 @@ foreach(f lapi lauxlib lbaselib lcode lcorolib lctype ldebug ldo ldump lfunc lgc
 endforeach()
 
 set(SOLANA_OS_SRCS
-    core/os.c core/launcher.c core/calibrate.c core/ui.c core/os_cloud.c core/os_settings.c core/os_wifi_boot.c
-    core/os_mesh.c core/os_bridge.c core/os_api.c core/os_socket.c core/os_data.c core/os_cmd.c core/os_ota.c
+    core/os.c
+    core/launcher.c
+    core/calibrate.c
+    core/ui.c
+    core/os_cloud.c
+    core/os_settings.c
+    core/os_wifi_boot.c
+    core/os_mesh.c
+    core/os_bridge.c
+    core/os_api.c
+    core/os_socket.c
+    core/os_data.c
+    core/os_cmd.c
+    core/os_ota.c
     core/ed25519.c
-    game/game.c game/xdex.c game/trade.c game/quests.c game/beacon.c
+    game/game.c
+    game/xdex.c
+    game/trade.c
+    game/quests.c
+    game/beacon.c
     apps/registry.c
     apps/wifi/wifi_app.c
     apps/scanner/scanner_app.c
@@ -24,7 +40,10 @@ set(SOLANA_OS_SRCS
     apps/badge/badge_app.c
     apps/ledbadge/ledbadge_app.c
     apps/tgclient/tgclient_app.c
-    apps/guide/guide_app.c apps/xdex/xdex_app.c apps/trade/trade_app.c apps/quests/quests_app.c
+    apps/guide/guide_app.c
+    apps/xdex/xdex_app.c
+    apps/trade/trade_app.c
+    apps/quests/quests_app.c
     apps/beacon/beacon_app.c
     apps/espnow/espnow_app.c
     apps/debug/debug_app.c
@@ -48,13 +67,34 @@ set(SOLANA_OS_SRCS
     apps/vidplayer/vidplayer_app.c
     apps/vidplayer/vidplayer_jpeg.c
     apps/vidplayer/vendor/tjpgd/tjpgd.c
-    lua/lua_host.c lua/lua_ui.c lua/lua_sys.c lua/lua_net.c lua/lua_json.c lua/lua_pkg.c lua/lua_cmd.c
-    lua/lua_fs.c lua/lua_install.c lua/lua_code.c lua/lua_ws.c lua/lua_img.c lua/lua_png.c lua/lua_gif.c lua/lua_meet.c
-    lua/lua_ble.c lua/lua_crypto.c
+    apps/breakout/breakout_app.c
+    lua/lua_host.c
+    lua/lua_ui.c
+    lua/lua_sys.c
+    lua/lua_net.c
+    lua/lua_json.c
+    lua/lua_pkg.c
+    lua/lua_cmd.c
+    lua/lua_fs.c
+    lua/lua_install.c
+    lua/lua_code.c
+    lua/lua_ws.c
+    lua/lua_img.c
+    lua/lua_png.c
+    lua/lua_gif.c
+    lua/lua_meet.c
+    lua/lua_ble.c
+    lua/lua_crypto.c
     ${SOLANA_OS_LUA_VENDOR_SRCS}
-    assets/sol_mono_12.c assets/sol_font_14.c assets/sol_font_20.c assets/sol_font_32.c
-    assets/img_logomark_16.c assets/img_logomark_40.c assets/img_logomark_72.c
-    assets/img_foundation.c assets/img_foundation_black.c
+    assets/sol_mono_12.c
+    assets/sol_font_14.c
+    assets/sol_font_20.c
+    assets/sol_font_32.c
+    assets/img_logomark_16.c
+    assets/img_logomark_40.c
+    assets/img_logomark_72.c
+    assets/img_foundation.c
+    assets/img_foundation_black.c
 )
 
 set(SOLANA_OS_DEVICE_SRCS
