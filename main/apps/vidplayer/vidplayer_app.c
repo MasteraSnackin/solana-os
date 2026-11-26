@@ -28,7 +28,7 @@ static const char *TAG = "vidplayer";
 
 #define VIDEOS_DIR      BSP_SD_MOUNT "/videos"
 #define MAX_CLIPS       48
-#define PATH_MAX_LEN    200
+#define PATH_MAX_LEN  256
 #define FRAME_MAX       (48 * 1024)     // one JPEG frame
 #define PANEL_W         BOARD_LCD_H_RES
 #define PANEL_H         BOARD_LCD_V_RES
@@ -398,8 +398,8 @@ static void play_task(void *arg)
             if (s_quit) {
                 break;
             }
-            char path[PATH_MAX_LEN];
-            snprintf(path, sizeof(path), "%s/%s", s_play_path, names[i]);
+            char path[512];
+            snprintf(path, sizeof(path), "%.200s/%.200s", s_play_path, names[i]);
             FILE *f = fopen(path, "rb");
             size_t n = 0;
             if (f) {
