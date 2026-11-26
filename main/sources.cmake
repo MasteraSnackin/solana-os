@@ -32,6 +32,7 @@ set(SOLANA_OS_SRCS
     apps/update/update_app.c
     apps/about/about_app.c
     apps/contact/contact_app.c
+    apps/tangem/tangem_app.c
     apps/hermes/hermes_app.c
     apps/filebrowser/filebrowser_app.c
     apps/store/store_app.c

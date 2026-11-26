@@ -9,7 +9,7 @@ extern const os_app_t app_wifi, app_scanner, app_paint, app_badge, app_ledbadge,
 extern const os_app_t app_guide, app_xdex, app_trade, app_quests, app_beacon, app_store, app_apps;
 extern const os_app_t app_timer, app_calc, app_snake, app_tetris;
 extern const os_app_t app_gbemu, app_gbaemu, app_snesemu;
-extern const os_app_t app_tgclient, app_vidplayer, app_contact, app_hermes, app_filebrowser;
+extern const os_app_t app_tgclient, app_vidplayer, app_contact, app_tangem, app_hermes, app_filebrowser;
 
 
 const os_app_t *const os_apps[] = {
@@ -35,6 +35,7 @@ const os_app_t *const os_apps[] = {
     &app_snesemu,
     &app_vidplayer,
     &app_contact,
+    &app_tangem,
     &app_hermes,
     &app_filebrowser,
     &app_espnow,
