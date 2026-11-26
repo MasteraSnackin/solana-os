@@ -57,6 +57,7 @@ set(SOLANA_OS_SRCS
     apps/apps/apps_app.c
     apps/timer/timer_app.c
     apps/calc/calc_app.c
+    apps/level/level_app.c
     apps/snake/snake_app.c
     apps/tetris/tetris_app.c
     apps/dino/dino_app.c
