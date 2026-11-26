@@ -9,7 +9,7 @@ extern const os_app_t app_wifi, app_scanner, app_paint, app_badge, app_ledbadge,
 extern const os_app_t app_trade, app_quests, app_beacon, app_store, app_apps, app_timer, app_calc, app_snake;
 extern const os_app_t app_tetris, app_dino, app_gbemu, app_gbaemu, app_snesemu, app_vidplayer, app_contact, app_hermes;
 extern const os_app_t app_filebrowser, app_espnow, app_debug, app_settings, app_about, app_breakout, app_pong, app_level;
-extern const os_app_t app_weather;
+extern const os_app_t app_weather, app_nameplate;
 
 const os_app_t *const os_apps[] = {
     &app_wifi,
@@ -45,6 +45,7 @@ const os_app_t *const os_apps[] = {
     &app_pong,
     &app_level,
     &app_weather,
+    &app_nameplate,
 };
 
 const int os_app_count = sizeof(os_apps) / sizeof(os_apps[0]);

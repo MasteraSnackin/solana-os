@@ -51,6 +51,7 @@ set(SOLANA_OS_SRCS
     apps/update/update_app.c
     apps/about/about_app.c
     apps/contact/contact_app.c
+    apps/nameplate/nameplate_app.c
     apps/hermes/hermes_app.c
     apps/weather/weather_app.c
     apps/filebrowser/filebrowser_app.c
