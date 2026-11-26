@@ -40,7 +40,7 @@ static lv_obj_t *s_root, *s_tiles[PER_PAGE], *s_stripes[PER_PAGE];
 static lv_obj_t *s_icons[PER_PAGE], *s_names[PER_PAGE];
 static lv_obj_t *s_dots, *s_hint_bar, *s_hint;
 static int s_sel, s_page = -1;
-static const os_app_t *s_list[32];          // the apps shown, in registry order
+static const os_app_t *s_list[64];          // the apps shown, in registry order
 static int s_count;
 
 static bool listed(const os_app_t *app)
@@ -52,9 +52,9 @@ static bool listed(const os_app_t *app)
 static bool collect(void)
 {
     const os_app_t *sel = s_count ? s_list[s_sel < s_count ? s_sel : 0] : NULL;
-    const os_app_t *next[32];
+    const os_app_t *next[64];
     int n = 0;
-    for (int i = 0; i < os_app_count && n < 32; i++) {
+    for (int i = 0; i < os_app_count && n < 64; i++) {
         if (listed(os_apps[i])) {
             next[n++] = os_apps[i];
         }

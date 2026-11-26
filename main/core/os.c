@@ -841,7 +841,9 @@ void os_start(void)
     if (bsp_buttons_start(on_buttons) != ESP_OK) {
         ESP_LOGE(TAG, "buttons unavailable; use the console 'key' command");
     }
-    xTaskCreate(os_task, "os", 6144, NULL, 5, &s_task);  /* above gbemu prio 4 so HOME preempts */
+    if (xTaskCreate(os_task, "os", 6144, NULL, 5, &s_task) != pdPASS) {  /* above gbemu prio 4 so HOME preempts */
+        ESP_LOGE(TAG, "os task create failed (DRAM)");
+    }
 }
 
 void os_hold(const char *why)

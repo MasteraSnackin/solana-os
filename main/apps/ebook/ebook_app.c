@@ -12,6 +12,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
@@ -50,7 +51,7 @@ static int s_font;
 static char *s_text;
 static size_t s_text_len;
 static char s_path[PATH_MAX_LEN];
-static char s_books[MAX_BOOKS][PATH_MAX_LEN];
+static EXT_RAM_BSS_ATTR char s_books[MAX_BOOKS][PATH_MAX_LEN];
 static int s_nbooks;
 static int32_t s_restore_y = -1;
 
