@@ -3,11 +3,11 @@
 // Hardware: stock Breakpoint ESP32-C5 has no IMU or accelerometer in the
 // Solana OS BSP (board.h I2C is TCA9534 only; no accel/gyro driver). This
 // app therefore uses a software tilt model driven by the D-pad — the only
-// motion-like input present. SELECT zeros the reading. When pitch and roll
-// are within LEVEL_EPS_DEG, the vial shows LEVEL and the WS2812 strip glows
-// green. Offline; no Wi-Fi / mesh / SD.
+// motion-like input present. Offline; no Wi-Fi / mesh / SD.
 //
-// A future BSP accel API can feed level_sample() without changing the UI.
+// Sensor path is isolated behind level_accel_* so a future BSP driver can
+// feed real pitch/roll without rewriting the UI. On enter the app
+// auto-calibrates (current attitude → zero). SELECT re-zeros.
 
 #include <math.h>
 #include <stdio.h>
@@ -54,20 +54,61 @@ static float s_pitch, s_roll;           /* simulated (or last hardware) attitude
 static float s_zero_p, s_zero_r;        /* calibration offsets */
 static bool s_was_level;
 static bool s_led_on;
+static bool s_auto_cal_done;
+
+/* ---- Future BSP accelerometer hook -------------------------------------- */
+/*
+ * Plug a real driver here when the BSP gains an IMU / accel API
+ * (e.g. bsp_accel_read). Today stock BP26 has none — I2C hosts only the
+ * TCA9534 button expander — so these stubs always report unavailable and
+ * the D-pad simulation path is used.
+ *
+ * Contract for a future BSP:
+ *   level_accel_available() → true once the device is probed/ready
+ *   level_accel_read()      → fill pitch/roll in degrees, return true on OK
+ * The UI / vial path never talks to hardware directly; it only calls
+ * level_sample(), which prefers the accel hook when available.
+ */
+static bool level_accel_available(void)
+{
+    /* TODO(bsp): return bsp_accel_ready() when Solana OS ships an IMU API. */
+    return false;
+}
+
+static bool level_accel_read(float *pitch_deg, float *roll_deg)
+{
+    if (!pitch_deg || !roll_deg) {
+        return false;
+    }
+    if (!level_accel_available()) {
+        return false;
+    }
+    /* TODO(bsp):
+     *   bsp_accel_sample_t s;
+     *   if (bsp_accel_read(&s) != ESP_OK) return false;
+     *   *pitch_deg = s.pitch_deg;
+     *   *roll_deg  = s.roll_deg;
+     *   return true;
+     */
+    (void)pitch_deg;
+    (void)roll_deg;
+    return false;
+}
 
 /* ---- Sensor path -------------------------------------------------------- */
 
-/*
- * BP26 / Solana OS BSP today: no IMU, no accelerometer, no gyro API.
- * Closest BSP "sensors": bsp_battery_* (ADC) and bsp_buttons_* (digital).
- * Until a BSP accel driver exists, synthesise pitch/roll from D-pad nudges
- * held in s_pitch / s_roll.
- */
 static void level_sample(level_sample_t *out)
 {
+    float hp = 0, hr = 0;
+    if (level_accel_read(&hp, &hr)) {
+        s_pitch = hp;
+        s_roll = hr;
+        out->hardware = true;
+    } else {
+        out->hardware = false;
+    }
     out->pitch_deg = s_pitch - s_zero_p;
     out->roll_deg = s_roll - s_zero_r;
-    out->hardware = false;
 }
 
 static void clamp_tilt(float *v)
@@ -81,6 +122,10 @@ static void clamp_tilt(float *v)
 
 static void nudge(float dp, float dr)
 {
+    /* D-pad only drives the sim model; ignore when hardware is live. */
+    if (level_accel_available()) {
+        return;
+    }
     s_pitch += dp;
     s_roll += dr;
     clamp_tilt(&s_pitch);
@@ -91,6 +136,18 @@ static void zero_cal(void)
 {
     s_zero_p = s_pitch;
     s_zero_r = s_roll;
+}
+
+static void auto_calibrate(void)
+{
+    /* Prefer a fresh hardware sample before locking the zero. */
+    float hp = 0, hr = 0;
+    if (level_accel_read(&hp, &hr)) {
+        s_pitch = hp;
+        s_roll = hr;
+    }
+    zero_cal();
+    s_auto_cal_done = true;
 }
 
 static void led_level(bool on)
@@ -191,6 +248,7 @@ static void enter(lv_obj_t *root)
     s_zero_p = s_zero_r = 0;
     s_was_level = false;
     s_led_on = false;
+    s_auto_cal_done = false;
 
     lv_obj_set_style_bg_color(root, lv_color_hex(L_NAVY), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
@@ -274,13 +332,25 @@ static void enter(lv_obj_t *root)
                      " tilt  SELECT zero  CANCEL exit");
     lv_obj_set_style_text_color(s_hint, lv_color_hex(L_FACE), 0);
 
+    /* Auto-calibrate: treat the attitude at open as level. */
+    auto_calibrate();
     refresh();
+    os_toast("Auto-calibrated");
 }
 
 static void on_tick(void)
 {
-    /* Hardware path would re-sample here; D-pad sim only needs redraw after keys. */
-    (void)0;
+    if (!s_root) {
+        return;
+    }
+    /* Hardware path re-samples every tick; D-pad sim only needs key-driven redraw. */
+    if (level_accel_available()) {
+        if (!s_auto_cal_done) {
+            auto_calibrate();
+            os_toast("Auto-calibrated");
+        }
+        refresh();
+    }
 }
 
 static bool on_key(os_key_t k, bool repeat)
@@ -307,6 +377,7 @@ static bool on_key(os_key_t k, bool repeat)
     case OS_KEY_SELECT:
         if (!repeat) {
             zero_cal();
+            s_auto_cal_done = true;
             refresh();
             os_toast("Zeroed");
         }
