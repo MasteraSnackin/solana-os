@@ -48,21 +48,9 @@ static const char *TAG = "weather";
 #define DEFAULT_LON     "-0.1278"
 #define DEFAULT_CITY    "London"
 
-/* Pocket-battle palette (original hexes; not remapped by ui_col). */
-#define T_SKY           0x5EC8F0
-#define T_NAVY          0x1A2A6C
-#define T_CREAM         0xFFF8E0
-#define T_FACE          0xFFFDF5
-#define T_INK           0x1A1A2E
-#define T_RED           0xE63946
-#define T_YELLOW        0xFFD60A
-#define T_BLUE          0x3A86FF
-#define T_TEAL          0x2EC4B6
-#define T_ORANGE        0xFF9F1C
-#define T_DIM           0x4A5568
-#define T_WHITE         0xFFFFFF
+/* Palette from theme_battle.h; rain accent + stripe alias local. */
 #define T_RAIN          0x1B6CA8
-#define STRIPE_H        6
+#define STRIPE_H        BATTLE_STRIPE_H
 
 typedef enum {
     FETCH_IDLE = 0,
