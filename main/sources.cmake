@@ -72,6 +72,8 @@ set(SOLANA_OS_SRCS
     apps/vidplayer/vendor/tjpgd/tjpgd.c
     apps/breakout/breakout_app.c
     apps/pong/pong_app.c
+    apps/browser/browser_app.c
+    apps/gutenberg/gutenberg_app.c
     lua/lua_host.c
     lua/lua_ui.c
     lua/lua_sys.c
