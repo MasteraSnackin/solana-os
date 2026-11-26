@@ -464,7 +464,7 @@ static void render_pick(void)
             continue;
         }
         char line[96];
-        snprintf(line, sizeof(line), "%s %s%s",
+        snprintf(line, sizeof(line), "%s %.40s%.40s",
                  i == s_geo_sel ? ">" : " ",
                  s_geo[i].name,
                  s_geo[i].detail[0] ? s_geo[i].detail : "");

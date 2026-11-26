@@ -22,7 +22,7 @@
 #define COL_W           (OS_ROOT_W - COL_X - 8)
 
 #define NVS_NS          "nameplate"
-#define NAME_MAX        32
+#define NP_NAME_MAX     32
 #define TITLE_MAX       40
 
 #define CONTACT_PAGE_URL "https://masterasnackin.github.io/personal-contact-page/"
@@ -48,7 +48,7 @@ static const char *const font_mode_names[FONT_COUNT] = {
 static lv_obj_t *s_root, *s_view, *s_hint;
 static lv_obj_t *s_name_lbl, *s_title_lbl, *s_field_hint, *s_font_lbl;
 static ui_kb_t *s_kb;
-static char s_name[NAME_MAX];
+static char s_name[NP_NAME_MAX];
 static char s_title[TITLE_MAX];
 static int s_field;
 static int s_font_mode = FONT_NORMAL;
@@ -379,7 +379,7 @@ static void build(void)
 static void open_kb(void)
 {
     const char *prompt = s_field == FIELD_NAME ? "Nameplate name" : "Nameplate title";
-    size_t max = s_field == FIELD_NAME ? NAME_MAX - 1 : TITLE_MAX - 1;
+    size_t max = s_field == FIELD_NAME ? NP_NAME_MAX - 1 : TITLE_MAX - 1;
     s_kb = ui_kb_create(s_root, prompt, max);
 }
 
@@ -406,7 +406,7 @@ static void on_enter(lv_obj_t *root)
     build();
 }
 
-static void on_exit(void)
+static void leave(void)
 {
     if (s_kb) {
         ui_kb_delete(s_kb);
@@ -481,7 +481,7 @@ const os_app_t app_nameplate = {
     .symbol = LV_SYMBOL_EDIT,
     .accent = COL_AQUA,
     .on_enter = on_enter,
-    .on_exit = on_exit,
+    .on_exit = leave,
     .on_key = on_key,
     .on_tick = on_tick,
 };

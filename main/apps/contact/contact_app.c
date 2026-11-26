@@ -158,7 +158,7 @@ static void on_enter(lv_obj_t *root)
     build();
 }
 
-static void on_exit(void)
+static void leave(void)
 {
     s_root = s_view = s_hint = s_qr = NULL;
     s_link_label = s_link_detail = s_link_idx = s_status = NULL;
@@ -203,7 +203,7 @@ const os_app_t app_contact = {
     .symbol = LV_SYMBOL_HOME,
     .accent = COL_AQUA,
     .on_enter = on_enter,
-    .on_exit = on_exit,
+    .on_exit = leave,
     .on_key = on_key,
     .on_tick = on_tick,
 };
