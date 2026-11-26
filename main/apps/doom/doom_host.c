@@ -8,6 +8,7 @@
 #include "esp_log.h"
 
 #include "doomgeneric.h"
+#include "doomstat.h"
 #include "doom_host.h"
 #include "doomgeneric_solana.h"
 #include "core/os_mem.h"
@@ -62,10 +63,17 @@ bool doom_core_boot(const char *wad_path)
     static char arg_nogui[] = "-nogui";
     static char arg_mb[] = "-mb";
     static char arg_mb_v[] = "6";
+    // Skip title demos: badge has no easy Enter key, so land in E1M1 / MAP01.
+    static char arg_warp[] = "-warp";
+    static char arg_ep[] = "1";
+    static char arg_map[] = "1";
+    static char arg_skill[] = "-skill";
+    static char arg_skill_v[] = "3";
     // Must outlive Create: myargv keeps this pointer for demos / M_CheckParm.
     static char path[200];
     static char *argv[] = {
         arg0, arg_iwad, path, arg_nosound, arg_nomusic, arg_nogui, arg_mb, arg_mb_v,
+        arg_warp, arg_ep, arg_map, arg_skill, arg_skill_v,
     };
     strlcpy(path, wad_path, sizeof(path));
     int argc = (int)(sizeof(argv) / sizeof(argv[0]));
@@ -87,7 +95,8 @@ bool doom_core_boot(const char *wad_path)
         return false;
     }
     s_alive = true;
-    ESP_LOGI(TAG, "running %s", s_title);
+    ESP_LOGI(TAG, "running %s (gamestate=%d usergame=%d demo=%d)",
+             s_title, (int)gamestate, (int)usergame, (int)demoplayback);
     return true;
 }
 

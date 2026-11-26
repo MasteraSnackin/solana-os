@@ -1361,6 +1361,10 @@ void D_DoomMain (void)
     M_SetConfigFilenames("default.cfg", PROGRAM_PREFIX "doom.cfg");
     D_BindVariables();
     M_LoadDefaults();
+#if defined(ESP_PLATFORM)
+    /* Low detail: half-width column renderer — big win on C5; still playable. */
+    detailLevel = 1;
+#endif
 
     // Save configuration at exit.
     I_AtExit(M_SaveDefaults, false);

@@ -9,8 +9,8 @@
 // FreeRTOS task at priority 3 (below prio-4 blit/OS), 32 KB stack in PSRAM.
 // While a WAD runs, Wi-Fi / mesh / cloud / game tick / Lua / BLE pause.
 //
-// Screen: native 320x200 stretched nearest-neighbour to 320x240 ILI9341 at
-// (0, 0). PSRAM double-buffer + prio-4 blit task (same pattern as NES).
+// Screen: native 320x200 letterboxed on 320x240 (20px bars). PSRAM
+// double-buffer + prio-4 blit task. Low-detail render + palette LUT.
 //
 // Button chords (6 front keys + BOOT):
 //   d-pad                 move
@@ -53,17 +53,19 @@ static const char *TAG = "doom";
 #define CHORD_MS        250
 #define WADS_DIR        BSP_SD_MOUNT "/doom"
 #define TASK_STACK      32768
-#define TASK_PRIO       3
+#define TASK_PRIO       4
 #define BLIT_TASK_STACK 3072
 #define BLIT_TASK_PRIO  4
-#define SCALE_W         BOARD_LCD_H_RES
-#define SCALE_H         BOARD_LCD_V_RES
+#define SCALE_W         DOOM_WIDTH
+#define SCALE_H         DOOM_HEIGHT
 #define DOOM_BLIT_X     0
-#define DOOM_BLIT_Y     0
+#define DOOM_BLIT_Y     ((BOARD_LCD_V_RES - DOOM_HEIGHT) / 2)
 #define DOOM_FB_BYTES   ((size_t)SCALE_W * (size_t)SCALE_H * sizeof(uint16_t))
+#define FRAME_US        50000   /* target ~20 Hz — matches C5 budget better than 35 */
+#define STAT_SAMPLE_STEP 8      /* sparse nonblack (every 8th pixel) */
 
-_Static_assert(DOOM_WIDTH == SCALE_W, "Doom width matches panel");
-_Static_assert(DOOM_HEIGHT * 6 / 5 == SCALE_H, "Doom height 5:6");
+_Static_assert(DOOM_WIDTH == BOARD_LCD_H_RES, "Doom width matches panel");
+_Static_assert(DOOM_HEIGHT + 2 * DOOM_BLIT_Y == BOARD_LCD_V_RES, "letterbox 200 in 240");
 
 static TaskHandle_t s_task;
 static SemaphoreHandle_t s_done;
@@ -145,34 +147,19 @@ static void blit_task(void *arg)
 #endif
 }
 
-static unsigned fb_nonblack(const uint16_t *fb, int stride)
+static unsigned fb_nonblack_sparse(const uint16_t *fb, int stride)
 {
     unsigned n = 0;
-    for (int r = 0; r < DOOM_HEIGHT; r++) {
+    for (int r = 0; r < DOOM_HEIGHT; r += STAT_SAMPLE_STEP) {
         const uint16_t *row = fb + r * stride;
-        for (int c = 0; c < DOOM_WIDTH; c++) {
+        for (int c = 0; c < DOOM_WIDTH; c += STAT_SAMPLE_STEP) {
             if (row[c]) {
                 n++;
             }
         }
     }
-    return n;
-}
-
-// Nearest-neighbour 320x200 → 320x240: 6 dest rows from every 5 src.
-static void stretch_nn(uint16_t *dst, const uint16_t *src)
-{
-    for (int g = 0; g < 40; g++) {
-        for (int r = 0; r < 5; r++) {
-            const uint16_t *s = src + (size_t)(g * 5 + r) * DOOM_FB_STRIDE;
-            memcpy(dst, s, DOOM_WIDTH * sizeof(uint16_t));
-            dst += SCALE_W;
-            if (r == 0) {
-                memcpy(dst, dst - SCALE_W, SCALE_W * sizeof(uint16_t));
-                dst += SCALE_W;
-            }
-        }
-    }
+    /* Scale sample count toward full-frame estimate for logs. */
+    return n * (STAT_SAMPLE_STEP * STAT_SAMPLE_STEP);
 }
 
 static bool present(const uint16_t *fb)
@@ -180,43 +167,43 @@ static bool present(const uint16_t *fb)
     if (s_quit || !fb) {
         return false;
     }
-    unsigned nb = fb_nonblack(fb, DOOM_FB_STRIDE);
-    s_fb_nonblack = nb;
-    if (!s_have_picture && nb < 80) {
-        return true;
-    }
-    s_have_picture = true;
-    if (!s_blit_fb[0] || !s_blit_fb[1] || !s_blit_kick) {
-        if (s_blit_fb[0]) {
-            stretch_nn(s_blit_fb[0], fb);
-            return bsp_lcd_blit_rgb565(DOOM_BLIT_X, DOOM_BLIT_Y, SCALE_W, SCALE_H,
-                                       s_blit_fb[0], SCALE_W) == ESP_OK;
+    if (!s_have_picture) {
+        unsigned nb = fb_nonblack_sparse(fb, DOOM_FB_STRIDE);
+        s_fb_nonblack = nb;
+        if (nb < 80) {
+            return true;
         }
-        return bsp_lcd_blit_rgb565(0, 20, DOOM_WIDTH, DOOM_HEIGHT, fb, DOOM_FB_STRIDE) == ESP_OK;
+        s_have_picture = true;
     }
 
-    portENTER_CRITICAL(&s_blit_mux);
-    bool busy0 = (s_blit_sending == 0 || s_blit_shot == 0);
-    bool busy1 = (s_blit_sending == 1 || s_blit_shot == 1);
-    if (busy0 && busy1) {
+    /* Frameskip: if both blit buffers are busy, drop this frame's blit. */
+    if (s_blit_fb[0] && s_blit_fb[1] && s_blit_kick) {
+        portENTER_CRITICAL(&s_blit_mux);
+        bool busy0 = (s_blit_sending == 0 || s_blit_shot == 0 || s_blit_pending == 0);
+        bool busy1 = (s_blit_sending == 1 || s_blit_shot == 1 || s_blit_pending == 1);
+        if (busy0 && busy1) {
+            portEXIT_CRITICAL(&s_blit_mux);
+            return false; /* skipped */
+        }
+        int i = busy0 ? 1 : 0;
+        if (s_blit_pending == i) {
+            s_blit_pending = -1;
+        }
+        s_blit_packing = i;
         portEXIT_CRITICAL(&s_blit_mux);
+
+        memcpy(s_blit_fb[i], fb, DOOM_FB_BYTES);
+
+        portENTER_CRITICAL(&s_blit_mux);
+        s_blit_packing = -1;
+        s_blit_pending = i;
+        portEXIT_CRITICAL(&s_blit_mux);
+        xSemaphoreGive(s_blit_kick);
         return true;
     }
-    int i = busy0 ? 1 : 0;
-    if (s_blit_pending == i) {
-        s_blit_pending = -1;
-    }
-    s_blit_packing = i;
-    portEXIT_CRITICAL(&s_blit_mux);
 
-    stretch_nn(s_blit_fb[i], fb);
-
-    portENTER_CRITICAL(&s_blit_mux);
-    s_blit_packing = -1;
-    s_blit_pending = i;
-    portEXIT_CRITICAL(&s_blit_mux);
-    xSemaphoreGive(s_blit_kick);
-    return true;
+    return bsp_lcd_blit_rgb565(DOOM_BLIT_X, DOOM_BLIT_Y, SCALE_W, SCALE_H,
+                               fb, DOOM_FB_STRIDE) == ESP_OK;
 }
 
 static void blit_stop(void)
@@ -274,8 +261,9 @@ static bool doom_direct_shot(void)
     static unsigned char b64[BOARD_LCD_H_RES * 2 * 4 / 3 + 8];
     for (int y = 0; y < BOARD_LCD_V_RES; y++) {
         memset(row, 0, sizeof(row));
-        if (picture && fb) {
-            memcpy(row, fb + y * SCALE_W, SCALE_W * sizeof(uint16_t));
+        int sy = y - DOOM_BLIT_Y;
+        if (picture && fb && sy >= 0 && sy < SCALE_H) {
+            memcpy(row, fb + sy * SCALE_W, SCALE_W * sizeof(uint16_t));
         }
         size_t n = 0;
         mbedtls_base64_encode(b64, sizeof(b64), &n, (const unsigned char *)row, sizeof(row));
@@ -330,7 +318,7 @@ static bool blit_start(void)
         }
         return false;
     }
-    ESP_LOGI(TAG, "fullscreen blit 320x240");
+    ESP_LOGI(TAG, "letterbox blit 320x200 @ y=%d", DOOM_BLIT_Y);
     return true;
 }
 
@@ -392,7 +380,7 @@ static void emu_task(void *arg)
     emu_pad_reset(&s_pad);
 
     int64_t next = esp_timer_get_time(), stat_t = next, last_idle = next;
-    int emulated = 0, shown = 0, late = 0;
+    int emulated = 0, shown = 0, skipped = 0, late = 0;
     s_have_picture = false;
     s_fb_nonblack = 0;
     while (!s_quit) {
@@ -410,8 +398,12 @@ static void emu_task(void *arg)
         }
         if (n > 0) {
             emulated += n;
-            shown += present(fb) ? 1 : 0;
-            next += 28571; // ~35 Hz
+            if (present(fb)) {
+                shown++;
+            } else if (fb) {
+                skipped++;
+            }
+            next += FRAME_US;
         }
         now = esp_timer_get_time();
         if (now - last_idle >= 1000000) {
@@ -428,11 +420,14 @@ static void emu_task(void *arg)
         }
         if (now - stat_t >= 5000000) {
             double s = (now - stat_t) / 1e6;
-            ESP_LOGI(TAG, "%.1f ticks/s, %.1f shown, %d resyncs, %u nonblack%s",
-                     emulated / s, shown / s, late, (unsigned)s_fb_nonblack,
+            if (fb) {
+                s_fb_nonblack = fb_nonblack_sparse(fb, DOOM_FB_STRIDE);
+            }
+            ESP_LOGI(TAG, "%.1f ticks/s, %.1f shown, %d skip, %d resyncs, %u nonblack%s",
+                     emulated / s, shown / s, skipped, late, (unsigned)s_fb_nonblack,
                      s_have_picture ? "" : " loading");
             stat_t = now;
-            emulated = shown = late = 0;
+            emulated = shown = skipped = late = 0;
         }
     }
 out:
@@ -574,7 +569,7 @@ static void start(const char *path)
         show_picker();
         return;
     }
-    os_toast("LEFT+RIGHT = Esc   UP+DOWN = Enter");
+    os_toast("SELECT fire/confirm   CANCEL use   L+R Esc");
 #endif
 }
 

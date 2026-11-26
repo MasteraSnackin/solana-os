@@ -128,9 +128,9 @@ typedef struct
 	byte b;
 } col_t;
 
-// Palette converted to RGB565
-
-static uint16_t rgb565_palette[256];
+// Palette converted to RGB565 (used by the Solana DG_DrawFrame hot path).
+uint16_t doom_rgb565_palette[256];
+static uint16_t *const rgb565_palette = doom_rgb565_palette;
 
 void cmap_to_rgb565(uint16_t * out, uint8_t * in, int in_pixels)
 {
@@ -381,19 +381,6 @@ void I_ReadScreen (byte* scr)
 void I_SetPalette (byte* palette)
 {
 	int i;
-	//col_t* c;
-
-	//for (i = 0; i < 256; i++)
-	//{
-	//	c = (col_t*)palette;
-
-	//	rgb565_palette[i] = GFX_RGB565(gammatable[usegamma][c->r],
-	//								   gammatable[usegamma][c->g],
-	//								   gammatable[usegamma][c->b]);
-
-	//	palette += 3;
-	//}
-    
 
     /* performance boost:
      * map to the right pixel format over here! */
@@ -403,6 +390,10 @@ void I_SetPalette (byte* palette)
         colors[i].r = gammatable[usegamma][*palette++];
         colors[i].g = gammatable[usegamma][*palette++];
         colors[i].b = gammatable[usegamma][*palette++];
+        /* Same packing DG_DrawFrame used: RRRRRGGGGGGBBBBB in host endian. */
+        doom_rgb565_palette[i] = (uint16_t)(((colors[i].r & 0xF8) << 8) |
+                                            ((colors[i].g & 0xFC) << 3) |
+                                            (colors[i].b >> 3));
     }
 
 #ifdef CMAP256

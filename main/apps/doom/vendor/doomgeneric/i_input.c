@@ -319,7 +319,7 @@ void I_GetEvent(void)
             {
                 D_PostEvent(&event);
             }
-            break;
+            // Do not break: drain the whole DG key queue this tic.
         }
     }
 

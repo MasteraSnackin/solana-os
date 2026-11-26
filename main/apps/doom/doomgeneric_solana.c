@@ -2,12 +2,14 @@
 
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "doomgeneric.h"
 #include "doomkeys.h"
+#include "doomstat.h"
 #include "i_video.h"
 
 #include "apps/emu_pad.h"
@@ -59,10 +61,12 @@ void doom_solana_feed_joy(uint32_t joy)
     joy_edge(joy, EMU_PAD_DOWN, KEY_DOWNARROW);
     joy_edge(joy, EMU_PAD_LEFT, KEY_LEFTARROW);
     joy_edge(joy, EMU_PAD_RIGHT, KEY_RIGHTARROW);
-    joy_edge(joy, EMU_PAD_A, KEY_FIRE);       // badge SELECT
-    joy_edge(joy, EMU_PAD_B, KEY_USE);        // badge CANCEL
-    joy_edge(joy, EMU_PAD_START, KEY_ENTER);  // UP+DOWN / SELECT+CANCEL
-    joy_edge(joy, EMU_PAD_SELECT, KEY_ESCAPE);// LEFT+RIGHT
+    // SELECT: fire in a live level; Enter on title/menu (badge has no Enter key).
+    bool in_level = (gamestate == GS_LEVEL) && !demoplayback && !menuactive;
+    joy_edge(joy, EMU_PAD_A, in_level ? KEY_FIRE : KEY_ENTER);
+    joy_edge(joy, EMU_PAD_B, KEY_USE);         // badge CANCEL
+    joy_edge(joy, EMU_PAD_START, KEY_ENTER);   // UP+DOWN / SELECT+CANCEL
+    joy_edge(joy, EMU_PAD_SELECT, KEY_ESCAPE); // LEFT+RIGHT
     s_prev_joy = joy;
 }
 
@@ -85,16 +89,16 @@ void DG_Init(void)
     doom_solana_reset_input();
 }
 
-void DG_DrawFrame(void)
+IRAM_ATTR void DG_DrawFrame(void)
 {
     if (!s_rgb || !DG_ScreenBuffer) {
         return;
     }
     const pixel_t *src = DG_ScreenBuffer;
     uint16_t *dst = s_rgb;
+    const uint16_t *pal = doom_rgb565_palette;
     for (int i = 0; i < DOOMGENERIC_RESX * DOOMGENERIC_RESY; i++) {
-        struct color c = colors[src[i]];
-        dst[i] = (uint16_t)(((c.r & 0xF8) << 8) | ((c.g & 0xFC) << 3) | (c.b >> 3));
+        dst[i] = pal[src[i]];
     }
     s_frame_ready = 1;
 }
@@ -138,6 +142,5 @@ void DG_PaletteLoad(const void *playpal)
 
 uint16_t DG_PaletteColor565(uint8_t index)
 {
-    struct color c = colors[index];
-    return (uint16_t)(((c.r & 0xF8) << 8) | ((c.g & 0xFC) << 3) | (c.b >> 3));
+    return doom_rgb565_palette[index];
 }

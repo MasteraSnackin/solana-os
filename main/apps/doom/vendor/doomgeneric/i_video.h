@@ -169,6 +169,7 @@ extern int diskicon_readbytes;
 
 extern doom_boolean palette_changed;
 extern struct color colors[256];
+extern uint16_t doom_rgb565_palette[256];
 
 #endif  // CMAP256
 
