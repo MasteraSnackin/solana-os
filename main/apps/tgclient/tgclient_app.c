@@ -35,7 +35,7 @@ static const char *TAG = "tgclient";
 #define TOKEN_MAX       64
 #define CHAT_MAX        32
 #define MSG_MAX         200             // on-screen keyboard line
-#define LINE_MAX        240
+#define TG_LINE_MAX     240
 #define LOG_MAX         3500
 #define RESP_CAP        8192
 #define BODY_CAP        512
@@ -148,7 +148,7 @@ static bool nvs_set(const char *key, const char *val)
     return err == ESP_OK;
 }
 
-static bool nvs_get_i64(const char *key, int64_t *out)
+static bool tg_nvs_get_i64(const char *key, int64_t *out)
 {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
@@ -159,7 +159,7 @@ static bool nvs_get_i64(const char *key, int64_t *out)
     return err == ESP_OK;
 }
 
-static bool nvs_set_i64(const char *key, int64_t val)
+static bool tg_nvs_set_i64(const char *key, int64_t val)
 {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
@@ -207,7 +207,7 @@ static void load_config(void)
     if (!nvs_get("chat", s_chat, sizeof(s_chat))) {
         read_file_line(CHAT_FILE, s_chat, sizeof(s_chat));
     }
-    if (!nvs_get_i64("offset", &s_offset)) {
+    if (!tg_nvs_get_i64("offset", &s_offset)) {
         s_offset = 0;
     }
 }
@@ -287,7 +287,7 @@ static void render_log(void)
 
 static void append_log(const char *who, const char *text)
 {
-    char chunk[LINE_MAX];
+    char chunk[TG_LINE_MAX];
     snprintf(chunk, sizeof(chunk), "%s: %s\n\n", who, text);
     size_t have = strlen(s_log), need = strlen(chunk);
     if (have + need >= sizeof(s_log)) {
@@ -518,7 +518,7 @@ static bool parse_updates(const char *json, char **lines_out, char *err, size_t 
             // Non-text (sticker, photo, …): one-line stub.
             text = "(non-text message)";
         }
-        char line[LINE_MAX];
+        char line[TG_LINE_MAX];
         snprintf(line, sizeof(line), "%s: %s\n\n", sender_name(msg), text);
         size_t need = strlen(line);
         if (len + need + 1 > cap) {
@@ -540,7 +540,7 @@ static bool parse_updates(const char *json, char **lines_out, char *err, size_t 
 
     if (max_id > 0 && max_id + 1 > s_offset) {
         s_offset = max_id + 1;
-        nvs_set_i64("offset", s_offset);
+        tg_nvs_set_i64("offset", s_offset);
     }
     cJSON_Delete(root);
     if (!any) {
