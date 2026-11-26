@@ -62,11 +62,12 @@ bool doom_core_boot(const char *wad_path)
     static char arg_nogui[] = "-nogui";
     static char arg_mb[] = "-mb";
     static char arg_mb_v[] = "6";
+    // Must outlive Create: myargv keeps this pointer for demos / M_CheckParm.
     static char path[200];
-    strlcpy(path, wad_path, sizeof(path));
-    char *argv[] = {
+    static char *argv[] = {
         arg0, arg_iwad, path, arg_nosound, arg_nomusic, arg_nogui, arg_mb, arg_mb_v,
     };
+    strlcpy(path, wad_path, sizeof(path));
     int argc = (int)(sizeof(argv) / sizeof(argv[0]));
 
     s_in_engine = true;

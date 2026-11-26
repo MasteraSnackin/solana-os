@@ -381,6 +381,8 @@ static void emu_task(void *arg)
     ESP_LOGI(TAG, "emu_task %s", path);
     os_background_pause();
     if (!doom_core_boot(path)) {
+        ESP_LOGE(TAG, "boot failed %s", path);
+        os_toast("Doom failed to start");
         s_back_to_list = true;
         goto out;
     }
@@ -512,7 +514,7 @@ static void show_picker(void)
     scan(WADS_DIR);
     ESP_LOGI(TAG, "picker %d .wad in %s", s_wad_count, WADS_DIR);
     if (!s_wad_count) {
-        message("No WAD found.\nCopy a .wad file to /doom on the card.");
+        message("No WAD found.\nPut doom1.wad in /doom\n(tools/sd_put.py).");
         s_hint = battle_hint(s_root, "CANCEL exit");
         return;
     }
